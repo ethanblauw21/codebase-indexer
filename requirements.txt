@@ -1,0 +1,21 @@
+﻿# Core indexing and embeddings
+faiss-cpu
+sentence-transformers
+transformers
+numpy
+
+# AST parsing
+tree-sitter>=0.21
+tree-sitter-python
+tree-sitter-typescript
+tree-sitter-javascript
+
+# MCP server
+mcp[cli]
+
+# File-system change monitoring (optional — enables auto-reindex)
+watchdog
+
+# Terminal UI
+textual
+rich

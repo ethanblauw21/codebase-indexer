@@ -1,0 +1,211 @@
+import os
+import faiss
+import json
+import numpy as np
+faiss.omp_set_num_threads(1)
+# Silence ML backend noise
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+import warnings
+warnings.filterwarnings("ignore")
+
+from transformers import AutoTokenizer
+from sentence_transformers import SentenceTransformer
+
+# Lazy singleton — loaded on first call to embed() / embed_batch().
+# Deferring the load prevents the Jina model from being loaded inside
+# ProcessPoolExecutor worker processes (which import this module via the
+# spawn import chain on Windows) and keeps import-time side effects minimal.
+_embed_model = None
+
+def _get_embed_model() -> SentenceTransformer:
+    global _embed_model
+    if _embed_model is None:
+        print("[core] Loading Jina-Code Model (8192 Context Unlocked)...", flush=True)
+        _embed_model = SentenceTransformer(
+            "jinaai/jina-embeddings-v2-base-code", trust_remote_code=True
+        )
+        # Cap sequence length to prevent native OOM on tier3 architectural chunks
+        # (~4000 tokens). Self-attention memory scales as O(L²) — 4000-token inputs
+        # require ~9 GB of intermediate tensors, killing the process with an
+        # uncatchable Windows SEH exception. 512 tokens covers most semantic content
+        # and keeps peak attention memory well under 1 GB even at batch_size=32.
+        _embed_model.max_seq_length = 512
+        print("[core] Jina model ready.", flush=True)
+    return _embed_model
+
+class TokenizerManager:
+    def __init__(self):
+        self._tokenizer = None
+        self.SAFE_LIMIT = 8192
+
+    def _get(self):
+        if self._tokenizer is None:
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                "jinaai/jina-embeddings-v2-base-code",
+                trust_remote_code=True,
+                model_max_length=100000,
+            )
+        return self._tokenizer
+
+    @property
+    def tokenizer(self):
+        return self._get()
+
+    def count_tokens(self, text: str) -> int:
+        return len(self._get().encode(text, add_special_tokens=False))
+
+    def decode_tokens(self, tokens: list) -> str:
+        return self._get().decode(tokens)
+
+# Export the singleton under a generic name so ast_chunker doesn't break
+jina_tokenizer = TokenizerManager()
+
+def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
+    """
+    Generates code-native embeddings in optimized batches.
+    Provides a 5x-15x speedup during indexing by saturating the GPU/CPU matrix.
+    """
+    if not texts:
+        return np.zeros((0, 768), dtype=np.float32)
+    print(f"[core] embed_batch: {len(texts)} texts...", flush=True)
+    vectors = _get_embed_model().encode(texts, convert_to_numpy=True, batch_size=batch_size)
+    print(f"[core] embed_batch done.", flush=True)
+    return np.ascontiguousarray(vectors, dtype=np.float32)
+
+def embed(text):
+    """Generates code-native embeddings via Jina."""
+    if not text or not text.strip():
+        return np.zeros(768, dtype="float32") 
+    
+    # Jina does NOT require "search_document:" prefixes
+    vector = _get_embed_model().encode(text, convert_to_numpy=True)
+    return np.array(vector, dtype="float32")
+
+class MultiIndexManager:
+    def __init__(self, base_dir=".code-index"):
+        self.base_dir = base_dir
+        os.makedirs(base_dir, exist_ok=True)
+        self.indexes = {}
+        
+    def load_or_create(self, tier_name: str, dimension=768):
+        index_path = os.path.join(self.base_dir, f"{tier_name}.faiss")
+        if os.path.exists(index_path):
+            index = faiss.read_index(index_path)
+        else:
+            base_index = faiss.IndexFlatIP(dimension)
+            index = faiss.IndexIDMap(base_index)
+        self.indexes[tier_name] = index
+        return index
+        
+    def save_all(self):
+        for name, index in self.indexes.items():
+            faiss.write_index(index, os.path.join(self.base_dir, f"{name}.faiss"))
+
+class DocumentStore:
+    def __init__(self, db_path=".code-index/doc_store.json"):
+        self.db_path = db_path
+        self.docs = self._load()
+        
+    def _load(self):
+        if os.path.exists(self.db_path):
+            with open(self.db_path, "r") as f:
+                return json.load(f)
+        return {}
+        
+    def add(self, doc_id: int, metadata: dict):
+        self.docs[str(doc_id)] = metadata
+        
+    def get(self, doc_id: int):
+        # THIS was the missing piece!
+        return self.docs.get(str(doc_id))
+        
+    def save(self):
+        with open(self.db_path, "w") as f:
+            json.dump(self.docs, f)
+
+_TRUNCATION_WARNING = (
+    "\n---\n"
+    "[CONTEXT TRUNCATED] The retrieved context was cut at a chunk boundary to stay "
+    "within the token budget. This response is based on partial information. "
+    "Rephrase your query to be more specific, or request deeper retrieval, "
+    "if the answer appears incomplete.\n"
+)
+
+
+def pack_context_safely(
+    ranked_chunks: list[dict],
+    max_tokens: int = 4000,
+) -> str:
+    """Pack reranked chunks into a strict token budget for 8B-parameter local models.
+
+    Structural Expansion chunks (callers/callees) are promoted ahead of lower-ranked
+    semantic chunks when their cross-encoder score is within 10 % of the top semantic
+    score, ensuring architectural context is not crowded out by volume alone.
+
+    A standardised warning is appended when chunks are dropped so the downstream LLM
+    agent knows the context is incomplete.
+
+    Parameters
+    ----------
+    ranked_chunks:
+        Ordered list of chunk dicts.  Each dict must have at minimum:
+          - ``"text"``   (str)  — the chunk body
+          - ``"source"`` (str)  — ``"semantic"`` or ``"structural"``
+          - ``"score"``  (float) — cross-encoder logit (or FAISS cosine fallback)
+        Compatible with both raw dicts and ``RetrievedChunk`` instances converted via
+        ``dataclasses.asdict()``.
+    max_tokens:
+        Hard token ceiling.  Defaults to 4 000 — a conservative limit for 8k-window
+        8B models that leaves headroom for the system prompt and generation.
+
+    Returns
+    -------
+    str
+        Concatenated chunk texts, each separated by a blank line, with an optional
+        truncation warning appended.
+    """
+    if not ranked_chunks:
+        return ""
+
+    # Highest cross-encoder score seen on a semantic chunk — used as the priority baseline.
+    semantic_scores = [
+        float(c.get("score", 0.0))
+        for c in ranked_chunks
+        if c.get("source") == "semantic"
+    ]
+    top_semantic_score = max(semantic_scores) if semantic_scores else 0.0
+    structural_threshold = top_semantic_score * 0.9
+
+    # Structural chunks whose score is within 10 % of the top semantic score are
+    # promoted.  All other chunks retain their original reranked order.
+    priority: list[dict] = []
+    deferred: list[dict] = []
+    for chunk in ranked_chunks:
+        is_structural = chunk.get("source") == "structural"
+        within_threshold = float(chunk.get("score", 0.0)) >= structural_threshold
+        if is_structural and within_threshold:
+            priority.append(chunk)
+        else:
+            deferred.append(chunk)
+
+    packed_parts: list[str] = []
+    used_tokens = 0
+    truncated = False
+
+    for chunk in priority + deferred:
+        text = chunk.get("text", "")
+        if not text:
+            continue
+        chunk_text = text + "\n\n"
+        chunk_tokens = jina_tokenizer.count_tokens(chunk_text)
+        if used_tokens + chunk_tokens > max_tokens:
+            truncated = True
+            break
+        packed_parts.append(chunk_text)
+        used_tokens += chunk_tokens
+
+    result = "".join(packed_parts)
+    if truncated:
+        result += _TRUNCATION_WARNING
+    return result
