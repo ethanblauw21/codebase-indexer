@@ -1,0 +1,64 @@
+name: Feature Request
+description: Propose new functionality or a meaningful change to existing behavior.
+labels: ["feature-request", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Focus on the problem, not the solution. What can't you do today, or what is painful?
+      placeholder: "When investigating a blast radius, I can't tell which callers are in hot paths vs. dead code — I have to manually cross-reference find_dead_code results."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you want, not the implementation. What would the user experience look like?
+      placeholder: "analyze_blast_radius should annotate each caller with a dead-code flag if it appears in the dead-code index, so I can see impact scope at a glance."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Feature area
+      options:
+        - "Indexing — AST chunking, file tracking, incremental updates"
+        - "Search & Retrieval — semantic search, hybrid retrieval, reranking"
+        - "MCP Tools — the ten AI-facing server tools"
+        - "Graph & Structural Analysis — call graph, blast radius, data flow tracing"
+        - "TUI — terminal user interface"
+        - "Performance & Scalability"
+        - "Other"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: who-affected
+    attributes:
+      label: Who does this affect?
+      options:
+        - "Just me"
+        - "My team / group"
+        - "All users"
+        - "AI agents consuming MCP tools"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: What else did you consider? Why is this approach better?
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Related ADRs, prior art, links to relevant code.
+    validations:
+      required: false
