@@ -73,10 +73,10 @@ import faiss
 import numpy as np
 
 from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
-from core import embed, MultiIndexManager, DocumentStore
+from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
-from stable_id import stable_id, to_faiss_ids, to_faiss_matrix, TIER_CONFIGS, TIER_NUM, TIER_NAME
+from stable_id import stable_id, to_faiss_ids, TIER_CONFIGS, TIER_NUM, TIER_NAME
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -530,7 +530,7 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
         ext = Path(rel_path).suffix.lower()
         print(f"[loop] → {rel_path}", flush=True)
         try:
-            print(f"[loop]   reading file...", flush=True)
+            print("[loop]   reading file...", flush=True)
             with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
                 content = fh.read()
             print(f"[loop]   {len(content)} chars read", flush=True)
@@ -539,7 +539,7 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
                 ingest_project_file(rel_path, content, disk_hashes[rel_path], db)
                 continue
 
-            print(f"[loop]   calling ingest_file...", flush=True)
+            print("[loop]   calling ingest_file...", flush=True)
 
             counts = ingest_file(
                 rel_path=rel_path,
@@ -554,7 +554,7 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
             t1 = counts.get("tier1_surgical",       0)
             t2 = counts.get("tier2_component",       0)
             t3 = counts.get("tier3_architectural",   0)
-            print(f"[loop]   ingest_file returned", flush=True)
+            print("[loop]   ingest_file returned", flush=True)
             print(f"  ✓  {rel_path}  (T1:{t1} | T2:{t2} | T3:{t3})")
 
         except Exception:

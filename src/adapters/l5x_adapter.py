@@ -12,7 +12,7 @@ See ADR-003 §D4 for the deferral rationale.
 """
 from __future__ import annotations
 
-from adapters.base import ParseResult, Symbol, TestConventions
+from adapters.base import ParseResult, Symbol
 
 
 class L5xAdapter:

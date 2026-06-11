@@ -55,3 +55,19 @@ Add hybrid reranker fallback when CrossEncoder is unavailable
 Fix FAISS ID collision on files with identical content
 Update MCPServer tool docstrings for AI consumption clarity
 ```
+
+## 7. Git Hooks
+
+Commit tagging is handled by `.githooks/commit-msg`. Activate it once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+On ADR branches (`feature/adr-XXX-*`), the hook appends `[ADR-XXX src/file.py]` to each commit message — sourcing the ADR number from the branch name and the staged `src/` files from the diff. The hook is a no-op on non-ADR branches and skips if the tag is already present.
+
+To retrieve the full commit trail for any ADR:
+
+```
+git log --oneline --grep='\[ADR-003\]'
+```

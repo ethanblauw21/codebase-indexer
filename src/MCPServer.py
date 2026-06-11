@@ -71,7 +71,7 @@ def get_clean_scope(doc):
     return scope
 
 # --- THE SECRET SAUCE: The Docstring ---
-# Claude Code and Continue.dev read this exact string. 
+# Claude Code and Continue.dev read this exact string.
 # We must explicitly tell Claude WHY this is better than its native `grep`.
 @mcp.tool()
 def semantic_code_search(query: str) -> str:
@@ -89,84 +89,84 @@ def semantic_code_search(query: str) -> str:
     print(f"\n[MCP] Tool invoked by LLM for query: '{query}'")
     _ensure_indexes()
     query_vector = embed(query).reshape(1, -1)
-    
+
     # 1. Query all three tiers
     _, t1_ids = t1_index.search(query_vector, 10)
     _, t2_ids = t2_index.search(query_vector, 10)
     _, t3_ids = t3_index.search(query_vector, 10)
-    
+
     # 2. Reciprocal Rank Fusion (The Consensus Algorithm)
     fused_scores = {}
     k = 60
     for rank_list in [t1_ids[0], t2_ids[0], t3_ids[0]]:
         for rank, doc_id in enumerate(rank_list):
-            if doc_id == -1: continue 
+            if doc_id == -1: continue
             if doc_id not in fused_scores:
                 fused_scores[doc_id] = 0.0
             fused_scores[doc_id] += 1.0 / (k + rank)
-            
+
     # Sort by highest consensus
     best_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
-    
+
     # 3. Context Packing (Protecting your 8GB Local Model's VRAM)
     # 8B models easily crash if you feed them more than 8k tokens.
     # We cap the returned context strictly at 4000 tokens to be safe.
     context = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
     current_tokens = 0
-    MAX_TOKENS = 4000 
-    
-    for doc_id in best_ids: 
+    MAX_TOKENS = 4000
+
+    for doc_id in best_ids:
         doc = doc_store.get(doc_id)
         if not doc: continue
-        
+
         chunk_text = f"--- FILE: {doc['file']} | SCOPE: {doc['scope']} ---\n{doc['text']}\n\n"
         tokens = jina_tokenizer.count_tokens(chunk_text)
-        
+
         if current_tokens + tokens < MAX_TOKENS:
             context += chunk_text
             current_tokens += tokens
         else:
-            context += f"[Note: Further context truncated to protect token limits.]\n"
+            context += "[Note: Further context truncated to protect token limits.]\n"
             break
-            
+
     return context
 
 @mcp.tool()
 def find_similar_code(code_snippet: str) -> str:
     """
-    Use this tool to find duplicate or mathematically similar code across the project. 
+    Use this tool to find duplicate or mathematically similar code across the project.
     Pass in a raw snippet of code. It will stratify results into Origin, Callers, Parallels, and Weak matches.
     """
-    print(f"\n[MCP] Searching for duplicates/callers of provided snippet...")
+    print("\n[MCP] Searching for duplicates/callers of provided snippet...")
     _ensure_indexes()
     query_vector = embed(code_snippet).reshape(1, -1)
     scores, t1_ids = t1_index.search(query_vector, 15)
-    
+
     seen_scopes = set()
     origin_data = []
     caller_data = []
     high_conf_data = []
     weak_conf_data = []
-    
+
     norm_snippet = re.sub(r'\s+', '', code_snippet)
-    
+
     symbol_match = re.search(r'(?:function|const|let|var|class)\s+([a-zA-Z_$][0-9a-zA-Z_$]*)', code_snippet)
     primary_symbol = symbol_match.group(1) if symbol_match else None
-    
+
     GENERIC_API_TERMS = {
-        'transaction', 'collection', 'doc', 'ref', 'update', 'set', 'get', 'delete', 
-        'void', 'entry', 'string', 'number', 'boolean', 'any', 'unknown', 'record', 
+        'transaction', 'collection', 'doc', 'ref', 'update', 'set', 'get', 'delete',
+        'void', 'entry', 'string', 'number', 'boolean', 'any', 'unknown', 'record',
         'promise', 'error', 'data', 'id', 'value', 'key', 'result'
     }
     STOPWORDS = {
-        'const', 'let', 'var', 'function', 'return', 'import', 'export', 'async', 
+        'const', 'let', 'var', 'function', 'return', 'import', 'export', 'async',
         'await', 'try', 'catch', 'if', 'else', 'console', 'true', 'false', 'null', 'undefined'
     }
-    
+
     # --- 1. OPERATIONAL CONTEXT VERBS ---
     WRITE_VERBS = {'set', 'update', 'add', 'transaction', 'commit', 'write', 'delete', 'mutate'}
     READ_VERBS = {'get', 'fetch', 'query', 'where', 'onsnapshot', 'subscribe', 'use', 'read'}
-    
+
     def get_domain_keywords(text):
         words = set(re.findall(r'[a-zA-Z_]\w{3,}', text))
         return {w for w in words if w.lower() not in GENERIC_API_TERMS and w.lower() not in STOPWORDS}
@@ -179,33 +179,33 @@ def find_similar_code(code_snippet: str) -> str:
 
     snippet_keywords = get_domain_keywords(code_snippet)
     anchor_writes, anchor_reads = get_op_profile(code_snippet)
-    
+
     top_score = float(scores[0][0])
-    
+
     for score, doc_id in zip(scores[0], t1_ids[0]):
         if doc_id == -1: continue
         doc = doc_store.get(doc_id)
         clean_scope = get_clean_scope(doc)
         if not doc: continue
-        
+
         unique_key = doc['file']
         if unique_key in seen_scopes: continue
         seen_scopes.add(unique_key)
 
         doc_text = doc['text']
         norm_doc = re.sub(r'\s+', '', doc_text)
-        
+
         is_origin = (norm_snippet in norm_doc) or (norm_doc in norm_snippet) or (score >= top_score * 0.99)
-        
+
         is_caller = False
         if not is_origin and primary_symbol and (primary_symbol in doc_text):
             is_caller = True
-            
+
         doc_keywords = get_domain_keywords(doc_text)
-        
+
         shared_keywords = snippet_keywords.intersection(doc_keywords)
         strong_shared = [w for w in shared_keywords if re.search(r'[A-Z]', w) or '_' in w]
-        
+
         # --- 2. OPERATIONAL MISMATCH DETECTION ---
         cand_writes, cand_reads = get_op_profile(doc_text)
         op_mismatch = False
@@ -213,7 +213,7 @@ def find_similar_code(code_snippet: str) -> str:
             op_mismatch = True  # Anchor writes, Candidate only reads
         elif anchor_reads and not anchor_writes and cand_writes and not cand_reads:
             op_mismatch = True  # Anchor reads, Candidate only writes
-            
+
         if is_origin:
             evidence_str = "Origin File / Exact Snippet Match"
         elif is_caller:
@@ -224,48 +224,48 @@ def find_similar_code(code_snippet: str) -> str:
             evidence_str = f"Shared domain logic ({', '.join(strong_shared)})"
         else:
             evidence_str = "API/Structural similarity only"
-            
+
         snippet_preview = doc_text[:120].replace('\n', ' ').strip() + "..."
         entry = f"- {doc['file']} ({clean_scope})\n  [Score]: {score:.3f}\n  [Evidence]: {evidence_str}\n  [Snippet]: {snippet_preview}\n\n"
-        
+
         # --- 3. COMPOSITE SCORING (The Fix) ---
         # Calculate a fluid ratio instead of hard cut-offs
         raw_ratio = score / top_score
-        
+
         # Every strong shared keyword adds a +0.05 bonus to the ratio
         semantic_bonus = len(strong_shared) * 0.05
-        
+
         # Heavy penalty if the operation directions are opposites
         op_penalty = 0.20 if op_mismatch else 0.0
-        
+
         composite_score = raw_ratio + semantic_bonus - op_penalty
-        
+
         if is_origin:
             origin_data.append(entry)
         elif is_caller:
             caller_data.append(entry)
-        elif composite_score >= 0.72: 
+        elif composite_score >= 0.72:
             # 0.72 is the new "Golden Threshold" for the composite score.
             # A 7.7 score (0.68 ratio) + 1 keyword (0.05 bonus) = 0.73 (Passes!)
             high_conf_data.append(entry)
-        else: 
+        else:
             if len(weak_conf_data) < 4:
                 weak_conf_data.append(entry)
 
-    context = f"--- SIMILAR CODE ANALYSIS ---\n\n"
-    
+    context = "--- SIMILAR CODE ANALYSIS ---\n\n"
+
     context += "1. ORIGIN POINT (Anchor):\n"
     context += "".join(origin_data) if origin_data else "  [Snippet origin not found in index]\n\n"
-    
+
     context += "2. DIRECT CALLERS (Files using this snippet):\n"
     context += "".join(caller_data) if caller_data else "  [No direct callers found]\n\n"
-    
+
     context += "3. HIGH CONFIDENCE MATCHES (Strong Parallels):\n"
     context += "".join(high_conf_data) if high_conf_data else "  [No high confidence matches]\n\n"
-    
+
     context += "4. WEAK MATCHES (Structural lookalikes / False Positives):\n"
     context += "".join(weak_conf_data) if weak_conf_data else "  [No weak matches]\n\n"
-    
+
     context += """
     INSTRUCTIONS FOR AI AGENT:
     1. Do not suggest refactoring the Origin Point against itself.
@@ -273,13 +273,13 @@ def find_similar_code(code_snippet: str) -> str:
     3. Focus heavily on High Confidence Matches to identify parallel logic that might need deduplication.
     4. Ignore Weak Matches as they are likely just generic API overlaps or mismatched operations (e.g. Read vs Write).
     """
-    
+
     return context
 
 @mcp.tool()
 def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     """
-    Use this tool when planning a refactor. 
+    Use this tool when planning a refactor.
     It requires TWO inputs to ground the search:
     1. anchor_file (e.g., 'inventory-list.tsx') - The file where the change originates.
     2. target_symbol (e.g., 'activeView') - The specific concept, state, or interface being changed.
@@ -288,14 +288,14 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     _ensure_indexes()
     norm_anchor = anchor_file.lower().replace('\\', '/').split('/')[-1]
     anchor_base = norm_anchor.replace('.tsx', '').replace('.ts', '').replace('.jsx', '').replace('.js', '')
-    
+
     # 1. PRE-FETCH ANCHOR TEXT
     # We must know what the anchor imports to apply the "Primitive Directional Filter"
     anchor_text = ""
     for doc in doc_store.docs.values():
         if norm_anchor in doc['file'].lower() and doc['tier'] == 'tier2_component':
             anchor_text += doc['text'] + "\n"
-            
+
     query_text = f"Implementation, definition, or usage of {target_symbol}"
     query_vector = embed(query_text).reshape(1, -1)
 
@@ -316,7 +316,7 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     primitives_data = []
     dependents_data = []
     parallel_data = []
-    
+
     for doc_id in _blast_candidates:
         doc = doc_store.get(doc_id)
         if not doc: continue
@@ -324,7 +324,7 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
         file_path = doc['file']
         if file_path in seen_files: continue
         seen_files.add(file_path)
-        
+
         norm_path = file_path.lower().replace('\\', '/')
         file_base = norm_path.split('/')[-1].replace('.tsx', '').replace('.ts', '').replace('.jsx', '').replace('.js', '')
         doc_text = doc['text']
@@ -393,29 +393,29 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
         anchor_data.append(f"- {anchor_file}\n  [Evidence]: Origin Anchor (Forced via Metadata)\n\n")
 
     # --- PAYLOAD GENERATION ---
-    context = f"--- BLAST RADIUS ANALYSIS ---\n"
+    context = "--- BLAST RADIUS ANALYSIS ---\n"
     context += f"ANCHOR: {anchor_file} | SYMBOL: {target_symbol}\n\n"
-    
+
     context += "1. ORIGIN POINT:\n"
     context += "".join(anchor_data) if anchor_data else "  [Anchor file not found]\n"
-    
+
     context += "2. DIRECT DEPENDENTS (Import Graph Validated):\n"
     context += "".join(dependents_data) if dependents_data else "  [No dependents detected]\n"
-    
+
     context += "3. PARALLEL IMPLEMENTATIONS (Semantic/Pattern Matches):\n"
     context += "".join(parallel_data) if parallel_data else "  [No parallel patterns detected]\n"
-    
+
     context += "4. UNDERLYING PRIMITIVES (Directionally Validated):\n"
     context += "".join(primitives_data) if primitives_data else "  [No anchor-imported primitives detected]\n"
-    
+
     context += """
     INSTRUCTIONS FOR AI AGENT:
-    Review the categories and [Evidence] tags. 
+    Review the categories and [Evidence] tags.
     1. For Direct Dependents, explain how a change to the anchor might break them.
     2. For Parallel Implementations, point out if they use the same pattern and should be refactored to match.
     3. For Primitives, explain if the core UI components need to be adjusted to support the change.
     """
-    
+
     return context
 
 @mcp.tool()
@@ -448,7 +448,6 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
     compliant_files: set[str] = set()
 
     # --- 1. OPERATIONAL PROFILING (Reader vs Writer) ---
-    WRITE_VERBS = {'set', 'update', 'add', 'transaction', 'commit', 'write', 'delete', 'mutate'}
     READ_VERBS = {'get', 'fetch', 'query', 'where', 'onsnapshot', 'subscribe', 'use', 'read'}
 
     def get_op_profile(text):
@@ -490,11 +489,11 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
         score = _fused_pv[doc_id]
         doc = doc_store.get(doc_id)
         if not doc: continue
-        
+
         unique_key = f"{doc['file']}::{doc['scope']}"
         if unique_key in seen_scopes: continue
         seen_scopes.add(unique_key)
-        
+
         file_path, doc_text = doc['file'], doc['text']
         file_name = file_path.split('/')[-1].split('\\')[-1]
 
@@ -502,7 +501,7 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
         if ignore_regex and re.search(ignore_regex, file_name):
             exempt_data.append(f"- {file_path} ({doc['scope']}) [Regex Exemption]\n")
             continue
-            
+
         is_compliant = any(sym in doc_text for sym in enforced_symbols)
         cand_writes, cand_reads = get_op_profile(doc_text)
 
@@ -523,15 +522,15 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
         doc_words = set(re.findall(r'[a-zA-Z_]\w{3,}', doc_text))
         clean_scope = get_clean_scope(doc)
         shared_strong = [w for w in strong_keywords if w in doc_words]
-        
+
         # Keep if compliant OR mathematically relevant OR semantically identical
         is_relevant = is_compliant or (score >= top_score * 0.65) or (len(shared_strong) >= 2)
-        
+
         if not is_relevant:
             continue
-            
+
         snippet_preview = doc_text[:150].replace('\n', ' ').strip() + "..."
-        
+
         if is_compliant:
             matched = [s for s in enforced_symbols if s in doc_text]
             compliant_files.add(file_path)
@@ -546,14 +545,14 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
     violations_data = [v for v in violations_data if not any(cp in v for cp in compliant_files)]
 
     # --- OUTPUT ---
-    context = f"--- PATTERN VIOLATION ANALYSIS ---\n\n"
+    context = "--- PATTERN VIOLATION ANALYSIS ---\n\n"
     context += f"RULES: Must use [{enforced_symbols_csv}]\n"
     context += f"IGNORE REGEX: {ignore_regex if ignore_regex else 'None'}\n\n"
     context += "1. DETECTED VIOLATIONS:\n" + ("".join(violations_data) if violations_data else "  [None!]\n") + "\n"
     context += "2. COMPLIANT FILES:\n" + ("".join(compliant_data) if compliant_data else "  [None]\n") + "\n"
     if exempt_data:
         context += "3. EXEMPTED (Regex):\n" + "".join(exempt_data) + "\n"
-    
+
     return context
 
 @mcp.tool()
@@ -631,7 +630,7 @@ def trace_data_flow(target_symbol: str) -> str:
         seen_scopes.add(unique_key)
 
         doc_text = doc['text']
-        
+
         # --- LAYER DETECTION ---
         is_client = "'use client'" in doc_text or ".tsx" in file_path.lower()
         if any(x in file_path.lower() for x in ["firebase/admin", "lib/admin"]):
@@ -650,19 +649,18 @@ def trace_data_flow(target_symbol: str) -> str:
         # --- FIX 3: DYNAMIC PRODUCER DETECTION ---
         # We broaden the anchors to catch 'aggRef.set' or 'customBatch.update'
         has_db_write = bool(re.search(
-            r"(\w*(?:transaction|batch|db|firestore|admin|ref|tx))\.(set|add|update)\(", 
-            doc_text, 
+            r"(\w*(?:transaction|batch|db|firestore|admin|ref|tx))\.(set|add|update)\(",
+            doc_text,
             re.IGNORECASE
         ))
-        
+
         is_def = bool(re.search(rf"export\s+(interface|type|class)\s+({re.escape(target_symbol)}|{re.escape(pascal_symbol)})", doc_text))
-        is_instantiation = bool(re.search(rf"(:\s*{re.escape(target_symbol)}\s*=\s*\{{|{re.escape(target_symbol)}\.create)", doc_text))
         is_producer = file_path in producer_files
         is_transformer = any(op in doc_text for op in [".filter(", ".map(", ".sort(", "useMemo("])
-        
+
         violation_tag = ""
         if has_db_write and layer == "CLIENT COMPONENT (UI)" and target_symbol in doc_text:
-             violation_tag = "  [⚠️ ARCHITECTURAL VIOLATION]: Client-side Firestore write detected.\n"
+            violation_tag = "  [⚠️ ARCHITECTURAL VIOLATION]: Client-side Firestore write detected.\n"
 
         # FIX 1 applied here (Scope Cleanup)
         clean_scope = get_clean_scope(doc)
@@ -701,7 +699,7 @@ def trace_data_flow(target_symbol: str) -> str:
         context += f"### {cat}\n"
         context += "".join(items) if items else "  [No entries detected]\n"
         context += "\n"
-    
+
     return context
 
 # ---------------------------------------------------------------------------
@@ -912,7 +910,7 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
         "caller":        "Callers (Structural)",
         "transformer":   "Transformers",
         "consumer":      "Consumers & Readers",
-        "semantic_match":"Semantic Matches",
+        "semantic_match": "Semantic Matches",
     }
 
     for chunk in chunks:
@@ -1156,7 +1154,10 @@ def reindex(changed_files_only: bool = False) -> str:
 
     Returns a summary of chunks added/updated/removed, then reloads the in-memory indexes.
     """
-    import sys, io, os, subprocess
+    import sys
+    import io
+    import os
+    import subprocess
     from incremental_indexer import run_incremental, INDEX_DIR, TIER_CONFIGS
     from db import CodeDB
     _ensure_indexes()
@@ -1302,7 +1303,6 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
         norm_path = file_path.lower().replace('\\', '/')
         if norm_anchor in norm_path: continue   # skip the defining file
 
-        file_base = re.sub(r'\.[^.]+$', '', norm_path.split('/')[-1])
         file_full = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
 
         imports_anchor = bool(re.search(
@@ -1343,13 +1343,13 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
     context = f"--- DEAD CODE ANALYSIS ---\n\nSYMBOL: {symbol} | ANCHOR: {anchor_file}\n\n"
 
     if is_dead:
-        context += f"🔴 VERDICT: DEAD CODE CANDIDATE\n"
+        context += "🔴 VERDICT: DEAD CODE CANDIDATE\n"
         context += f"  No callers or consumers of `{symbol}` were found outside `{anchor_file}`.\n"
         if parallels:
             context += f"  ({len(parallels)} file(s) import the anchor but do not reference `{symbol}`.)\n"
         context += "\n"
     else:
-        context += f"✅ VERDICT: SYMBOL IS REFERENCED\n"
+        context += "✅ VERDICT: SYMBOL IS REFERENCED\n"
         context += f"  `{symbol}` has {len(callers)} caller(s) and {len(consumers)} consumer(s).\n\n"
 
     context += f"1. CALLERS (import anchor + reference `{symbol}`):\n"

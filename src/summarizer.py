@@ -315,7 +315,7 @@ class IsolatedChunkSummarizer:
         try:
             print(f"  [summarizer] ensuring worker process ({len(codes)} chunks)...", flush=True)
             self._ensure_executor()
-            print(f"  [summarizer] worker process ready, submitting batch...", flush=True)
+            print("  [summarizer] worker process ready, submitting batch...", flush=True)
             messages_batch = [
                 [
                     {"role": "system", "content": _SYSTEM_PROMPT},
@@ -324,7 +324,7 @@ class IsolatedChunkSummarizer:
                 for c in codes
             ]
             future = self._executor.submit(_worker_batch, messages_batch, _MAX_NEW_TOKENS)
-            print(f"  [summarizer] batch submitted, waiting for result (timeout=300s)...", flush=True)
+            print("  [summarizer] batch submitted, waiting for result (timeout=300s)...", flush=True)
             result = future.result(timeout=300)
             print(f"  [summarizer] result received ({len(result)} summaries)", flush=True)
             return result

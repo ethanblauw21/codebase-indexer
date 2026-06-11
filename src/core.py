@@ -70,14 +70,14 @@ def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
         return np.zeros((0, 768), dtype=np.float32)
     print(f"[core] embed_batch: {len(texts)} texts...", flush=True)
     vectors = _get_embed_model().encode(texts, convert_to_numpy=True, batch_size=batch_size)
-    print(f"[core] embed_batch done.", flush=True)
+    print("[core] embed_batch done.", flush=True)
     return np.ascontiguousarray(vectors, dtype=np.float32)
 
 def embed(text):
     """Generates code-native embeddings via Jina."""
     if not text or not text.strip():
-        return np.zeros(768, dtype="float32") 
-    
+        return np.zeros(768, dtype="float32")
+
     # Jina does NOT require "search_document:" prefixes
     vector = _get_embed_model().encode(text, convert_to_numpy=True)
     return np.array(vector, dtype="float32")
@@ -87,7 +87,7 @@ class MultiIndexManager:
         self.base_dir = base_dir
         os.makedirs(base_dir, exist_ok=True)
         self.indexes = {}
-        
+
     def load_or_create(self, tier_name: str, dimension=768):
         index_path = os.path.join(self.base_dir, f"{tier_name}.faiss")
         if os.path.exists(index_path):
@@ -97,7 +97,7 @@ class MultiIndexManager:
             index = faiss.IndexIDMap(base_index)
         self.indexes[tier_name] = index
         return index
-        
+
     def save_all(self):
         for name, index in self.indexes.items():
             faiss.write_index(index, os.path.join(self.base_dir, f"{name}.faiss"))

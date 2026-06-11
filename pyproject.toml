@@ -47,6 +47,13 @@ py-modules = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-timeout",
+    "mutmut",
+]
+
 [tool.pytest.ini_options]
 testpaths  = ["tests"]
 pythonpath = ["src"]

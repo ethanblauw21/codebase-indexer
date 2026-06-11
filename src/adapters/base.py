@@ -30,7 +30,7 @@ class Symbol:
     """A named code entity extracted from a source file."""
     fqn: str              # e.g. "src/api/auth.ts::AuthService.login"
     kind: str             # "class" | "function" | "method" | "arrow_function"
-                          # | "interface" | "type_alias"
+    # | "interface" | "type_alias"
     name: str
     class_context: Optional[str]
     start_line: int
@@ -45,7 +45,7 @@ class Edge:
     source_fqn: str               # FQN of the caller/importer; file path for imports
     target: str                   # module path for imports; function name for calls
     kind: str                     # "import" | "call" | "owns" | "extends" | "implements"
-                                  # | "provides_context" | "consumes_context"
+    # | "provides_context" | "consumes_context"
     resolved_target: Optional[str] = None  # canonical repo-relative path (IMPORTS only)
 
 

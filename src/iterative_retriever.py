@@ -16,7 +16,6 @@ After all rounds, the full accumulated pool is deduplicated and sorted by score.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from hybrid_retriever import HybridRetriever, RetrievedChunk
 from db import CodeDB

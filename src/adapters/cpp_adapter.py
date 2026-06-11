@@ -30,7 +30,6 @@ Documented blind spots (ADR-003 §2.3):
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Optional
 

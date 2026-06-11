@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Append [ADR-XXX src/file.py ...] to commit messages on ADR branches.
+# Activate per-clone: git config core.hooksPath .githooks
+# Skips if tag already present; skips on non-ADR branches.
+
+COMMIT_MSG_FILE=$1
+MSG=$(cat "$COMMIT_MSG_FILE")
+
+# Skip if an ADR tag is already in the message
+if echo "$MSG" | grep -qF '[ADR-'; then
+  exit 0
+fi
+
+# Extract ADR number from branch name (e.g. feature/adr-003-* → 003)
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
+ADR_NUM=$(echo "$BRANCH" | grep -oP '(?i)(?<=adr-)\d+' | head -1)
+if [[ -z "$ADR_NUM" ]]; then
+  exit 0
+fi
+
+ADR_TAG=$(printf "%03d" "$ADR_NUM")
+
+# Collect staged src/ file paths
+SRC_FILES=$(git diff --cached --name-only 2>/dev/null | grep '^src/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+
+if [[ -n "$SRC_FILES" ]]; then
+  TAG="[ADR-${ADR_TAG} ${SRC_FILES}]"
+else
+  TAG="[ADR-${ADR_TAG}]"
+fi
+
+# Single-line: append inline.  Multi-line: append as footer after blank line.
+LINE_COUNT=$(echo "$MSG" | wc -l)
+if [[ "$LINE_COUNT" -le 1 ]]; then
+  printf '%s %s\n' "$MSG" "$TAG" > "$COMMIT_MSG_FILE"
+else
+  # Strip any trailing newlines from MSG, then add blank line + tag
+  printf '%s\n\n%s\n' "$(echo "$MSG" | sed 's/[[:space:]]*$//')" "$TAG" > "$COMMIT_MSG_FILE"
+fi

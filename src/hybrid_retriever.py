@@ -54,11 +54,11 @@ _EXPANSION_K     = 5    # top semantic hits whose call-graphs are expanded
 _MAX_POOL_SIZE   = 35   # hard cap on candidates passed to the reranker
 _RERANK_TOP_N    = 10   # results returned to the caller
 _GRAPH_DEPTH     = 1    # one hop = immediate callers + immediate callees
-_CATEGORY_BOOST  = 0.12 # additive score nudge for chunks whose category matches the query
+_CATEGORY_BOOST  = 0.12  # additive score nudge for chunks whose category matches the query
 
 _EXPANSION_BUDGET = 20  # max structural nodes added to the pool
 _BEAM_WIDTH       = 5   # candidates kept per expansion step
-_MIN_EDGE_SCORE   = 0.3 # prune expansion paths whose relative score falls below this
+_MIN_EDGE_SCORE   = 0.3  # prune expansion paths whose relative score falls below this
 
 _RRF_K = 60             # RRF smoothing constant (standard value)
 
