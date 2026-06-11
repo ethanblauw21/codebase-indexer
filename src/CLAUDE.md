@@ -6,13 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A local code intelligence engine that indexes Python/TypeScript/JavaScript codebases into a hybrid FAISS + SQLite store and exposes query capabilities through an MCP (Model Context Protocol) server. It is a standalone Python utility — there is no web server, build pipeline, or package manifest.
 
+## Reference Documents
+
+- **Contribution Standards:** Read `CONTRIBUTING.md` before starting any new work — defines minor vs major classification, branch naming, ADR requirements, bug/feature tracking, and PR process.
+
+## Working Style
+
+- For non-trivial new features or significant design decisions, use `/grill-plan` to produce an ADR before implementing.
+- Major changes are any changes to `src/`. They require a branch, an ADR, and a PR. See `CONTRIBUTING.md`.
+
 ## Running the MCP Server
 
 ```bash
-python MCPServer.py
+python src/MCPServer.py
 ```
 
-No formal test, lint, or build commands are configured. Dependencies must be installed manually (no requirements.txt exists yet):
+Dependencies are in `requirements.txt`. Install with:
+
+```bash
+pip install -r requirements.txt
+```
+
+No formal test or lint commands are configured. Before merging, manually verify the MCP server starts and `reindex` completes without error.
 
 - `faiss-cpu` (or `faiss-gpu`)
 - `sentence-transformers`

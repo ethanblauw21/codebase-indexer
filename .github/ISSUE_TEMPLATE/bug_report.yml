@@ -1,0 +1,68 @@
+name: Bug Report
+description: Something is broken or behaving unexpectedly.
+labels: ["bug", "needs-triage"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Be specific. "When I do X, Y happens instead of Z."
+      placeholder: "When I run reindex on a project with TypeScript barrel files, the import resolver throws a KeyError instead of resolving the re-exported symbol."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered list. Include the command, config, and target path if relevant.
+      placeholder: |
+        1. Point the indexer at a TypeScript project with barrel files (index.ts re-exporting from submodules)
+        2. Run `python MCPServer.py` and call `reindex`
+        3. Observe the traceback
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: The import resolver should follow the barrel re-export chain and register the symbol edge correctly.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "Critical — data loss / index corruption / server will not start"
+        - "High — core feature broken, no workaround"
+        - "Medium — feature degraded, workaround exists"
+        - "Low — cosmetic / minor inconvenience"
+    validations:
+      required: true
+
+  - type: textarea
+    id: root-cause
+    attributes:
+      label: Root cause (if known)
+      placeholder: "Likely in src/import_resolver.py around the barrel-file resolution path — the alias map is not consulted when the re-export is in a different directory."
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      placeholder: Describe the fix approach, not just the symptom.
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Screenshots, console errors, related ADRs, affected file paths.
+    validations:
+      required: false
