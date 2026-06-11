@@ -1,0 +1,74 @@
+{
+  "fixture": "sample.tsx",
+  "parse": {
+    "symbols": [
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::Card",
+        "kind": "function",
+        "name": "Card",
+        "class_context": null,
+        "start_line": 11,
+        "end_line": 18
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::CardProps",
+        "kind": "interface",
+        "name": "CardProps",
+        "class_context": null,
+        "start_line": 6,
+        "end_line": 9
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::EmptyCard",
+        "kind": "arrow_function",
+        "name": "EmptyCard",
+        "class_context": null,
+        "start_line": 20,
+        "end_line": 20
+      }
+    ],
+    "edges": [
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx",
+        "target": "react",
+        "kind": "import",
+        "resolved_target": null
+      }
+    ],
+    "symbol_types": []
+  },
+  "chunks": [
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::CardProps",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx",
+      "start_line": 6,
+      "end_line": 9,
+      "tags": [
+        "[USE_CLIENT]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::CardProps (interface)\nTags: [USE_CLIENT]\nLines: 6-9\nCode:\ninterface CardProps {\n  title: string;\n  body: string;\n}"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::Card",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx",
+      "start_line": 11,
+      "end_line": 18,
+      "tags": [
+        "[REACT_COMPONENT]",
+        "[USE_CLIENT]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::Card (function)\nTags: [USE_CLIENT] [REACT_COMPONENT]\nLines: 11-18\nCode:\nfunction Card({ title, body }: CardProps) {\n  return (\n    <div className=\"card\">\n      <h2>{title}</h2>\n      <p>{body}</p>\n    </div>\n  );\n}"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::EmptyCard",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx",
+      "start_line": 20,
+      "end_line": 20,
+      "tags": [
+        "[REACT_COMPONENT]",
+        "[USE_CLIENT]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.tsx::EmptyCard (arrow_function)\nTags: [USE_CLIENT] [REACT_COMPONENT]\nLines: 20-20\nCode:\nconst EmptyCard = () => <div className=\"card empty\" />;"
+    }
+  ]
+}

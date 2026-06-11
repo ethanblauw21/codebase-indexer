@@ -1,0 +1,215 @@
+{
+  "fixture": "sample.ts",
+  "parse": {
+    "symbols": [
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService",
+        "kind": "class",
+        "name": "DataService",
+        "class_context": null,
+        "start_line": 11,
+        "end_line": 24
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.constructor",
+        "kind": "method",
+        "name": "constructor",
+        "class_context": "DataService",
+        "start_line": 14,
+        "end_line": 14
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.load",
+        "kind": "method",
+        "name": "load",
+        "class_context": "DataService",
+        "start_line": 16,
+        "end_line": 19
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.process",
+        "kind": "method",
+        "name": "process",
+        "class_context": "DataService",
+        "start_line": 21,
+        "end_line": 23
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::ProcessFn",
+        "kind": "type_alias",
+        "name": "ProcessFn",
+        "class_context": null,
+        "start_line": 9,
+        "end_line": 9
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::Record",
+        "kind": "interface",
+        "name": "Record",
+        "class_context": null,
+        "start_line": 4,
+        "end_line": 7
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::formatRecord",
+        "kind": "arrow_function",
+        "name": "formatRecord",
+        "class_context": null,
+        "start_line": 26,
+        "end_line": 26
+      }
+    ],
+    "edges": [
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+        "target": "fs",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.constructor",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.load",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.process",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.load",
+        "target": "parse",
+        "kind": "call",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.load",
+        "target": "readFileSync",
+        "kind": "call",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.process",
+        "target": "map",
+        "kind": "call",
+        "resolved_target": null
+      }
+    ],
+    "symbol_types": [
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.constructor",
+        "return_type": null,
+        "params": [
+          {
+            "name": "path",
+            "type": "string"
+          }
+        ],
+        "type_params": null,
+        "is_async": false,
+        "is_generator": false
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.load",
+        "return_type": "void",
+        "params": [],
+        "type_params": null,
+        "is_async": false,
+        "is_generator": false
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.process",
+        "return_type": "string[]",
+        "params": [],
+        "type_params": null,
+        "is_async": false,
+        "is_generator": false
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::formatRecord",
+        "return_type": null,
+        "params": [
+          {
+            "name": "r"
+          }
+        ],
+        "type_params": null,
+        "is_async": false,
+        "is_generator": false
+      }
+    ]
+  },
+  "chunks": [
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::Record",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+      "start_line": 4,
+      "end_line": 7,
+      "tags": [
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::Record (interface)\nTags: [CAT_PERSIST]\nLines: 4-7\nCode:\ninterface Record {\n  id: string;\n  value: number;\n}"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::ProcessFn",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+      "start_line": 9,
+      "end_line": 9,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::ProcessFn (type_alias)\nLines: 9-9\nCode:\ntype ProcessFn = (r: Record) => string;"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+      "start_line": 11,
+      "end_line": 24,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService (class)\nLines: 11-24\nCode:\nclass DataService {\n  private records: Record[] = [];\n\n  constructor(private readonly path: string)  ...\n\n\n  load(): void  ...\n\n\n  process(): string[]  ...\n\n}"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.constructor",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+      "start_line": 14,
+      "end_line": 14,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.constructor (method)\nLines: 14-14\nCode:\nconstructor(private readonly path: string) {}"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.load",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+      "start_line": 16,
+      "end_line": 19,
+      "tags": [
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.load (method)\nTags: [CAT_PERSIST]\nType: void\nLines: 16-19\nCode:\nload(): void {\n    const raw = readFileSync(this.path, \"utf-8\");\n    this.records = JSON.parse(raw);\n  }"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.process",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+      "start_line": 21,
+      "end_line": 23,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::DataService.process (method)\nType: string[]\nLines: 21-23\nCode:\nprocess(): string[] {\n    return this.records.map((r) => `${r.id}:${r.value}`);\n  }"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::formatRecord",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts",
+      "start_line": 26,
+      "end_line": 26,
+      "tags": [
+        "[CAT_PARSE]",
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.ts::formatRecord (arrow_function)\nTags: [CAT_PERSIST] [CAT_PARSE]\nLines: 26-26\nCode:\nconst formatRecord: ProcessFn = (r) => `${r.id}=${r.value}`;"
+    }
+  ]
+}

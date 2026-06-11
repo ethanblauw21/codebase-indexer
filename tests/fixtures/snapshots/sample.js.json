@@ -1,0 +1,107 @@
+{
+  "fixture": "sample.js",
+  "parse": {
+    "symbols": [
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger",
+        "kind": "class",
+        "name": "Logger",
+        "class_context": null,
+        "start_line": 4,
+        "end_line": 12
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.constructor",
+        "kind": "method",
+        "name": "constructor",
+        "class_context": "Logger",
+        "start_line": 5,
+        "end_line": 7
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.log",
+        "kind": "method",
+        "name": "log",
+        "class_context": "Logger",
+        "start_line": 9,
+        "end_line": 11
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::createLogger",
+        "kind": "arrow_function",
+        "name": "createLogger",
+        "class_context": null,
+        "start_line": 14,
+        "end_line": 14
+      }
+    ],
+    "edges": [
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js",
+        "target": "path",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.constructor",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.log",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.log",
+        "target": "log",
+        "kind": "call",
+        "resolved_target": null
+      }
+    ],
+    "symbol_types": []
+  },
+  "chunks": [
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js",
+      "start_line": 4,
+      "end_line": 12,
+      "tags": [
+        "[CAT_LOG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger (class)\nTags: [CAT_LOG]\nLines: 4-12\nCode:\nclass Logger {\n  constructor(prefix)  ...\n\n\n  log(message)  ...\n\n}"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.constructor",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js",
+      "start_line": 5,
+      "end_line": 7,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.constructor (method)\nLines: 5-7\nCode:\nconstructor(prefix) {\n    this.prefix = prefix;\n  }"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.log",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js",
+      "start_line": 9,
+      "end_line": 11,
+      "tags": [
+        "[CAT_LOG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::Logger.log (method)\nTags: [CAT_LOG]\nLines: 9-11\nCode:\nlog(message) {\n    console.log(`[${this.prefix}] ${message}`);\n  }"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::createLogger",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js",
+      "start_line": 14,
+      "end_line": 14,
+      "tags": [
+        "[CAT_LOG]",
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.js::createLogger (arrow_function)\nTags: [CAT_PERSIST] [CAT_LOG]\nLines: 14-14\nCode:\nconst createLogger = (prefix) => new Logger(prefix);"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+# firebase-rules.yaml — Risk rules for Firebase/Firestore Next.js projects.
+#
+# Copy this file to your repo root as rules.yaml to enable risk analysis
+# in investigate_architecture.
+#
+# Rule fields:
+#   id              — unique identifier (shown in report headings)
+#   name            — human-readable description
+#   layer           — layer classification where rule applies (optional;
+#                     omit to apply across all layers)
+#                     Values: CLIENT_COMPONENT | SERVER_COMPONENT | CORE_LIB |
+#                             CLOUD_FUNCTION | DATABASE | UTILITY
+#   pattern         — Python regex applied to chunk text (case-insensitive)
+#   require_concept — if true, the investigated concept name must appear in text
+#   severity        — CRITICAL | HIGH | MEDIUM | LOW | HINT
+#   message         — finding description; {concept} is replaced with the concept name
+
+rules:
+  - id: client_side_mutation
+    name: "Client-side Firestore write"
+    layer: CLIENT_COMPONENT
+    pattern: '(\w*(?:transaction|batch|db|firestore|admin|ref|tx))\.(set|add|update)\('
+    require_concept: true
+    severity: HIGH
+    message: >
+      A CLIENT_COMPONENT layer performs a direct Firestore write. All mutations
+      must go through a Cloud Callable — never from client code.
+
+  - id: server_component_hooks
+    name: "React hooks in Server Component"
+    layer: SERVER_COMPONENT
+    pattern: 'useState|useEffect|useRef'
+    severity: MEDIUM
+    message: >
+      A SERVER_COMPONENT is using React hooks (useState/useEffect/useRef).
+      Add 'use client' at the top or extract hooks into a child Client Component.
+
+  - id: core_lib_direct_mutation
+    name: "CORE_LIB direct Firestore mutation"
+    layer: CORE_LIB
+    pattern: '(\w*(?:transaction|batch|db|firestore|admin|ref|tx))\.(set|add|update)\('
+    severity: MEDIUM
+    message: >
+      A CORE_LIB module contains a direct Firestore write. Library helpers should
+      be pure or return data — mutations belong in Cloud Functions or Callables.
+
+  - id: privilege_escalation
+    name: "Admin SDK referenced in client component"
+    layer: CLIENT_COMPONENT
+    pattern: 'admin\.|Admin\.'
+    severity: CRITICAL
+    message: >
+      A CLIENT_COMPONENT appears to reference admin.* APIs. The Admin SDK must
+      NEVER be imported or called from client-side code.

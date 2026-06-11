@@ -3,13 +3,16 @@ hybrid_retriever.py — Retrieve-Traverse-Rerank pipeline for the Code Intellige
 
 Pipeline
 --------
-  1. Semantic Retrieval   — FAISS tier-1 (surgical) index, top-50 by cosine similarity.
-                            Tier-1 is chosen here because its chunks are FQN-aligned
-                            (one chunk per AST symbol), which makes them ideal seeds for
-                            the structural traversal step that follows.
+  1. Semantic Retrieval   — Multi-tier FAISS search (tier-1/2/3) fused via
+                            Reciprocal Rank Fusion (RRF, k=60).
+                            Tier-1 AST chunks carry FQNs and serve as graph
+                            traversal seeds; tier-2/3 contribute component-
+                            and architectural-level context to the rerank pool.
   2. Structural Expansion — Call-graph neighbours of the top-5 semantic hits via the
                             SQLite recursive CTE.  max_depth=1 gives immediate callers
                             and immediate callees, keeping latency bounded.
+                            Edges are labelled `corroborated=True/False` based on
+                            whether an IMPORTS edge corroborates the CALLS edge.
   3. Reranking            — jina-reranker-v2-base-code CrossEncoder scores every
                             candidate in the merged pool.  Returns the top-10.
 
@@ -18,20 +21,16 @@ Cross-Encoder fallback
 Loading a reranker requires ~500 MB of model weights and CUDA/MPS alignment.  If the
 model cannot be loaded (OOM, missing weights, no GPU), _load_reranker() sets
 _reranker_failed=True and all subsequent calls degrade gracefully: the top-10
-are chosen by FAISS cosine-similarity score instead.  The return type is identical
-in both paths so callers do not need special-casing.
+are chosen by RRF score instead.  The return type is identical in both paths.
 
 Stable ID contract
 -------------------
 FAISS vector IDs are NOT stored anywhere; they are recomputed on demand from:
-    int(md5(f"{tier_name}::{file_path}::{scope}")[:15], 16)
-This formula is shared with indexer.py and incremental_indexer.py.  Changing it
-requires a full index rebuild.  15 hex chars = 60 bits, safely below the signed
-int64 ceiling (63 bits).
+    stable_id(tier_name, file_path, scope)
+See stable_id.py for the formula and its constraints.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
@@ -42,6 +41,7 @@ import numpy as np
 from core import DocumentStore, MultiIndexManager, embed
 from db import CodeDB
 from category_tagger import classify_query
+from stable_id import stable_id
 
 logger = logging.getLogger(__name__)
 
@@ -49,19 +49,22 @@ logger = logging.getLogger(__name__)
 # Pipeline constants
 # ---------------------------------------------------------------------------
 
-_SEMANTIC_K      = 50   # FAISS candidates retrieved in step 1
+_SEMANTIC_K      = 50   # FAISS candidates retrieved in step 1 per tier
 _EXPANSION_K     = 5    # top semantic hits whose call-graphs are expanded
 _MAX_POOL_SIZE   = 35   # hard cap on candidates passed to the reranker
 _RERANK_TOP_N    = 10   # results returned to the caller
 _GRAPH_DEPTH     = 1    # one hop = immediate callers + immediate callees
 _CATEGORY_BOOST  = 0.12 # additive score nudge for chunks whose category matches the query
 
-# Beam-search graph expansion (Section 4)
 _EXPANSION_BUDGET = 20  # max structural nodes added to the pool
 _BEAM_WIDTH       = 5   # candidates kept per expansion step
 _MIN_EDGE_SCORE   = 0.3 # prune expansion paths whose relative score falls below this
 
+_RRF_K = 60             # RRF smoothing constant (standard value)
+
 _TIER1_NAME = "tier1_surgical"
+_TIER2_NAME = "tier2_component"
+_TIER3_NAME = "tier3_architectural"
 
 # ---------------------------------------------------------------------------
 # Return type
@@ -71,28 +74,19 @@ _TIER1_NAME = "tier1_surgical"
 @dataclass
 class RetrievedChunk:
     faiss_id: int
-    score: float     # reranker logit when available; FAISS cosine score otherwise
+    score: float       # reranker logit when available; RRF score otherwise
     file: str
-    scope: str       # FQN for tier-1 AST chunks (contains "::"); positional label otherwise
+    scope: str         # FQN for tier-1 AST chunks (contains "::"); positional label otherwise
     tier: str
     text: str
-    source: str      # "semantic" | "structural"
+    source: str        # "semantic" | "structural"
     tags: list[str] = field(default_factory=list)
+    corroborated: bool = True   # False when a CALLS edge lacks import-graph backing
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _stable_id(tier_name: str, file_path: str, scope: str) -> int:
-    """Reproduce the FAISS vector ID from its three logical components.
-
-    Must stay bit-for-bit identical to the formula in indexer.py and
-    incremental_indexer.py.  15 hex chars = 60 bits < signed int64 max.
-    """
-    raw = f"{tier_name}::{file_path}::{scope}".encode()
-    return int(hashlib.md5(raw).hexdigest()[:15], 16)
 
 
 def _is_fqn(scope: str) -> bool:
@@ -111,7 +105,7 @@ class HybridRetriever:
     Parameters
     ----------
     index_dir :
-        Directory that holds the ``.faiss`` files and ``doc_store.json``.
+        Directory that holds the ``.faiss`` files.
         Default: ``".code-index"``.
     db_path :
         SQLite database path.
@@ -128,7 +122,7 @@ class HybridRetriever:
     with HybridRetriever() as r:
         chunks = r.retrieve("how does smart-pick deduplicate container slots?")
         for c in chunks:
-            print(c.score, c.file, c.scope)
+            print(c.score, c.file, c.scope, c.corroborated)
     """
 
     def __init__(
@@ -140,14 +134,18 @@ class HybridRetriever:
     ) -> None:
         self._index_manager = MultiIndexManager(base_dir=index_dir)
         self._tier1: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER1_NAME)
-        self._doc_store = DocumentStore(db_path=f"{index_dir}/doc_store.json")
+        self._tier2: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER2_NAME)
+        self._tier3: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER3_NAME)
+        self._doc_store = DocumentStore(db_path)
         self._db = CodeDB(db_path)
         self._reranker_model_id = reranker_model
         self._device = device
 
-        # Lazy — loaded on first retrieve() call so __init__ never blocks
         self._reranker: Optional[object] = None
         self._reranker_failed: bool = False
+
+        # Per-session import-corroboration cache: target_file → set of importer files
+        self._import_cache: dict[str, set[str]] = {}
 
     # ------------------------------------------------------------------
     # Context-manager support
@@ -172,43 +170,57 @@ class HybridRetriever:
         Returns up to ``_RERANK_TOP_N`` (10) chunks ordered by relevance,
         highest score first.
         """
+        self._import_cache.clear()
         semantic_hits = self._semantic_search(query, k=_SEMANTIC_K)
         pool = self._expand_structurally_budgeted(semantic_hits)
         return self._rerank(query, pool)
 
     # ------------------------------------------------------------------
-    # Step 1 — Semantic retrieval
+    # Step 1 — Semantic retrieval (multi-tier RRF)
     # ------------------------------------------------------------------
 
     def _semantic_search(self, query: str, k: int) -> list[RetrievedChunk]:
-        """Embed `query` and return the top-k chunks from the tier-1 FAISS index."""
+        """Embed `query` and return the top-k chunks via three-tier RRF fusion.
+
+        All three FAISS tiers are searched; their ranked lists are merged using
+        Reciprocal Rank Fusion (k=60).  Tier-1 AST chunks carry FQNs and are
+        preferred as graph traversal seeds; tier-2/3 chunks expand the rerank pool
+        with component- and architectural-level context.
+        """
         vec = embed(query)
         vec = np.array([vec], dtype=np.float32)
         faiss.normalize_L2(vec)  # in-place; aligns with IndexFlatIP (cosine similarity)
 
-        actual_k = min(k, self._tier1.ntotal)
-        if actual_k == 0:
+        fused: dict[int, float] = {}
+        for idx in (self._tier1, self._tier2, self._tier3):
+            actual_k = min(k, idx.ntotal)
+            if actual_k == 0:
+                continue
+            _, ids = idx.search(vec, actual_k)
+            for rank, fid in enumerate(ids[0]):
+                if fid == -1:
+                    continue
+                fid = int(fid)
+                fused[fid] = fused.get(fid, 0.0) + 1.0 / (_RRF_K + rank)
+
+        if not fused:
             return []
 
-        scores, ids = self._tier1.search(vec, actual_k)
-
         results: list[RetrievedChunk] = []
-        for score, fid in zip(scores[0], ids[0]):
-            if fid == -1:
-                # FAISS pads with -1 when the index has fewer than k vectors
-                continue
-            meta = self._doc_store.get(int(fid))
+        for fid in sorted(fused, key=lambda x: fused[x], reverse=True)[:k]:
+            meta = self._doc_store.get(fid)
             if meta is None:
                 continue
             results.append(RetrievedChunk(
-                faiss_id=int(fid),
-                score=float(score),
+                faiss_id=fid,
+                score=fused[fid],
                 file=meta.get("file", ""),
                 scope=meta.get("scope", ""),
                 tier=meta.get("tier", _TIER1_NAME),
                 text=meta.get("text", ""),
                 source="semantic",
                 tags=meta.get("tags") or [],
+                corroborated=True,  # semantic hits are always considered corroborated
             ))
         return results
 
@@ -216,88 +228,40 @@ class HybridRetriever:
     # Step 2 — Structural expansion
     # ------------------------------------------------------------------
 
-    def _expand_structurally(
-        self,
-        semantic_hits: list[RetrievedChunk],
-    ) -> list[RetrievedChunk]:
-        """Walk one hop of the call graph for each of the top-_EXPANSION_K hits.
-
-        Only tier-1 AST chunks carry FQNs ("::") in their scope field.  Token-window
-        chunks (tier-2 / tier-3) are kept in the pool as semantic candidates but are
-        not used as graph traversal seeds.
-
-        Structural neighbours are looked up in DocumentStore by their recomputed
-        stable FAISS ID.  Any neighbour whose file was never indexed (e.g. a call
-        into node_modules) will be absent from DocumentStore and is silently skipped.
-
-        Returns the merged, deduplicated pool capped at _MAX_POOL_SIZE.
+    def _is_import_corroborated(self, source_file: str, target_file: str) -> bool:
         """
-        # Keyed by faiss_id to enable O(1) deduplication
-        pool: dict[int, RetrievedChunk] = {c.faiss_id: c for c in semantic_hits}
+        Return True if `source_file` imports `target_file` (or they are the same file).
 
-        expansion_seeds = [
-            c for c in semantic_hits[:_EXPANSION_K] if _is_fqn(c.scope)
-        ]
-
-        for seed in expansion_seeds:
-            try:
-                graph_nodes = self._db.get_call_graph(seed.scope, max_depth=_GRAPH_DEPTH)
-            except Exception as exc:
-                logger.warning("get_call_graph(%s) failed: %s", seed.scope, exc)
-                continue
-
-            for node in graph_nodes:
-                if node.direction == "root" or node.file_path is None:
-                    continue
-
-                neighbor_id = _stable_id(_TIER1_NAME, node.file_path, node.fqn)
-
-                if neighbor_id in pool:
-                    continue
-
-                meta = self._doc_store.get(neighbor_id)
-                if meta is None:
-                    # Neighbour's file was never embedded (un-indexed dependency) — skip
-                    continue
-
-                pool[neighbor_id] = RetrievedChunk(
-                    faiss_id=neighbor_id,
-                    score=0.0,   # no FAISS score; the reranker assigns the final rank
-                    file=meta.get("file", node.file_path),
-                    scope=meta.get("scope", node.fqn),
-                    tier=meta.get("tier", _TIER1_NAME),
-                    text=meta.get("text", ""),
-                    source="structural",
-                    tags=meta.get("tags") or [],
-                )
-
-                if len(pool) >= _MAX_POOL_SIZE:
-                    break
-
-            if len(pool) >= _MAX_POOL_SIZE:
-                break
-
-        return list(pool.values())[:_MAX_POOL_SIZE]
+        Uses a per-session cache to avoid redundant SQLite queries when the same
+        target file is a neighbour for multiple seeds.
+        """
+        if source_file == target_file:
+            return True
+        if target_file not in self._import_cache:
+            self._import_cache[target_file] = set(
+                self._db.get_importers_resolved(target_file)
+            )
+        return source_file in self._import_cache[target_file]
 
     def _expand_structurally_budgeted(
         self,
         semantic_hits: list[RetrievedChunk],
     ) -> list[RetrievedChunk]:
-        """Beam-search graph expansion with budget control (Section 4).
-
-        Replaces the flat max_depth=1 expansion to avoid graph explosion
-        while preserving high recall for architecturally proximate code.
+        """Beam-search graph expansion with budget control and corroboration labels.
 
         Algorithm
         ---------
         1. Seed the frontier with the top-_EXPANSION_K semantic hits' FQNs,
-           weighted by their FAISS cosine score.
+           weighted by their RRF score.
         2. Each expansion step pops the highest-scoring frontier entry,
            queries its one-hop call-graph neighbours, and keeps only the top
            _BEAM_WIDTH by score (hop-decayed from the parent).
-        3. Stops when the budget (_EXPANSION_BUDGET new nodes) is exhausted
-           OR all frontier edges have decayed below _MIN_EDGE_SCORE relative
-           to the top semantic score (confidence-based stopping).
+        3. Each structural chunk is labelled `corroborated=True/False` based
+           on whether an IMPORTS edge from the calling file to the callee's file
+           backs the CALLS edge.  Unverified edges still inform retrieval but
+           are excluded from verdict tools (blast-radius, dead-code).
+        4. Stops when the budget (_EXPANSION_BUDGET new nodes) is exhausted
+           OR all frontier edges have decayed below _MIN_EDGE_SCORE.
         """
         pool: dict[int, RetrievedChunk] = {c.faiss_id: c for c in semantic_hits}
 
@@ -310,7 +274,6 @@ class HybridRetriever:
                 seed_scores[c.scope] = c.score
 
         explored: set[str] = set(seed_scores.keys())
-        # frontier: list of (fqn, parent_score), highest first
         frontier: list[tuple[str, float]] = sorted(
             seed_scores.items(), key=lambda x: x[1], reverse=True
         )
@@ -322,7 +285,10 @@ class HybridRetriever:
             hop_score = parent_score * 0.7  # decay per graph hop
 
             if hop_score < abs_min_score:
-                break  # confidence-based stopping
+                break
+
+            # Derive the calling file from the FQN ("file_path::symbol")
+            source_file = fqn.split("::")[0] if "::" in fqn else None
 
             try:
                 graph_nodes = self._db.get_call_graph(fqn, max_depth=1)
@@ -330,24 +296,28 @@ class HybridRetriever:
                 logger.warning("get_call_graph(%s) failed: %s", fqn, exc)
                 continue
 
-            # Collect unseen neighbours and score them by hop_score
             candidates: list[tuple[object, float]] = []
             for node in graph_nodes:
                 if node.direction == "root" or node.fqn in explored or node.file_path is None:
                     continue
                 candidates.append((node, hop_score))
 
-            # Beam: keep only the top _BEAM_WIDTH per expansion step
             for node, score in candidates[:_BEAM_WIDTH]:
                 if nodes_added >= _EXPANSION_BUDGET:
                     break
                 explored.add(node.fqn)
-                neighbor_id = _stable_id(_TIER1_NAME, node.file_path, node.fqn)
+                neighbor_id = stable_id(_TIER1_NAME, node.file_path, node.fqn)
                 if neighbor_id in pool:
                     continue
                 meta = self._doc_store.get(neighbor_id)
                 if meta is None:
                     continue
+
+                # Import-graph corroboration (H5)
+                is_corroborated = bool(
+                    source_file and self._is_import_corroborated(source_file, node.file_path)
+                )
+
                 pool[neighbor_id] = RetrievedChunk(
                     faiss_id=neighbor_id,
                     score=score,
@@ -357,11 +327,11 @@ class HybridRetriever:
                     text=meta.get("text", ""),
                     source="structural",
                     tags=meta.get("tags") or [],
+                    corroborated=is_corroborated,
                 )
                 nodes_added += 1
                 frontier.append((node.fqn, score))
 
-            # Re-sort frontier so highest-scoring entry is always at index 0
             frontier.sort(key=lambda x: x[1], reverse=True)
 
         return list(pool.values())[:_MAX_POOL_SIZE]
@@ -398,7 +368,7 @@ class HybridRetriever:
             self._reranker_failed = True
             logger.warning(
                 "CrossEncoder load failed (%s: %s). "
-                "Falling back to FAISS cosine-score ranking.",
+                "Falling back to RRF score ranking.",
                 type(exc).__name__,
                 exc,
             )
@@ -407,7 +377,7 @@ class HybridRetriever:
     def _rerank(self, query: str, pool: list[RetrievedChunk]) -> list[RetrievedChunk]:
         """Score every candidate in `pool` against `query` via the cross-encoder.
 
-        Falls back to FAISS score ordering if the cross-encoder is unavailable.
+        Falls back to RRF score ordering if the cross-encoder is unavailable.
         Returns at most _RERANK_TOP_N chunks, highest score first.
         """
         if not pool:
@@ -418,7 +388,6 @@ class HybridRetriever:
         reranker = self._load_reranker()
 
         if reranker is None:
-            # Graceful degradation: structural hits (score=0.0) rank below semantic ones
             if query_categories:
                 for chunk in pool:
                     if query_categories & set(chunk.tags):
@@ -432,21 +401,18 @@ class HybridRetriever:
             raw_scores: np.ndarray = reranker.predict(
                 pairs,
                 convert_to_numpy=True,
-                # batch_size cap prevents OOM on large pools
                 batch_size=min(32, len(pairs)),
             )
         except Exception as exc:
             logger.warning(
-                "CrossEncoder.predict failed (%s: %s). Using FAISS scores.",
+                "CrossEncoder.predict failed (%s: %s). Using RRF scores.",
                 type(exc).__name__,
                 exc,
             )
             pool.sort(key=lambda c: c.score, reverse=True)
             return pool[:_RERANK_TOP_N]
 
-        # ── Composite scoring (Section 5) ──────────────────────────────────
-        # Signal 1: reference density — how many pool chunks mention this scope's
-        # bare name? High density = architecturally important symbol.
+        # Composite scoring
         name_mentions: dict[str, int] = {}
         for chunk in pool:
             short_name = (
@@ -459,7 +425,6 @@ class HybridRetriever:
                 if short_name in other.text:
                     name_mentions[chunk.scope] = name_mentions.get(chunk.scope, 0) + 1
 
-        # Signal 2: import locality — files already in the top-5 semantic hits
         top5_files = {
             c.file
             for c in sorted(pool, key=lambda x: x.score, reverse=True)[:5]

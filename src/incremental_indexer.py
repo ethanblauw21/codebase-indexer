@@ -24,65 +24,22 @@ Three categories result from the comparison:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FAISS numpy DTYPE CONTRACT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FAISS is a C++ library with strict type requirements surfaced through its
-SWIG Python bindings.  Passing the wrong dtype produces either a TypeError,
-a silent wrong result, or a segfault depending on the FAISS build:
+See stable_id.py — to_faiss_ids() and to_faiss_matrix() are the single
+authoritative dtype-enforcement points for all FAISS array construction.
 
-  ┌──────────────────────┬─────────────────────────────────────────────────┐
-  │ API call             │ Required numpy dtype / shape                    │
-  ├──────────────────────┼─────────────────────────────────────────────────┤
-  │ add_with_ids vectors │ np.float32, shape (n, d), C-contiguous          │
-  │ add_with_ids ids     │ np.int64,   shape (n,)                          │
-  │ remove_ids           │ np.int64,   shape (n,)                          │
-  │ normalize_L2         │ np.float32, shape (n, d), mutates in-place      │
-  │ search               │ np.float32, shape (1, d) or (n, d)              │
-  └──────────────────────┴─────────────────────────────────────────────────┘
-
-  VECTORS — float32
-    FAISS internally uses C `float` (32-bit IEEE 754) for every vector
-    operation.  sentence-transformers returns float32 by default, but
-    np.vstack() can silently promote to float64 in some numpy versions.
-    Always use np.ascontiguousarray(arr, dtype=np.float32) before passing
-    to any FAISS call.  Float64 vectors are accepted by the Python binding
-    but the C++ layer reads them as float32 — every other float is skipped,
-    producing completely wrong embeddings.
-
-  IDS — int64
-    FAISS idx_t is int64_t on all supported platforms (32-bit and 64-bit).
-    Critical Windows pitfall: numpy's default integer type is int32 on
-    Windows (the default C `int`).  np.array([1, 2, 3]) on Windows gives
-    int32; FAISS raises a SWIG TypeError.  ALWAYS specify dtype=np.int64
-    — never rely on the numpy default.
-
-  MEMORY LAYOUT — C-contiguous
-    FAISS C++ code assumes row-major (C-order) layout.  A Fortran-order
-    (column-major) array of shape (n, d) has the same bytes but in the
-    wrong order; FAISS will silently process transposed data.  np.ascontiguous
-    array(…) guarantees C-order in one call.
-
-  normalize_L2
-    Operates IN-PLACE.  Returns None.  The function converts an inner-product
-    (dot-product) index (IndexFlatIP) into a cosine-similarity index by
-    pre-normalising every stored vector to unit length.  Pass a copy if you
-    need the original magnitudes downstream.
+  add_with_ids vectors : np.float32, shape (n, d), C-contiguous
+  add_with_ids ids     : np.int64,   shape (n,)
+  remove_ids           : np.int64,   shape (n,)
+  normalize_L2         : np.float32, shape (n, d), mutates in-place
+  search               : np.float32, shape (1, d) or (n, d)
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 STABLE ID SPACE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-FAISS IDs are deterministic integers derived from the compound key:
-    int(md5(f"{tier_name}::{file_path}::{scope}")[:15], 16)
-
-  15 hex chars  → 60-bit unsigned integer.
-  int64_t range → 63 usable bits (signed), max ≈ 9.2 × 10^18.
-  60-bit max    → ≈ 1.15 × 10^18 — safely below the signed ceiling.
-
-  Using 16 hex chars (64 bits) would occasionally produce values > 2^63,
-  which FAISS interprets as negative idx_t values and either rejects or
-  silently mis-routes in the IDMap.  15 chars is the safe upper bound.
-
-  IDs are NOT stored in SQLite.  They are recomputed on demand from the
-  (scope, tier, path) columns in the `chunks` table, making remove_ids
-  fully reproducible without any schema changes.
+See stable_id.stable_id() — the formula lives there and is imported here.
+IDs are NOT stored in SQLite; they are recomputed on demand from the
+(scope, tier, path) columns in the `chunks` table, making remove_ids
+fully reproducible without any schema changes.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 remove_ids MECHANICS
@@ -119,18 +76,16 @@ from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
 from core import embed, MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
+from stable_id import stable_id, to_faiss_ids, to_faiss_matrix, TIER_CONFIGS, TIER_NUM, TIER_NAME
 
 # ---------------------------------------------------------------------------
-# Configuration — mirrors indexer.py so both scripts can coexist
+# Configuration
 # ---------------------------------------------------------------------------
 
 REPO_PATH = os.getcwd()
 INDEX_DIR = ".code-index"
 DB_PATH   = f"{INDEX_DIR}/graph.db"
 
-# Set to False to skip LLM summarization (e.g. for fast CI rebuilds).
-# Model: Qwen2.5-Coder-1.5B-Instruct by default (fast CPU); upgrade to
-# "Qwen/Qwen2.5-Coder-7B-Instruct" in summarizer.py for higher quality on GPU.
 ENABLE_SUMMARIZATION: bool = True
 
 IGNORE_DIRS: frozenset[str] = frozenset({
@@ -143,23 +98,17 @@ IGNORE_ROOT_DIRS: frozenset[str] = frozenset({"functions"})
 
 INDEXABLE_EXTS: frozenset[str] = frozenset({".py", ".ts", ".tsx", ".js", ".jsx"})
 
-# Each tuple: (faiss_index_name, max_tokens_per_chunk, overlap_tokens)
-#   Tier 1 — surgical: one chunk per AST symbol (function/class/interface)
-#   Tier 2 — component: 1 500-token windows over the whole file
-#   Tier 3 — architectural: 4 000-token windows, one or two per file
-TIER_CONFIGS: list[tuple[str, int, int]] = [
-    ("tier1_surgical",       500,   50),
-    ("tier2_component",     1500,  100),
-    ("tier3_architectural", 4000,  200),
-]
+# Project descriptor files: edges only, no chunking or embedding.
+PROJECT_EXTS: frozenset[str] = frozenset({".csproj", ".sln"})
 
-# Bidirectional mappings between the FAISS tier name and the SQLite tier integer.
-# SQLite stores an integer (1/2/3) to avoid repeating long strings in every row.
-TIER_NUM:  dict[str, int] = {name: idx + 1 for idx, (name, _, _) in enumerate(TIER_CONFIGS)}
-TIER_NAME: dict[int, str] = {v: k for k, v in TIER_NUM.items()}
+# Specific filenames (regardless of extension) that are project descriptors.
+PROJECT_FILES: frozenset[str] = frozenset({"compile_commands.json"})
+
+# Combined set for disk scan
+_ALL_SCAN_EXTS: frozenset[str] = INDEXABLE_EXTS | PROJECT_EXTS
 
 # ---------------------------------------------------------------------------
-# ID utilities
+# MD5 file hash (change detection only — not the stable ID formula)
 # ---------------------------------------------------------------------------
 
 def md5_file(path: str) -> str:
@@ -177,58 +126,6 @@ def md5_file(path: str) -> str:
     return h.hexdigest()
 
 
-def stable_id(tier_name: str, file_path: str, scope: str) -> int:
-    """
-    Deterministic 60-bit FAISS vector ID.
-
-    Formula: int(md5(f"{tier_name}::{file_path}::{scope}")[:15], 16)
-
-    Why 15 hex chars?
-      16 hex chars = 64 bits.  int64_t is SIGNED, so values ≥ 2^63 are
-      negative in FAISS — the IDMap either rejects them or stores them at
-      the wrong slot.  15 hex chars = 60 bits, comfortably below 2^63.
-    """
-    raw = f"{tier_name}::{file_path}::{scope}".encode()
-    return int(hashlib.md5(raw).hexdigest()[:15], 16)
-
-
-# ---------------------------------------------------------------------------
-# FAISS array factories — the single place where dtypes are enforced
-# ---------------------------------------------------------------------------
-
-def to_faiss_ids(ids: list[int]) -> np.ndarray:
-    """
-    Convert a list of Python ints to a FAISS-safe int64 array.
-
-    FAISS dtype contract: idx_t = int64_t on ALL platforms.
-
-    Why not rely on numpy's default?
-      • Linux/macOS 64-bit:  default int is int64  → happens to work.
-      • Windows 64-bit:      default int is int32  → SWIG TypeError at runtime.
-      • To be safe on every platform, ALWAYS pass dtype=np.int64 explicitly.
-
-    np.unique() called on the result preserves the int64 dtype while also
-    deduplicating, which is required before remove_ids (see module docstring).
-    """
-    return np.array(ids, dtype=np.int64)
-
-
-def to_faiss_matrix(vecs: list[np.ndarray]) -> np.ndarray:
-    """
-    Stack 1-D embedding vectors into a 2-D float32 C-contiguous matrix.
-
-    FAISS dtype contract for vectors: float (32-bit), shape (n, d), C-order.
-
-    np.ascontiguousarray simultaneously:
-      1. Casts to float32   — guards against np.vstack promoting to float64.
-      2. Ensures C-order    — guards against Fortran-order arrays from some
-                              scipy / sklearn utilities.
-    Both are silent failures if not corrected: float64 is read as half-width
-    float32s; column-major layout produces transposed embeddings.
-    """
-    return np.ascontiguousarray(np.vstack(vecs), dtype=np.float32)
-
-
 # ---------------------------------------------------------------------------
 # Disk scan
 # ---------------------------------------------------------------------------
@@ -237,7 +134,7 @@ def scan_disk(repo_path: str) -> dict[str, str]:
     """
     Walk `repo_path` and return {relative_path: md5_hash} for every indexable file.
 
-    Directory exclusions mirror indexer.py:
+    Directory exclusions:
       • Global ignores (IGNORE_DIRS) are applied at every depth.
       • IGNORE_ROOT_DIRS ("functions") is skipped only at the repository root
         because the same name might legitimately appear in nested packages.
@@ -256,7 +153,7 @@ def scan_disk(repo_path: str) -> dict[str, str]:
             dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
 
         for fname in files:
-            if Path(fname).suffix.lower() in INDEXABLE_EXTS:
+            if Path(fname).suffix.lower() in _ALL_SCAN_EXTS or fname in PROJECT_FILES:
                 full_path = os.path.join(root, fname)
                 rel_path  = os.path.relpath(full_path, repo_path).replace("\\", "/")
                 try:
@@ -309,24 +206,15 @@ def get_stale_ids(db: CodeDB, stale_paths: list[str]) -> np.ndarray:
     """
     Return the FAISS int64 IDs of every chunk that belongs to `stale_paths`.
 
-    HOW IT WORKS
     The chunks table stores (scope, tier, file_path).  The FAISS ID is
     deterministic from these three values via stable_id(), so we can
     reconstruct the exact int64 IDs that were passed to add_with_ids at index
     time — without ever persisting the raw IDs in the schema.
 
-    QUERYING SQLITE
-    We JOIN chunks → files to get all three fields, then call stable_id() for
-    each row.  The idx_chunks_file_tier index makes this JOIN fast even for
-    large repos.
-
-    RETURN VALUE
-    Always returns np.int64 (even when empty).  This lets the caller pass the
+    Always returns np.int64 (even when empty) so the caller can pass the
     result directly to remove_ids without a dtype guard.
     """
     if not stale_paths:
-        # Return a correctly-typed empty array rather than a generic np.array([])
-        # whose dtype would be float64 — an easy footgun.
         return np.empty(0, dtype=np.int64)
 
     rows = db.get_chunk_metadata_for_files(stale_paths)
@@ -341,7 +229,7 @@ def get_stale_ids(db: CodeDB, stale_paths: list[str]) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Stale-vector removal from FAISS + DocumentStore
+# Stale-vector removal from FAISS + DocumentStore cache
 # ---------------------------------------------------------------------------
 
 def purge_stale_vectors(
@@ -351,67 +239,36 @@ def purge_stale_vectors(
 ) -> int:
     """
     Remove stale vectors from every FAISS tier and mirror the removal in
-    the DocumentStore (the MCP server's JSON read-cache).
+    the DocumentStore in-memory cache.
 
     remove_ids DTYPE REQUIREMENTS
     ─────────────────────────────
     stale_ids MUST be np.int64.  The assertion below fires early with a clear
-    error message rather than letting FAISS produce a silent wrong result:
-
-      • In Python FAISS builds: wrong dtype → SWIG TypeError (visible).
-      • In C-extension-only builds: wrong dtype → reads adjacent memory,
-        silently removing the wrong vectors (invisible, data corruption).
+    error message rather than letting FAISS produce a silent wrong result.
 
     DEDUPLICATION BEFORE remove_ids
     ─────────────────────────────────
     np.unique() deduplicates AND sorts the id array.  Calling remove_ids with
-    a duplicated ID is undefined behaviour in some FAISS versions: the IDMap
-    may attempt to free the same internal slot twice, corrupting the mapping
-    table for subsequent queries.  np.unique() preserves the int64 dtype.
-
-    IndexIDMap → IndexFlatIP COMPACTION
-    ─────────────────────────────────────
-    Under the hood, IndexIDMap translates each external ID to its internal
-    position, then calls IndexFlatIP.remove_ids which REBUILDS the vector
-    store by compacting all surviving vectors into a new contiguous block.
-    Cost: O(n_total_vectors) — not O(n_removed).
-    For a local repo index (< 500k vectors), this is < 1 second.
-
-    DOCUMENT STORE SYNC
-    ─────────────────────
-    DocumentStore.docs is a plain dict {str(faiss_id): metadata}.  It has no
-    delete API, so we rebuild the dict with a comprehension that excludes the
-    stale keys.  The change is persisted when doc_store.save() is called later.
+    a duplicated ID is undefined behaviour in some FAISS versions.
 
     Returns the number of unique IDs submitted for removal.
     """
     if len(stale_ids) == 0:
         return 0
 
-    # ── dtype guard: catch the common Windows int32 mistake before FAISS does ──
     assert stale_ids.dtype == np.int64, (
         f"remove_ids requires np.int64 — got {stale_ids.dtype}.  "
         "Use to_faiss_ids() to construct the array."
     )
 
-    # ── deduplicate: double-free is undefined behaviour in some FAISS builds ──
-    # np.unique returns sorted, dtype-preserved array
-    unique_ids: np.ndarray = np.unique(stale_ids)   # still int64
+    unique_ids: np.ndarray = np.unique(stale_ids)   # preserves int64
 
     for tier_name, idx in faiss_indexes.items():
         try:
-            # remove_ids signature: faiss.Index.remove_ids(ids: np.ndarray[int64])
-            # IndexIDMap translates IDs → internal positions, then compacts the
-            # underlying IndexFlatIP.  IDs not present in the index are silently
-            # ignored (safe to call with a superset of valid IDs).
             idx.remove_ids(unique_ids)
         except Exception as exc:
-            # Non-fatal: log and continue.  A stale vector that survives in
-            # FAISS will never match anything in doc_store after the next step,
-            # so search results remain correct — just slightly bloated.
             print(f"  [WARN] {tier_name}: remove_ids raised {type(exc).__name__}: {exc}")
 
-    # ── mirror removal in the DocumentStore ──
     stale_str_keys: set[str] = {str(sid) for sid in unique_ids}
     doc_store.docs = {
         k: v
@@ -420,6 +277,44 @@ def purge_stale_vectors(
     }
 
     return len(unique_ids)
+
+
+# ---------------------------------------------------------------------------
+# Project-descriptor ingest: parse edges only — no chunking or embedding
+# ---------------------------------------------------------------------------
+
+def ingest_project_file(
+    rel_path:     str,
+    content:      str,
+    content_hash: str,
+    db:           CodeDB,
+) -> None:
+    """
+    Process a project descriptor (.csproj, .sln, or compile_commands.json):
+    extract dependency edges and store them without creating any chunks or
+    FAISS vectors.
+
+    Dispatch:
+      .csproj / .sln         → CSharpAdapter (via ast_chunker.parse_file)
+      compile_commands.json  → CppProjectResolver.parse() directly
+        (ast_chunker cannot route by filename, only by extension)
+    """
+    fname = Path(rel_path).name
+    if fname == "compile_commands.json":
+        from adapters.cpp_adapter import _CPP_PROJECT_RESOLVER
+        parse_result = _CPP_PROJECT_RESOLVER.parse(rel_path, content.encode("utf-8"))
+    else:
+        from ast_chunker import parse_file
+        parse_result = parse_file(rel_path, content)
+
+    db.upsert_file(
+        path           = rel_path,
+        content_hash   = content_hash,
+        symbols        = [],
+        edges          = parse_result.edges,
+        chunks_by_tier = {},
+    )
+    print(f"  [project:{rel_path}] {len(parse_result.edges)} dependency edges stored", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -438,35 +333,12 @@ def ingest_file(
 ) -> dict[str, int]:
     """
     Full pipeline for one file: AST parse → three-tier chunking → embedding
-    → FAISS add_with_ids → DocumentStore add → SQLite upsert.
-
-    add_with_ids DTYPE REQUIREMENTS
-    ─────────────────────────────────
-    vectors
-        np.float32, shape (n, d), C-contiguous.
-        sentence-transformers returns float32 from embed(), but np.vstack()
-        can silently promote to float64.  to_faiss_matrix() calls
-        np.ascontiguousarray(…, dtype=np.float32) as the single authoritative
-        cast point.
-
-    ids
-        np.int64, shape (n,).
-        to_faiss_ids() enforces the dtype regardless of platform.
-
-    normalize_L2 CONTRACT
-    ──────────────────────
-        • Input:   float32, shape (n, d), C-contiguous.
-        • Mutates: in-place, computes L2 norm per row and divides.
-        • Returns: None — do not use the return value.
-        • Purpose: converts IndexFlatIP (dot product) into cosine similarity.
-                   All stored vectors must be normalised; query vectors are
-                   normalised in the search path (MCPServer.py).
+    → FAISS add_with_ids → DocumentStore cache update → SQLite upsert.
 
     Returns {tier_name: chunk_count} for progress logging.
     """
 
     print(f"  [ingest:{rel_path}] chunking...", flush=True)
-    # ── Tier-1 chunks via AST parser; Tier-2/3 via token windows ──
     tier_chunks: dict[str, list] = {}
     for tier_name, max_tokens, overlap in TIER_CONFIGS:
         if tier_name == "tier1_surgical":
@@ -479,7 +351,6 @@ def ingest_file(
           " | ".join(f"{n}={len(c)}" for n, c in tier_chunks.items()), flush=True)
 
     print(f"  [ingest:{rel_path}] parsing AST...", flush=True)
-    # ── AST symbol + edge graph for SQLite ──
     parse_result = parse_file(rel_path, content)
     symbols      = parse_result.symbols
     references   = parse_result.references
@@ -487,7 +358,6 @@ def ingest_file(
     edges        = parse_result.edges
     print(f"  [ingest:{rel_path}] AST done: {len(symbols)} symbols, {len(edges)} edges", flush=True)
 
-    # Resolve IMPORTS edges to canonical repo-relative paths
     if resolver is not None:
         for edge in edges:
             if edge.kind == "import":
@@ -495,7 +365,6 @@ def ingest_file(
                 if resolved:
                     edge.resolved_target = resolved
 
-    # ── Per-tier embedding loop ──
     for tier_name, chunks in tier_chunks.items():
         faiss_idx = faiss_indexes[tier_name]
 
@@ -507,7 +376,7 @@ def ingest_file(
             texts_to_embed.append(chunk.text)
             all_ids.append(fid)
 
-            # Keep the DocumentStore in sync for MCP server reads
+            # Keep the DocumentStore cache in sync for MCP server reads
             doc_store.add(fid, {
                 "tier":  tier_name,
                 "file":  rel_path,
@@ -520,7 +389,6 @@ def ingest_file(
             print(f"  [ingest:{rel_path}] {tier_name}: no chunks, skipping", flush=True)
             continue
 
-        # ── OPTIONAL SUMMARY AUGMENTATION ──
         embed_texts = texts_to_embed
         if summarizer is not None:
             print(f"  [ingest:{rel_path}] {tier_name}: summarizing {len(texts_to_embed)} chunks...", flush=True)
@@ -557,22 +425,18 @@ def ingest_file(
                 else:
                     embed_texts.append(original)
 
-        # ── BATCH EMBEDDING ──
         print(f"  [ingest:{rel_path}] {tier_name}: embedding {len(embed_texts)} texts...", flush=True)
         from core import embed_batch
         vec_matrix: np.ndarray = embed_batch(embed_texts)
         print(f"  [ingest:{rel_path}] {tier_name}: embedding done, shape={vec_matrix.shape}", flush=True)
 
-        # ── normalize_L2: in-place, converts dot-product → cosine similarity ──
         faiss.normalize_L2(vec_matrix)
 
-        # ── add_with_ids: vectors float32 (n, d), ids int64 (n,) ──
         id_array: np.ndarray = to_faiss_ids(all_ids)
         faiss_idx.add_with_ids(vec_matrix, id_array)
         print(f"  [ingest:{rel_path}] {tier_name}: FAISS add done", flush=True)
 
     print(f"  [ingest:{rel_path}] writing SQLite...", flush=True)
-    # ── Persist symbols, edges, chunks, references, and types to SQLite ──
     db.upsert_file(
         path=rel_path,
         content_hash=content_hash,
@@ -603,20 +467,22 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
       3. Purge FAISS   (in-memory only until step 6)
       4. Delete from SQLite (committed per file — atomic transactions)
       5. Re-index new + modified files (each file is its own transaction)
-      6. Persist FAISS indexes + DocumentStore to disk
+      6. Persist FAISS indexes to disk
 
     If the process crashes between steps 4 and 5, the deleted files are
     absent from the `files` table on the next run → they land in DiffResult.new
     and are re-indexed cleanly.  No manual recovery is needed.
+
+    Chunk payloads (formerly doc_store.json) are now served from SQLite.
+    DocumentStore is an in-memory cache loaded from SQLite on startup;
+    add() keeps it in sync during the run; no save() call is needed.
     """
     print(f"━━ Incremental Indexer: {os.path.basename(repo_path)} ━━")
 
-    # ── Open all persistent stores ──
     index_manager = MultiIndexManager(INDEX_DIR)
-    doc_store     = DocumentStore(f"{INDEX_DIR}/doc_store.json")
+    doc_store     = DocumentStore(DB_PATH)
     db            = CodeDB(DB_PATH)
 
-    # ── Optional chunk summarizer (lazy-loads model on first file) ──
     summarizer = None
     if ENABLE_SUMMARIZATION:
         from summarizer import IsolatedChunkSummarizer
@@ -628,7 +494,6 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
         for name, _, _ in TIER_CONFIGS
     }
 
-    # ── Step 1: Scan disk + compute diff ──
     print("Scanning files...")
     disk_hashes = scan_disk(repo_path)
     diff        = compute_diff(db, disk_hashes)
@@ -644,24 +509,16 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
         f"|  {len(diff.deleted)} deleted"
     )
 
-    # ── Step 2: Collect stale FAISS IDs BEFORE any mutation ──
-    # We query SQLite while the old chunk rows still exist.  After step 4
-    # (delete_file), those rows are gone and we can no longer derive the IDs.
     stale_paths = diff.modified + diff.deleted
     stale_ids = get_stale_ids(db, stale_paths) if stale_paths else np.empty(0, dtype=np.int64)
 
-    # ── Step 3: Purge stale vectors from FAISS (in-memory) ──
     if len(stale_ids) > 0:
         n_removed = purge_stale_vectors(faiss_indexes, doc_store, stale_ids)
         print(f"  Purged {n_removed} stale vector IDs ({len(stale_paths)} file(s)).")
 
-    # ── Step 4: Remove stale records from SQLite ──
-    # ON DELETE CASCADE removes symbols and chunks; edges are cleaned up by
-    # CodeDB.delete_file().  Each call is its own committed transaction.
     for path in stale_paths:
         db.delete_file(path)
 
-    # ── Step 5: Re-index new and modified files ──
     to_index = diff.new + diff.modified
     if to_index:
         print(f"Indexing {len(to_index)} file(s)...")
@@ -670,12 +527,19 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     errors = 0
     for rel_path in to_index:
         full_path = os.path.join(repo_path, rel_path)
+        ext = Path(rel_path).suffix.lower()
         print(f"[loop] → {rel_path}", flush=True)
         try:
             print(f"[loop]   reading file...", flush=True)
             with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
                 content = fh.read()
-            print(f"[loop]   {len(content)} chars read, calling ingest_file...", flush=True)
+            print(f"[loop]   {len(content)} chars read", flush=True)
+
+            if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
+                ingest_project_file(rel_path, content, disk_hashes[rel_path], db)
+                continue
+
+            print(f"[loop]   calling ingest_file...", flush=True)
 
             counts = ingest_file(
                 rel_path=rel_path,
@@ -698,13 +562,12 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
             print(f"  ✗  {rel_path}")
             traceback.print_exc()
 
-    # ── Step 6: Flush everything to disk ──
+    # Flush FAISS indexes to disk.
+    # Chunk payloads are already in SQLite (committed per-file by upsert_file).
     print("Saving indexes...")
     index_manager.save_all()
-    doc_store.save()
     db.close()
 
-    # Reopen read-only to verify row counts
     with CodeDB(DB_PATH) as verify_db:
         s = verify_db.stats()
 
@@ -718,5 +581,9 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
         print(f"  {errors} file(s) failed to index — check output above.")
 
 
-if __name__ == "__main__":
+def main() -> None:
     run_incremental()
+
+
+if __name__ == "__main__":
+    main()

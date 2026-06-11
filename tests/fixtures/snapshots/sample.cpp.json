@@ -1,0 +1,433 @@
+{
+  "fixture": "sample.cpp",
+  "parse": {
+    "symbols": [
+      {
+        "fqn": "Core::Cache",
+        "kind": "class",
+        "name": "Cache",
+        "class_context": "Core",
+        "start_line": 27,
+        "end_line": 37
+      },
+      {
+        "fqn": "Core::Cache::Cache(int)",
+        "kind": "constructor",
+        "name": "Cache",
+        "class_context": "Core::Cache",
+        "start_line": 30,
+        "end_line": 30
+      },
+      {
+        "fqn": "Core::Cache::clear()",
+        "kind": "method",
+        "name": "clear",
+        "class_context": "Core::Cache",
+        "start_line": 33,
+        "end_line": 33
+      },
+      {
+        "fqn": "Core::Cache::get(const std::string&, T&)",
+        "kind": "method",
+        "name": "get",
+        "class_context": "Core::Cache",
+        "start_line": 32,
+        "end_line": 32
+      },
+      {
+        "fqn": "Core::Cache::put(const std::string&, const T&)",
+        "kind": "method",
+        "name": "put",
+        "class_context": "Core::Cache",
+        "start_line": 31,
+        "end_line": 31
+      },
+      {
+        "fqn": "Core::Config",
+        "kind": "struct",
+        "name": "Config",
+        "class_context": "Core",
+        "start_line": 9,
+        "end_line": 12
+      },
+      {
+        "fqn": "Core::DataService",
+        "kind": "class",
+        "name": "DataService",
+        "class_context": "Core",
+        "start_line": 39,
+        "end_line": 48
+      },
+      {
+        "fqn": "Core::DataService::DataService(const Config&)",
+        "kind": "constructor",
+        "name": "DataService",
+        "class_context": "Core::DataService",
+        "start_line": 41,
+        "end_line": 41
+      },
+      {
+        "fqn": "Core::DataService::count()",
+        "kind": "method",
+        "name": "count",
+        "class_context": "Core::DataService",
+        "start_line": 44,
+        "end_line": 44
+      },
+      {
+        "fqn": "Core::DataService::fetch(int)",
+        "kind": "method",
+        "name": "fetch",
+        "class_context": "Core::DataService",
+        "start_line": 42,
+        "end_line": 42
+      },
+      {
+        "fqn": "Core::DataService::fetch(int, bool)",
+        "kind": "method",
+        "name": "fetch",
+        "class_context": "Core::DataService",
+        "start_line": 43,
+        "end_line": 43
+      },
+      {
+        "fqn": "Core::Logger",
+        "kind": "class",
+        "name": "Logger",
+        "class_context": "Core",
+        "start_line": 17,
+        "end_line": 25
+      },
+      {
+        "fqn": "Core::Logger::Logger(int)",
+        "kind": "constructor",
+        "name": "Logger",
+        "class_context": "Core::Logger",
+        "start_line": 19,
+        "end_line": 19
+      },
+      {
+        "fqn": "Core::Logger::level()",
+        "kind": "method",
+        "name": "level",
+        "class_context": "Core::Logger",
+        "start_line": 21,
+        "end_line": 21
+      },
+      {
+        "fqn": "Core::Logger::log(const std::string&)",
+        "kind": "method",
+        "name": "log",
+        "class_context": "Core::Logger",
+        "start_line": 20,
+        "end_line": 20
+      },
+      {
+        "fqn": "Core::Status",
+        "kind": "enum",
+        "name": "Status",
+        "class_context": "Core",
+        "start_line": 7,
+        "end_line": 7
+      },
+      {
+        "fqn": "Core::StringVec",
+        "kind": "type_alias",
+        "name": "StringVec",
+        "class_context": "Core",
+        "start_line": 15,
+        "end_line": 15
+      },
+      {
+        "fqn": "Core::formatStatus(Status)",
+        "kind": "function",
+        "name": "formatStatus",
+        "class_context": null,
+        "start_line": 50,
+        "end_line": 50
+      },
+      {
+        "fqn": "Core::uint32",
+        "kind": "typedef",
+        "name": "uint32",
+        "class_context": "Core",
+        "start_line": 14,
+        "end_line": 14
+      }
+    ],
+    "edges": [
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+        "target": "<string>",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+        "target": "<vector>",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+        "target": "core/config.h",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::Cache",
+        "target": "Core::Cache::Cache(int)",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::Cache",
+        "target": "Core::Cache::clear()",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::Cache",
+        "target": "Core::Cache::get(const std::string&, T&)",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::Cache",
+        "target": "Core::Cache::put(const std::string&, const T&)",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::DataService",
+        "target": "Core::DataService::DataService(const Config&)",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::DataService",
+        "target": "Core::DataService::count()",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::DataService",
+        "target": "Core::DataService::fetch(int)",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::DataService",
+        "target": "Core::DataService::fetch(int, bool)",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::DataService",
+        "target": "Logger",
+        "kind": "extends",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::Logger",
+        "target": "Core::Logger::Logger(int)",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::Logger",
+        "target": "Core::Logger::level()",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "Core::Logger",
+        "target": "Core::Logger::log(const std::string&)",
+        "kind": "owns",
+        "resolved_target": null
+      }
+    ],
+    "symbol_types": []
+  },
+  "chunks": [
+    {
+      "scope": "Core::Status",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 7,
+      "end_line": 7,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Status (enum)\nLines: 7-7\nCode:\nenum class Status { Pending, Running, Done, Failed }"
+    },
+    {
+      "scope": "Core::Config",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 9,
+      "end_line": 12,
+      "tags": [
+        "[CAT_CONFIG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Config (struct)\nTags: [CAT_CONFIG]\nLines: 9-12\nCode:\nstruct Config {\n    int maxRetries;\n    float timeout;\n}"
+    },
+    {
+      "scope": "Core::uint32",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 14,
+      "end_line": 14,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::uint32 (typedef)\nLines: 14-14\nCode:\ntypedef unsigned int uint32;"
+    },
+    {
+      "scope": "Core::StringVec",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 15,
+      "end_line": 15,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::StringVec (type_alias)\nLines: 15-15\nCode:\nusing StringVec = std::vector<std::string>;"
+    },
+    {
+      "scope": "Core::Logger",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 17,
+      "end_line": 25,
+      "tags": [
+        "[CAT_LOG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Logger (class)\nTags: [CAT_LOG]\nLines: 17-25\nCode:\nclass Logger {\npublic:\n    explicit Logger(int level);\n    void log(const std::string& msg);\n    int level() const;\n\nprivate:\n    int _level;\n}"
+    },
+    {
+      "scope": "Core::Logger::Logger(int)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 19,
+      "end_line": 19,
+      "tags": [
+        "[CAT_LOG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Logger::Logger(int) (constructor)\nTags: [CAT_LOG]\nLines: 19-19\nCode:\nexplicit Logger(int level);"
+    },
+    {
+      "scope": "Core::Logger::log(const std::string&)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 20,
+      "end_line": 20,
+      "tags": [
+        "[CAT_LOG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Logger::log(const std::string&) (method)\nTags: [CAT_LOG]\nLines: 20-20\nCode:\nvoid log(const std::string& msg);"
+    },
+    {
+      "scope": "Core::Logger::level()",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 21,
+      "end_line": 21,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Logger::level() (method)\nLines: 21-21\nCode:\nint level() const;"
+    },
+    {
+      "scope": "Core::Cache",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 27,
+      "end_line": 37,
+      "tags": [
+        "[CAT_CACHE]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Cache (class)\nTags: [CAT_CACHE]\nLines: 27-37\nCode:\ntemplate<typename T>\nclass Cache {\npublic:\n    explicit Cache(int capacity);\n    void put(const std::string& key, const T& value);\n    bool get(const std::string& key, T& out) const;\n    void clear();\n\nprivate:\n    int _capacity;\n}"
+    },
+    {
+      "scope": "Core::Cache::Cache(int)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 30,
+      "end_line": 30,
+      "tags": [
+        "[CAT_CACHE]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Cache::Cache(int) (constructor)\nTags: [CAT_CACHE]\nLines: 30-30\nCode:\nexplicit Cache(int capacity);"
+    },
+    {
+      "scope": "Core::Cache::put(const std::string&, const T&)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 31,
+      "end_line": 31,
+      "tags": [
+        "[CAT_NETWORK]",
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Cache::put(const std::string&, const T&) (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 31-31\nCode:\nvoid put(const std::string& key, const T& value);"
+    },
+    {
+      "scope": "Core::Cache::get(const std::string&, T&)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 32,
+      "end_line": 32,
+      "tags": [
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Cache::get(const std::string&, T&) (method)\nTags: [CAT_PERSIST]\nLines: 32-32\nCode:\nbool get(const std::string& key, T& out) const;"
+    },
+    {
+      "scope": "Core::Cache::clear()",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 33,
+      "end_line": 33,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::Cache::clear() (method)\nLines: 33-33\nCode:\nvoid clear();"
+    },
+    {
+      "scope": "Core::DataService",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 39,
+      "end_line": 48,
+      "tags": [
+        "[CAT_LOG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::DataService (class)\nTags: [CAT_LOG]\nLines: 39-48\nCode:\nclass DataService : public Logger {\npublic:\n    explicit DataService(const Config& cfg);\n    std::string fetch(int id);\n    std::string fetch(int id, bool force);\n    int count() const;\n\nprivate:\n    Config _cfg;\n}"
+    },
+    {
+      "scope": "Core::DataService::DataService(const Config&)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 41,
+      "end_line": 41,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::DataService::DataService(const Config&) (constructor)\nLines: 41-41\nCode:\nexplicit DataService(const Config& cfg);"
+    },
+    {
+      "scope": "Core::DataService::fetch(int)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 42,
+      "end_line": 42,
+      "tags": [
+        "[CAT_NETWORK]",
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::DataService::fetch(int) (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 42-42\nCode:\nstd::string fetch(int id);"
+    },
+    {
+      "scope": "Core::DataService::fetch(int, bool)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 43,
+      "end_line": 43,
+      "tags": [
+        "[CAT_NETWORK]",
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::DataService::fetch(int, bool) (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 43-43\nCode:\nstd::string fetch(int id, bool force);"
+    },
+    {
+      "scope": "Core::DataService::count()",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 44,
+      "end_line": 44,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::DataService::count() (method)\nLines: 44-44\nCode:\nint count() const;"
+    },
+    {
+      "scope": "Core::formatStatus(Status)",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp",
+      "start_line": 50,
+      "end_line": 50,
+      "tags": [
+        "[CAT_PARSE]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cpp\nEntity: Core::formatStatus(Status) (function)\nTags: [CAT_PARSE]\nLines: 50-50\nCode:\nstd::string formatStatus(Status s);"
+    }
+  ]
+}

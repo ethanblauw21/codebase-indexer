@@ -1,0 +1,149 @@
+# C++ risk rules — starter pack
+# Ship in examples/ only. Never built-in; operators decide what to enable.
+#
+# Rule fields:
+#   id         — unique short identifier
+#   severity   — critical | high | medium | hint
+#   title      — one-line description shown in reports
+#   rationale  — why this matters
+#   pattern    — regex applied to symbol text (case-sensitive unless re: flags)
+#   kind_filter — optional list of symbol kinds to restrict scope
+#   tags_any   — optional: match only symbols with at least one of these tags
+#
+# Limits: rules match against AST-chunked symbol text, not fully preprocessed
+# source. Macro-expanded code and template instantiations are not visible.
+# See the C++ position statement in docs/ for accuracy expectations.
+
+rules:
+
+  # -------------------------------------------------------------------------
+  # Unsafe buffer operations — classic C buffer overrun vectors
+  # -------------------------------------------------------------------------
+
+  - id: cpp-unsafe-strcpy
+    severity: critical
+    title: "Unsafe string copy (strcpy / strcat)"
+    rationale: >
+      strcpy and strcat do not bound-check the destination buffer.
+      One oversize input crashes or overwrites the stack/heap.
+      Replace with strncpy + explicit NUL, strlcpy, or std::string.
+    pattern: '\b(strcpy|strcat)\s*\('
+
+  - id: cpp-unsafe-sprintf
+    severity: critical
+    title: "Unsafe formatted write (sprintf / vsprintf)"
+    rationale: >
+      sprintf writes to a caller-supplied buffer with no length limit.
+      Use snprintf or std::ostringstream.
+    pattern: '\b(sprintf|vsprintf)\s*\('
+
+  - id: cpp-unsafe-gets
+    severity: critical
+    title: "Removed unsafe input function (gets)"
+    rationale: >
+      gets was removed from C11 and C++14. Any code still using it is
+      processing input into an unbounded buffer. Replace with fgets or
+      std::getline.
+    pattern: '\bgets\s*\('
+
+  - id: cpp-unsafe-scanf-string
+    severity: high
+    title: "Unbounded scanf string read"
+    rationale: >
+      scanf with %s has no length limit. Use %<N>s with an explicit width
+      or std::cin >> with std::setw.
+    pattern: '\bscanf\s*\([^)]*%s'
+
+  # -------------------------------------------------------------------------
+  # Raw memory management
+  # -------------------------------------------------------------------------
+
+  - id: cpp-raw-new-delete
+    severity: hint
+    title: "Raw new / delete — prefer smart pointers"
+    rationale: >
+      Manual new/delete is error-prone (double-free, leak on exception).
+      Prefer std::make_unique / std::make_shared. Hint severity: many
+      codebases have valid low-level uses (custom allocators, placement new).
+    pattern: '\b(new|delete)\b'
+    kind_filter: [function, method, constructor, destructor]
+
+  - id: cpp-raw-malloc
+    severity: high
+    title: "C-style malloc / free in C++ code"
+    rationale: >
+      malloc/free bypass constructors and destructors, leading to
+      partially-initialized objects and resource leaks. Use new/delete or
+      (better) RAII smart pointers.
+    pattern: '\b(malloc|calloc|realloc|free)\s*\('
+
+  # -------------------------------------------------------------------------
+  # Command execution
+  # -------------------------------------------------------------------------
+
+  - id: cpp-system-call
+    severity: critical
+    title: "Shell command execution via system()"
+    rationale: >
+      system() passes a string to /bin/sh. If any part of that string
+      contains user-supplied data, this is command injection. Use
+      posix_spawn or execv family with explicit argument arrays instead.
+    pattern: '\bsystem\s*\('
+
+  - id: cpp-popen-call
+    severity: high
+    title: "Shell pipe via popen()"
+    rationale: >
+      popen() has the same injection risk as system() with the added
+      complexity of an open FILE handle. Prefer socketpair + fork/exec
+      with explicit argv.
+    pattern: '\bpopen\s*\('
+
+  # -------------------------------------------------------------------------
+  # Unsafe type operations
+  # -------------------------------------------------------------------------
+
+  - id: cpp-c-style-cast
+    severity: hint
+    title: "C-style cast — use named C++ cast"
+    rationale: >
+      C-style casts (int)x silently reinterpret_cast, const_cast, or
+      static_cast depending on context. Named casts (static_cast<int>(x))
+      make intent explicit and catch errors at compile time.
+    pattern: '\([a-zA-Z_][a-zA-Z0-9_:*& ]*\)[^=!<>()\[\]]'
+
+  - id: cpp-reinterpret-cast
+    severity: high
+    title: "reinterpret_cast — verify alignment and aliasing"
+    rationale: >
+      reinterpret_cast bypasses the type system. Misuse causes undefined
+      behavior via strict aliasing violations or misaligned access.
+      Document invariants at the call site.
+    pattern: '\breinterpret_cast\s*<'
+
+  # -------------------------------------------------------------------------
+  # Concurrency
+  # -------------------------------------------------------------------------
+
+  - id: cpp-volatile-for-sync
+    severity: high
+    title: "volatile used for thread synchronization"
+    rationale: >
+      volatile prevents compiler reordering but does not prevent CPU
+      reordering; it provides no synchronization guarantee. Use
+      std::atomic or std::mutex instead.
+    pattern: '\bvolatile\b'
+    kind_filter: [function, method]
+
+  # -------------------------------------------------------------------------
+  # Pointer arithmetic
+  # -------------------------------------------------------------------------
+
+  - id: cpp-pointer-arith
+    severity: hint
+    title: "Pointer arithmetic — verify bounds"
+    rationale: >
+      Pointer arithmetic without explicit bounds checking is a common
+      source of out-of-bounds reads/writes. Consider std::span (C++20)
+      or gsl::span to carry length alongside the pointer.
+    pattern: '\b(ptr|buf|data|base|p)[[:space:]]*[\+\-]=[[:space:]]*[0-9]'

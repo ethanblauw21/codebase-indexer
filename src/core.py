@@ -1,6 +1,6 @@
 import os
+import sqlite3
 import faiss
-import json
 import numpy as np
 faiss.omp_set_num_threads(1)
 # Silence ML backend noise
@@ -103,26 +103,77 @@ class MultiIndexManager:
             faiss.write_index(index, os.path.join(self.base_dir, f"{name}.faiss"))
 
 class DocumentStore:
-    def __init__(self, db_path=".code-index/doc_store.json"):
-        self.db_path = db_path
-        self.docs = self._load()
-        
-    def _load(self):
-        if os.path.exists(self.db_path):
-            with open(self.db_path, "r") as f:
-                return json.load(f)
-        return {}
-        
-    def add(self, doc_id: int, metadata: dict):
+    """In-memory chunk-payload cache backed by the SQLite `chunks` table.
+
+    On startup the cache is populated by reading all (scope, tier, text, tags,
+    file_path) rows from SQLite and computing the stable FAISS ID for each.
+    During an indexing run, `add()` keeps the cache in sync as new chunks are
+    embedded.  `save()` is a no-op — chunk payloads are persisted atomically
+    by `db.upsert_file()` in the SQLite write path.
+
+    One-shot migration: if a legacy `doc_store.json` exists next to the
+    SQLite file, it is deleted on first startup.  The JSON was redundant;
+    SQLite is authoritative.
+    """
+
+    def __init__(self, sqlite_db_path: str = ".code-index/graph.db") -> None:
+        self.docs: dict[str, dict] = {}
+        self._load_from_sqlite(sqlite_db_path)
+        self._retire_json(sqlite_db_path)
+
+    def _load_from_sqlite(self, db_path: str) -> None:
+        if not os.path.exists(db_path):
+            return
+        from stable_id import stable_id as _sid, TIER_NAME as _TIER_NAME
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        try:
+            rows = conn.execute(
+                """
+                SELECT c.scope, c.tier, c.text, c.tags, f.path
+                FROM   chunks c
+                JOIN   files  f ON f.id = c.file_id
+                """
+            ).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        finally:
+            conn.close()
+
+        for scope, tier_num, text, tags, file_path in rows:
+            tier_name = _TIER_NAME.get(tier_num)
+            if tier_name is None:
+                continue
+            fid = _sid(tier_name, file_path, scope)
+            self.docs[str(fid)] = {
+                "tier":  tier_name,
+                "file":  file_path,
+                "scope": scope,
+                "text":  text,
+                "tags":  tags.split() if tags else [],
+            }
+
+    @staticmethod
+    def _retire_json(db_path: str) -> None:
+        json_path = os.path.join(os.path.dirname(db_path), "doc_store.json")
+        if os.path.exists(json_path):
+            try:
+                os.remove(json_path)
+                print(
+                    f"[DocumentStore] Retired {json_path} — "
+                    "chunk payloads now served from SQLite."
+                )
+            except OSError:
+                pass
+
+    def add(self, doc_id: int, metadata: dict) -> None:
         self.docs[str(doc_id)] = metadata
-        
-    def get(self, doc_id: int):
-        # THIS was the missing piece!
+
+    def get(self, doc_id: int) -> dict | None:
         return self.docs.get(str(doc_id))
-        
-    def save(self):
-        with open(self.db_path, "w") as f:
-            json.dump(self.docs, f)
+
+    def save(self) -> None:
+        # No-op: chunk payloads are persisted to SQLite by upsert_file().
+        pass
 
 _TRUNCATION_WARNING = (
     "\n---\n"

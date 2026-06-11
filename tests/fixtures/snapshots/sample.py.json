@@ -1,0 +1,142 @@
+{
+  "fixture": "sample.py",
+  "parse": {
+    "symbols": [
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor",
+        "kind": "class",
+        "name": "DataProcessor",
+        "class_context": null,
+        "start_line": 8,
+        "end_line": 26
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.__init__",
+        "kind": "method",
+        "name": "__init__",
+        "class_context": "DataProcessor",
+        "start_line": 11,
+        "end_line": 13
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.load",
+        "kind": "method",
+        "name": "load",
+        "class_context": "DataProcessor",
+        "start_line": 15,
+        "end_line": 19
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.process",
+        "kind": "method",
+        "name": "process",
+        "class_context": "DataProcessor",
+        "start_line": 21,
+        "end_line": 26
+      },
+      {
+        "fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::format_output",
+        "kind": "function",
+        "name": "format_output",
+        "class_context": null,
+        "start_line": 29,
+        "end_line": 32
+      }
+    ],
+    "edges": [
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+        "target": "json",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+        "target": "os",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+        "target": "typing",
+        "kind": "import",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.__init__",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.load",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor",
+        "target": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.process",
+        "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::format_output",
+        "target": "dumps",
+        "kind": "call",
+        "resolved_target": null
+      }
+    ],
+    "symbol_types": []
+  },
+  "chunks": [
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+      "start_line": 8,
+      "end_line": 26,
+      "tags": [
+        "[CAT_CONFIG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor (class)\nTags: [CAT_CONFIG]\nLines: 8-26\nCode:\nclass DataProcessor:\n    \"\"\"Processes raw data records.\"\"\"\n\n    def __init__(self, path: str) -> None:\n         ...\n\n\n    def load(self, key: str) -> Optional[list]:\n         ...\n\n\n    def process(self, records: list) -> dict:\n         ...\n"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.__init__",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+      "start_line": 11,
+      "end_line": 13,
+      "tags": [
+        "[CAT_CONFIG]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.__init__ (method)\nTags: [CAT_CONFIG]\nLines: 11-13\nCode:\ndef __init__(self, path: str) -> None:\n        self.path = path\n        self._cache: dict[str, list] = {}"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.load",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+      "start_line": 15,
+      "end_line": 19,
+      "tags": [
+        "[CAT_PERSIST]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.load (method)\nTags: [CAT_PERSIST]\nLines: 15-19\nCode:\ndef load(self, key: str) -> Optional[list]:\n        \"\"\"Load records for the given key.\"\"\"\n        if key in self._cache:\n            return self._cache[key]\n        return None"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.process",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+      "start_line": 21,
+      "end_line": 26,
+      "tags": [],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::DataProcessor.process (method)\nLines: 21-26\nCode:\ndef process(self, records: list) -> dict:\n        \"\"\"Transform records into a summary.\"\"\"\n        result: dict = {}\n        for item in records:\n            result[item[\"id\"]] = item\n        return result"
+    },
+    {
+      "scope": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::format_output",
+      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py",
+      "start_line": 29,
+      "end_line": 32,
+      "tags": [
+        "[CAT_PARSE]"
+      ],
+      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py\nEntity: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.py::format_output (function)\nTags: [CAT_PARSE]\nLines: 29-32\nCode:\ndef format_output(data: dict, indent: int = 2) -> str:\n    \"\"\"Render data as a formatted string.\"\"\"\n    import json\n    return json.dumps(data, indent=indent)"
+    }
+  ]
+}

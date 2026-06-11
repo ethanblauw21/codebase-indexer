@@ -9,6 +9,8 @@ tree-sitter>=0.21
 tree-sitter-python
 tree-sitter-typescript
 tree-sitter-javascript
+tree-sitter-c-sharp
+tree-sitter-cpp
 
 # MCP server
 mcp[cli]
@@ -19,3 +21,6 @@ watchdog
 # Terminal UI
 textual
 rich
+
+# Risk rules engine (H6 — rules.yaml support)
+pyyaml

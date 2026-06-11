@@ -1,0 +1,144 @@
+# csharp-rules.yaml — C# risk rule starter pack (ADR-003 §2.4)
+#
+# Shipped as examples/ only — never built-in.  Copy and adapt to your project.
+# Load with: code-indexer-serve --rules examples/csharp-rules.yaml
+#
+# Rule format:
+#   name:        human-readable identifier (shown in reports)
+#   description: what the rule detects and why it matters
+#   patterns:    list of code snippets or regex patterns to match in symbol text
+#   severity:    high | medium | low
+#   tags:        optional list of chunk tags that must be present (AND condition)
+
+rules:
+
+  # ---------------------------------------------------------------------------
+  # SQL injection risks
+  # ---------------------------------------------------------------------------
+
+  - name: string-concatenated-sql
+    description: >
+      String concatenation near SqlCommand or ExecuteNonQuery suggests
+      a SQL injection vector.  Use parameterized queries instead.
+    patterns:
+      - "SqlCommand"
+      - "ExecuteNonQuery"
+      - "ExecuteScalar"
+      - "ExecuteReader"
+    anti_patterns:
+      - "Parameters.Add"
+      - "Parameters.AddWithValue"
+      - "@"              # parameterized placeholder — lower confidence when present
+    severity: high
+
+  - name: raw-sql-in-entity-framework
+    description: >
+      FromSqlRaw / ExecuteSqlRaw pass SQL strings directly to the database.
+      Use FromSqlInterpolated or parameterized overloads.
+    patterns:
+      - "FromSqlRaw"
+      - "ExecuteSqlRaw"
+    severity: high
+
+  # ---------------------------------------------------------------------------
+  # Authentication / authorization
+  # ---------------------------------------------------------------------------
+
+  - name: anonymous-on-mutating-action
+    description: >
+      [AllowAnonymous] on an HTTP mutating action ([HttpPost], [HttpPut],
+      [HttpDelete], [HttpPatch]) bypasses authentication.  Verify this is
+      intentional (e.g. public registration endpoint).
+    tags:
+      - "[CS_ALLOW_ANON]"
+      - "[CS_HTTP_MUTATE]"
+    severity: high
+
+  - name: missing-authorize-on-controller
+    description: >
+      A controller method has no [Authorize] attribute and no [AllowAnonymous].
+      Check whether the parent class carries [Authorize] before flagging.
+    anti_tags:
+      - "[CS_AUTHORIZE]"
+      - "[CS_ALLOW_ANON]"
+    tags:
+      - "[CS_HTTP_MUTATE]"
+    severity: medium
+
+  - name: csrf-guard-missing-on-post
+    description: >
+      [HttpPost] without [ValidateAntiForgeryToken] on a form-posting action
+      may be vulnerable to CSRF.  APIs consumed by fetch() with CORS are exempt.
+    tags:
+      - "[CS_HTTP_MUTATE]"
+    anti_tags:
+      - "[CS_CSRF_GUARD]"
+    patterns:
+      - "HttpPost"
+    severity: medium
+
+  # ---------------------------------------------------------------------------
+  # Secret leakage
+  # ---------------------------------------------------------------------------
+
+  - name: hardcoded-connection-string
+    description: >
+      A literal connection string (Server=, Data Source=, Password=) in source
+      code.  Move secrets to environment variables or a secret store.
+    patterns:
+      - "Server="
+      - "Data Source="
+      - "Password="
+      - "Pwd="
+      - "Initial Catalog="
+    severity: high
+
+  - name: appsettings-secret-key
+    description: >
+      A symbol name containing "Secret", "Password", "ApiKey", or "Token"
+      that reads from appsettings.  These keys should be overridden by
+      environment variables in production.
+    patterns:
+      - "IConfiguration"
+      - "GetValue"
+      - "GetConnectionString"
+    symbol_name_patterns:
+      - "(?i)(secret|password|apikey|api_key|token|key)"
+    severity: medium
+
+  # ---------------------------------------------------------------------------
+  # Unsafe patterns
+  # ---------------------------------------------------------------------------
+
+  - name: unsafe-deserialization-newtonsoft
+    description: >
+      JsonConvert.DeserializeObject with TypeNameHandling.All or Auto enables
+      type confusion attacks.  Use TypeNameHandling.None (default) or
+      System.Text.Json.
+    patterns:
+      - "TypeNameHandling.All"
+      - "TypeNameHandling.Auto"
+      - "TypeNameHandling.Objects"
+    severity: high
+
+  - name: process-start-with-user-input
+    description: >
+      Process.Start with an argument that may include user-controlled data
+      can lead to command injection.  Validate and allowlist all inputs.
+    patterns:
+      - "Process.Start"
+      - "ProcessStartInfo"
+    severity: medium
+
+  - name: xml-external-entity
+    description: >
+      XmlDocument or XmlTextReader without DtdProcessing.Prohibit is
+      vulnerable to XXE attacks.
+    patterns:
+      - "new XmlDocument"
+      - "new XmlTextReader"
+      - "XmlReaderSettings"
+    anti_patterns:
+      - "DtdProcessing.Prohibit"
+      - "DtdProcessing.Ignore"
+    severity: high

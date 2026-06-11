@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "code-indexer"
+version = "0.1.0"
+description = "Local code intelligence engine: FAISS + SQLite hybrid indexer with MCP server"
+requires-python = ">=3.11"
+dependencies = [
+    "faiss-cpu",
+    "sentence-transformers",
+    "transformers",
+    "numpy",
+    "tree-sitter>=0.21",
+    "tree-sitter-python",
+    "tree-sitter-typescript",
+    "tree-sitter-javascript",
+    "mcp[cli]",
+    "watchdog",
+    "textual",
+    "rich",
+    "pyyaml",
+]
+
+[project.scripts]
+code-indexer       = "incremental_indexer:main"
+code-indexer-serve = "MCPServer:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = [
+    "ast_chunker",
+    "category_tagger",
+    "core",
+    "db",
+    "hybrid_retriever",
+    "import_resolver",
+    "incremental_indexer",
+    "iterative_retriever",
+    "MCPServer",
+    "RecFileSearch",
+    "stable_id",
+    "summarizer",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths  = ["tests"]
+pythonpath = ["src"]

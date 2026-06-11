@@ -4,6 +4,16 @@ import threading
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
+# ---------------------------------------------------------------------------
+# H4 — watchdog reload guard
+# ---------------------------------------------------------------------------
+# Build new index objects before acquiring the lock (IO-bound, can be slow),
+# then swap the globals atomically.  In-flight tool calls that already hold a
+# reference to the old FAISS/DocumentStore objects complete against that
+# generation; new calls see the freshly loaded generation.
+_reload_lock = threading.Lock()
+_index_generation = 0   # incremented on every swap; useful for logging
+
 try:
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
@@ -765,73 +775,91 @@ def _classify_relationship(chunk: RetrievedChunk, concept: str) -> str:
 
 # --- Architectural risk detectors ---
 
+# ---------------------------------------------------------------------------
+# H6 — externalized risk rules
+# ---------------------------------------------------------------------------
+
+def _load_rules(rules_path: str | None = None) -> list[dict]:
+    """Load risk rules from a rules.yaml file.
+
+    Looks for rules.yaml in the current working directory if no path is given.
+    Returns an empty list when no file is found (engine produces no violations).
+
+    Ship examples/firebase-rules.yaml to your repo root as rules.yaml to
+    re-enable the Firebase/Firestore rule set.
+    """
+    if rules_path is None:
+        candidate = os.path.join(os.getcwd(), "rules.yaml")
+        rules_path = candidate if os.path.exists(candidate) else None
+    if rules_path is None:
+        return []
+    try:
+        import yaml  # pyyaml — listed in pyproject.toml dependencies
+        with open(rules_path, encoding="utf-8") as fh:
+            data = yaml.safe_load(fh)
+        return data.get("rules", []) if isinstance(data, dict) else []
+    except Exception as exc:
+        print(f"[rules] Could not load {rules_path}: {exc}")
+        return []
+
+
 def _analyze_risks(chunks: list[RetrievedChunk], concept: str) -> list[str]:
     """
-    Returns a list of formatted Markdown risk blocks.
-    Each risk block begins with a ### heading.
+    Apply per-project risk rules to the retrieved evidence chunks.
+
+    Rules are loaded from rules.yaml in the repo root (H6).  When no rules
+    file is present, no violations are reported — install rules.yaml from
+    examples/firebase-rules.yaml to enable risk analysis.
+
+    Each rule specifies:
+      layer           — layer classification where it applies (optional)
+      pattern         — regex applied to chunk text (required)
+      require_concept — if true, concept name must appear in text
+      severity        — CRITICAL | HIGH | MEDIUM | LOW | HINT
+      message         — finding description (supports {concept} placeholder)
+
+    Returns a list of formatted Markdown risk blocks (### headings).
     """
+    rules = _load_rules()
+    if not rules:
+        return []
+
     risks: list[str] = []
-
     for chunk in chunks:
-        norm_file = chunk.file.lower().replace("\\", "/")
-        text = chunk.text
-        layer = _detect_layer(chunk.file, text)
-        has_db_write = bool(_DB_WRITE_RE.search(text))
+        layer = _detect_layer(chunk.file, chunk.text)
+        text  = chunk.text
 
-        # RISK-1: Client-side Firestore write
-        if layer == "CLIENT_COMPONENT" and has_db_write and concept in text:
+        for rule in rules:
+            rule_layer = rule.get("layer")
+            if rule_layer and rule_layer != layer:
+                continue
+
+            pattern = rule.get("pattern", "")
+            if pattern and not re.search(pattern, text, re.IGNORECASE):
+                continue
+
+            if rule.get("require_concept") and concept not in text:
+                continue
+
+            rule_id  = rule.get("id", "UNKNOWN").upper()
+            severity = rule.get("severity", "MEDIUM")
+            message  = rule.get("message", "").strip().format(concept=concept)
+
             risks.append(
-                f"### ⚠️  CLIENT_SIDE_MUTATION\n"
-                f"**Severity**: HIGH  \n"
+                f"### ⚠️  {rule_id}\n"
+                f"**Severity**: {severity}  \n"
                 f"**File**: `{chunk.file}`  \n"
                 f"**FQN**: `{chunk.scope}`  \n"
-                f"**Finding**: A `[CLIENT_COMPONENT]` layer performs a direct Firestore "
-                f"write (`{_DB_WRITE_RE.search(text).group(0).rstrip('(')}()`). "
-                f"All mutations must go through a Cloud Callable — never from client code.\n"
+                f"**Finding**: {message}\n"
             )
 
-        # RISK-2: Server component doing client-only operations
-        if layer == "SERVER_COMPONENT" and re.search(r"useState|useEffect|useRef", text):
-            risks.append(
-                f"### ⚠️  SERVER_COMPONENT_HOOK_USAGE\n"
-                f"**Severity**: MEDIUM  \n"
-                f"**File**: `{chunk.file}`  \n"
-                f"**FQN**: `{chunk.scope}`  \n"
-                f"**Finding**: A `[SERVER_COMPONENT]` is using React hooks (`useState`/`useEffect`/`useRef`). "
-                f"Add `'use client'` at the top or extract hooks into a child Client Component.\n"
-            )
-
-        # RISK-3: Utility/CORE_LIB layer directly writing to Firestore
-        if layer == "CORE_LIB" and has_db_write:
-            risks.append(
-                f"### ⚠️  CORE_LIB_DIRECT_MUTATION\n"
-                f"**Severity**: MEDIUM  \n"
-                f"**File**: `{chunk.file}`  \n"
-                f"**FQN**: `{chunk.scope}`  \n"
-                f"**Finding**: A `[CORE_LIB]` module contains a direct Firestore write. "
-                f"Library helpers should be pure or return data — mutations belong in Cloud Functions or Callables.\n"
-            )
-
-        # RISK-4: Privilege mismatch — [USER_PRIVILEGE] tag pattern in client writes
-        if layer == "CLIENT_COMPONENT" and re.search(r"admin\.|Admin\.", text):
-            risks.append(
-                f"### ⚠️  PRIVILEGE_ESCALATION_PATTERN\n"
-                f"**Severity**: CRITICAL  \n"
-                f"**File**: `{chunk.file}`  \n"
-                f"**FQN**: `{chunk.scope}`  \n"
-                f"**Finding**: A `[CLIENT_COMPONENT]` appears to reference `admin.*` APIs. "
-                f"Admin SDK must NEVER be imported or called from client-side code.\n"
-            )
-
-    # Deduplicate risks by (file, risk-type) to avoid flooding the report
     seen: set[str] = set()
     deduped: list[str] = []
     for risk in risks:
-        key = risk.split("\n")[0]  # the ### heading is the unique key
+        key = risk.split("\n")[0]
         if key not in seen:
             seen.add(key)
             deduped.append(risk)
-
     return deduped
 
 
@@ -974,21 +1002,43 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     return "\n".join(lines)
 
 
+def _get_test_suffixes(source_file: str) -> list[str]:
+    """Return test file suffixes for the language of source_file, or all languages."""
+    import os as _os
+    from adapters import REGISTRY, get_adapter
+    ext = _os.path.splitext(source_file)[1].lower()
+    adapter = get_adapter(ext)
+    if adapter and hasattr(adapter, "test_conventions"):
+        tc = adapter.test_conventions()
+        if tc:
+            return tc.file_suffixes
+    # Fall back to all known test suffixes across all adapters
+    seen: set[int] = set()
+    suffixes: list[str] = []
+    for a in REGISTRY.values():
+        if id(a) not in seen:
+            seen.add(id(a))
+            tc = a.test_conventions() if hasattr(a, "test_conventions") else None
+            if tc:
+                suffixes.extend(tc.file_suffixes)
+    return suffixes
+
+
 @mcp.tool()
 def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     """
-    Finds Vitest unit tests (.test.ts) that semantically cover a source file or symbol.
+    Finds unit tests that semantically cover a source file or symbol.
 
-    Explicitly excludes Playwright specs (.spec.ts) — E2E tests exercise UI behavior
-    through the browser and never reference backend function names, so including them
-    produces misleading empty results for server-side logic.
+    Adapts to the language of the source file — TypeScript (.test.ts),
+    C# (Tests.cs / Test.cs), Python (_test.py), etc.  Falls back to all
+    known test file patterns when the language cannot be determined.
 
     Inputs:
-      source_file   — filename of the source being tested (e.g. 'edit-ticket-items.ts')
-      target_symbol — optional function/hook name to narrow the search
+      source_file   — filename of the source being tested (e.g. 'auth.ts', 'AuthService.cs')
+      target_symbol — optional function/method name to narrow the search
 
     Output tiers:
-      Direct   — spec file named after the source (e.g. edit-ticket-items.test.ts)
+      Direct   — test file named after the source (e.g. auth.test.ts, AuthServiceTests.cs)
       Semantic — tests describing the same behavior via FAISS + RRF search
       None     — explicit signal that no coverage was found
     """
@@ -997,25 +1047,35 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     norm_source = source_file.lower().replace('\\', '/').split('/')[-1]
     source_base = re.sub(r'\.[^.]+$', '', norm_source)
 
-    # Collect one representative doc per .test.ts file; exclude .spec.ts (Playwright)
+    test_suffixes = [s.lower() for s in _get_test_suffixes(source_file)]
+
+    def is_test_file(fp: str) -> bool:
+        return any(fp.endswith(s) for s in test_suffixes)
+
+    # Collect one representative doc per test file
     test_doc_by_file: dict[str, dict] = {}
     for doc in doc_store.docs.values():
         fp = doc['file'].replace('\\', '/').lower()
-        if fp.endswith('.test.ts') and fp not in test_doc_by_file:
+        if is_test_file(fp) and fp not in test_doc_by_file:
             test_doc_by_file[fp] = doc
 
     if not test_doc_by_file:
+        suffixes_str = ", ".join(test_suffixes) if test_suffixes else "(none)"
         return (
             "--- TEST COVERAGE ANALYSIS ---\n\n"
             f"SOURCE: {source_file}\n\n"
-            "  [No .test.ts files found in the index — run reindex first.]\n"
+            f"  [No test files found in the index (searched suffixes: {suffixes_str}) — run reindex first.]\n"
         )
 
     # --- Tier 1: Direct name match ---
-    direct_expected = f"{source_base}.test.ts"
+    # Candidate direct test names: source_base + each test suffix
+    # e.g. "auth" + ".test.ts" → "auth.test.ts";  "AuthService" + "Tests.cs" → "authservicetests.cs"
+    direct_candidates = {f"{source_base}{s}" for s in test_suffixes}
     direct_data: list[str] = []
+    direct_fps:  set[str]  = set()
     for fp, doc in test_doc_by_file.items():
-        if fp.split('/')[-1] == direct_expected:
+        if fp.split('/')[-1] in direct_candidates:
+            direct_fps.add(fp)
             snippet = doc['text'][:120].replace('\n', ' ').strip() + "..."
             direct_data.append(
                 f"- {doc['file']} ({get_clean_scope(doc)})\n  [Snippet]: {snippet}\n\n"
@@ -1036,13 +1096,12 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
 
     semantic_data: list[str] = []
     seen_semantic: set[str] = set()
-    direct_fps = {fp for fp in test_doc_by_file if fp.split('/')[-1] == direct_expected}
 
     for did in sorted(_fused_tc, key=lambda x: _fused_tc[x], reverse=True):
         doc = doc_store.get(did)
         if not doc: continue
         fp = doc['file'].replace('\\', '/').lower()
-        if not fp.endswith('.test.ts'): continue
+        if not is_test_file(fp): continue
         if fp in seen_semantic or fp in direct_fps: continue
         seen_semantic.add(fp)
 
@@ -1062,20 +1121,22 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     if target_symbol:
         header += f" | SYMBOL: {target_symbol}"
 
+    direct_label = " | ".join(f"{source_base}{s}" for s in test_suffixes[:2])
+
     context = f"--- TEST COVERAGE ANALYSIS ---\n\n{header}\n\n"
-    context += "1. DIRECT COVERAGE (spec file named after source):\n"
-    context += "".join(direct_data) if direct_data else f"  [No direct spec — expected: {direct_expected}]\n\n"
+    context += "1. DIRECT COVERAGE (test file named after source):\n"
+    context += "".join(direct_data) if direct_data else f"  [No direct test file — expected: {direct_label}]\n\n"
     context += "2. SEMANTIC COVERAGE (tests describing the same behavior):\n"
     context += "".join(semantic_data) if semantic_data else "  [No semantically related tests found]\n\n"
 
     if not direct_data and not semantic_data:
         context += (
             f"\n⚠️  COVERAGE VERDICT: NO TESTS FOUND\n"
-            f"  Neither a direct spec ({direct_expected}) nor any semantically related\n"
-            f"  .test.ts files were found for '{source_file}'.\n"
+            f"  Neither a direct test file ({direct_label}) nor any semantically related\n"
+            f"  test files were found for '{source_file}'.\n"
         )
 
-    context += "\nNote: Only .test.ts (Vitest) files are searched. Playwright .spec.ts files are excluded.\n"
+    context += f"\nNote: Searched for test files with suffixes: {', '.join(test_suffixes)}\n"
     return context
 
 
@@ -1146,9 +1207,7 @@ def reindex(changed_files_only: bool = False) -> str:
             _fp = os.path.join(INDEX_DIR, f"{_tier_name}.faiss")
             if os.path.exists(_fp):
                 os.remove(_fp)
-        _ds = os.path.join(INDEX_DIR, "doc_store.json")
-        if os.path.exists(_ds):
-            os.remove(_ds)
+        # doc_store.json was retired in H2; chunk payloads live in graph.db
 
     # Run the indexer, capturing its console output to return as the tool result
     _captured = io.StringIO()
@@ -1456,16 +1515,32 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
 # ---------------------------------------------------------------------------
 
 def _reload_indexes() -> None:
-    """Hot-swap the in-memory FAISS + doc-store state after a reindex run."""
+    """Hot-swap the in-memory FAISS + doc-store state after a reindex run.
+
+    Build-then-swap pattern (H4): new objects are constructed outside the lock
+    so the IO-bound work does not block in-flight tool calls.  The lock is
+    acquired only for the brief reference-swap itself.
+    """
     global index_manager, doc_store, t1_index, t2_index, t3_index
-    global _hybrid_retriever, _iterative_retriever
-    index_manager = MultiIndexManager()
-    doc_store     = DocumentStore()
-    t1_index      = index_manager.load_or_create("tier1_surgical")
-    t2_index      = index_manager.load_or_create("tier2_component")
-    t3_index      = index_manager.load_or_create("tier3_architectural")
-    _hybrid_retriever   = None   # lazy singleton resets on next investigate_architecture call
-    _iterative_retriever = None
+    global _hybrid_retriever, _iterative_retriever, _index_generation
+
+    # Phase 1: build (slow — reads FAISS files + SQLite)
+    new_im = MultiIndexManager()
+    new_ds = DocumentStore()
+    new_t1 = new_im.load_or_create("tier1_surgical")
+    new_t2 = new_im.load_or_create("tier2_component")
+    new_t3 = new_im.load_or_create("tier3_architectural")
+
+    # Phase 2: atomic swap (fast — just reference assignments)
+    with _reload_lock:
+        index_manager        = new_im
+        doc_store            = new_ds
+        t1_index             = new_t1
+        t2_index             = new_t2
+        t3_index             = new_t3
+        _index_generation   += 1
+        _hybrid_retriever    = None
+        _iterative_retriever = None
 
 
 class _ReindexDebouncer:
@@ -1589,6 +1664,10 @@ def start_watchdog(repo_path: str | None = None, debounce_seconds: float = 3.0):
     return observer
 
 
-if __name__ == "__main__":
+def main() -> None:
     start_watchdog()
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()

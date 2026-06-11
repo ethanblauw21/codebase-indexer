@@ -1,6 +1,6 @@
 ﻿# Codebase Indexer
 
-A local code intelligence engine that indexes Python, TypeScript, and JavaScript codebases into a hybrid semantic search system, then exposes query capabilities through a **Model Context Protocol (MCP) server** for use with AI assistants.
+A local code intelligence engine that indexes Python, TypeScript, JavaScript, C#, and C++ codebases into a hybrid semantic search system, then exposes query capabilities through a **Model Context Protocol (MCP) server** for use with AI assistants.
 
 ## What it does
 
@@ -146,6 +146,41 @@ The `.code-index/` directory (FAISS indexes, `graph.db`, `doc_store.json`) is ge
 
 ## Languages Supported for Indexing
 
-- Python (`.py`)
-- TypeScript (`.ts`, `.tsx`)
-- JavaScript (`.js`, `.jsx`)
+| Language | Extensions | Symbols extracted | Graph edges |
+|----------|-----------|------------------|-------------|
+| **Python** | `.py` | module, class, function, method, decorated function | import, call, owns, extends |
+| **TypeScript** | `.ts`, `.tsx` | class, interface, function, arrow function, type alias, React component | import, call, owns, extends, context |
+| **JavaScript** | `.js`, `.jsx` | class, function, arrow function, React component | import, call, owns, extends, context |
+| **C#** | `.cs`, `.csproj`, `.sln` | namespace, class, interface, struct, record, enum, method, constructor, property | import (using), call, owns, extends, implements |
+| **C++** | `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.hxx` | namespace, class, struct, enum, function, method, constructor, template, typedef, using alias | import (#include), call, owns, extends |
+
+### Language Limits
+
+These are known, documented constraints — not bugs. They reflect the fundamental difference between a heuristic structural indexer and a compiler frontend.
+
+#### Python
+- Dynamic attribute assignment (`self.x = ...` in `__init__`) is not indexed as a symbol — only statically declared class attributes are.
+- `__getattr__` / `__getattribute__` overrides make attribute resolution invisible to the graph.
+- Decorators are captured as symbol metadata but decorator-generated methods (e.g. `@property`, `@staticmethod`) are not separately indexed as symbols.
+
+#### TypeScript / JavaScript
+- Extension methods (prototype augmentation) resolve to candidates only.
+- Dynamic `require()` and `import()` with non-literal paths are not resolved.
+- Type-narrowed dispatch (discriminated unions) produces candidate call edges, not single-target edges.
+- `tsconfig.json` path aliases are resolved; `node_modules` edges terminate at the package boundary.
+
+#### C#
+- Extension methods resolve to candidates only (no receiver-type inference without full type resolution).
+- LINQ query syntax is indexed as text at chunk level, not as call edges.
+- `dynamic` is invisible to the graph.
+- Cross-file partial-class EXTENDS/IMPLEMENTS/OWNS edges are not cleaned on incremental re-index; full re-index always produces a correct graph.
+
+#### C++
+
+> **Position statement:** This is a heuristic semantic/structural indexer, not a compiler frontend. For precise C++ navigation use clangd or SCIP. This tool's value is hybrid search and a good-enough graph over codebases where no compile-accurate index exists.
+
+- **Preprocessor macros:** macro-generated functions are invisible to the graph. Only source-visible function definitions and declarations are indexed.
+- **Template instantiations:** template *definitions* index correctly; instantiations (`std::vector<int>`) are invisible.
+- **Function pointers and virtual dispatch:** call edges resolve to the declared type only, not the runtime type.
+- **Operator overloads:** indexed as symbols but rarely earn call edges (call sites use operator syntax, not a function name).
+- **Header/impl unification:** relies on FQN identity across files. If a declaration and definition use different parameter spellings (e.g. `const string&` vs `const std::string&`) they will produce different FQNs and not unify. Normalize includes in your codebase to prevent this.

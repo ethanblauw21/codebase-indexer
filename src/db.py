@@ -94,6 +94,25 @@ CREATE TABLE IF NOT EXISTS symbols (
 );
 
 -- -------------------------------------------------------------------------
+-- symbol_locations — one row per (symbol, file) location.
+-- Supports C# partial classes and C++ header/impl split (Phase 2+).
+-- For Python/TS/JS (Phase 1), each symbol has exactly one location and
+-- the row mirrors symbols.file_id / start_line / end_line / text.
+-- ON DELETE CASCADE from symbols ensures cleanup when a symbol is removed.
+-- -------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS symbol_locations (
+    id         INTEGER PRIMARY KEY,
+    symbol_id  INTEGER NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+    file_id    INTEGER NOT NULL REFERENCES files(id)   ON DELETE CASCADE,
+    start_line INTEGER NOT NULL,
+    end_line   INTEGER NOT NULL,
+    text       TEXT    NOT NULL,
+    UNIQUE(symbol_id, file_id)
+);
+CREATE INDEX IF NOT EXISTS idx_symloc_symbol ON symbol_locations(symbol_id);
+CREATE INDEX IF NOT EXISTS idx_symloc_file   ON symbol_locations(file_id);
+
+-- -------------------------------------------------------------------------
 -- chunks
 -- -------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS chunks (
@@ -296,6 +315,7 @@ class CodeDB:
         self._conn.executescript(_PRAGMA_SQL)
         self._conn.executescript(_DDL_SQL)
         self._migrate_edges()
+        self._migrate_symbol_locations()
 
     def _migrate_edges(self) -> None:
         """
@@ -343,6 +363,26 @@ class CodeDB:
         CREATE INDEX IF NOT EXISTS idx_edges_resolved    ON edges(resolved_target)
             WHERE resolved_target IS NOT NULL;
         PRAGMA optimize;
+        """)
+
+    def _migrate_symbol_locations(self) -> None:
+        """
+        Idempotent additive migration: back-fill symbol_locations from any
+        symbols rows that were written before this table existed.
+
+        For Python/TS/JS (Phase 1), each symbol has exactly one location, so
+        this is a 1-to-1 copy of (file_id, start_line, end_line, text) from
+        symbols.  Phase 2 (C# partial classes) will write multiple rows per
+        symbol directly via upsert_file.
+        """
+        self._conn.executescript("""
+        INSERT OR IGNORE INTO symbol_locations
+            (symbol_id, file_id, start_line, end_line, text)
+        SELECT s.id, s.file_id, s.start_line, s.end_line, s.text
+        FROM   symbols s
+        WHERE  NOT EXISTS (
+            SELECT 1 FROM symbol_locations sl WHERE sl.symbol_id = s.id
+        );
         """)
 
     # ------------------------------------------------------------------
@@ -432,19 +472,39 @@ class CodeDB:
                 "SELECT id FROM files WHERE path = ?", (path,)
             ).fetchone()[0]
 
-            # Stale data removal (CASCADE handles symbols/chunks/refs)
-            cur.execute("DELETE FROM symbols          WHERE file_id = ?", (file_id,))
-            cur.execute("DELETE FROM chunks           WHERE file_id = ?", (file_id,))
+            # ── Stale data removal ──────────────────────────────────────────
+            # For shared symbols (C# partial classes / C++ header+impl), the
+            # same FQN may appear in multiple files.  We delete the per-file
+            # location entries first, then only remove symbols that have no
+            # remaining locations (i.e. are not claimed by another file).
+            #
+            # For non-shared symbols (Python, JS, TS, C# members), each
+            # symbol has exactly one location, so deleting that location row
+            # and then removing the orphaned symbol is equivalent to the
+            # previous DELETE WHERE file_id = ? pattern.
+
+            cur.execute("DELETE FROM symbol_locations WHERE file_id = ?", (file_id,))
+            cur.execute(
+                "DELETE FROM symbols WHERE file_id = ? "
+                "AND id NOT IN (SELECT DISTINCT symbol_id FROM symbol_locations)",
+                (file_id,),
+            )
+            cur.execute("DELETE FROM chunks            WHERE file_id = ?", (file_id,))
             cur.execute("DELETE FROM symbol_references WHERE file_id = ?", (file_id,))
 
-            # symbol_types are keyed by fqn; remove by matching file's symbols first
-            old_fqns = [s.fqn for s in symbols]
+            # symbol_types are keyed by fqn; remove by matching file's symbols
+            non_shared_fqns = [s.fqn for s in symbols if not getattr(s, "shared", False)]
+            old_fqns        = [s.fqn for s in symbols]
             if old_fqns:
                 ph = ",".join("?" * len(old_fqns))
                 cur.execute(f"DELETE FROM symbol_types WHERE symbol_fqn IN ({ph})", old_fqns)
 
-            # Outgoing edges (IMPORTS keyed by file path, CALLS keyed by FQN)
-            old_source_fqns = old_fqns + [path]
+            # Outgoing edges for non-shared symbols + file-level import edges.
+            # Shared-type edges (EXTENDS, IMPLEMENTS, OWNS from C# types) are
+            # NOT deleted here — they accumulate via INSERT OR IGNORE and are
+            # only fully cleaned on a full re-index.  This avoids clobbering
+            # edges contributed by other files that share the same type FQN.
+            old_source_fqns = non_shared_fqns + [path]
             if old_source_fqns:
                 ph = ",".join("?" * len(old_source_fqns))
                 cur.execute(
@@ -452,19 +512,55 @@ class CodeDB:
                     old_source_fqns,
                 )
 
-            # Symbols
-            cur.executemany(
-                """
-                INSERT OR REPLACE INTO symbols
-                    (fqn, file_id, kind, name, class_context, start_line, end_line, text)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (s.fqn, file_id, s.kind, s.name, s.class_context,
-                     s.start_line, s.end_line, s.text)
-                    for s in symbols
-                ],
-            )
+            # ── Symbols insert ──────────────────────────────────────────────
+            # Shared symbols (partial-class type declarations):
+            #   INSERT OR IGNORE — leave the existing row if another file
+            #   already claimed this FQN; symbol_locations accumulates below.
+            # Non-shared symbols:
+            #   INSERT OR REPLACE — always overwrite with the fresh parse.
+            shared_rows = [
+                (s.fqn, file_id, s.kind, s.name, s.class_context,
+                 s.start_line, s.end_line, s.text)
+                for s in symbols if getattr(s, "shared", False)
+            ]
+            non_shared_rows = [
+                (s.fqn, file_id, s.kind, s.name, s.class_context,
+                 s.start_line, s.end_line, s.text)
+                for s in symbols if not getattr(s, "shared", False)
+            ]
+            if shared_rows:
+                cur.executemany(
+                    """
+                    INSERT OR IGNORE INTO symbols
+                        (fqn, file_id, kind, name, class_context, start_line, end_line, text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    shared_rows,
+                )
+            if non_shared_rows:
+                cur.executemany(
+                    """
+                    INSERT OR REPLACE INTO symbols
+                        (fqn, file_id, kind, name, class_context, start_line, end_line, text)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    non_shared_rows,
+                )
+            # symbol_locations — one row per (symbol, file); enables multi-location
+            # merge for C# partial classes and C++ header/impl split (Phase 2+).
+            if symbols:
+                cur.executemany(
+                    """
+                    INSERT OR IGNORE INTO symbol_locations
+                        (symbol_id, file_id, start_line, end_line, text)
+                    SELECT s.id, ?, ?, ?, ?
+                    FROM   symbols s WHERE s.fqn = ?
+                    """,
+                    [
+                        (file_id, s.start_line, s.end_line, s.text, s.fqn)
+                        for s in symbols
+                    ],
+                )
 
             # Chunks
             for tier_num, chunk_list in chunks_by_tier.items():

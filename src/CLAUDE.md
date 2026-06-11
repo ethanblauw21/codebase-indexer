@@ -15,27 +15,64 @@ A local code intelligence engine that indexes Python/TypeScript/JavaScript codeb
 - For non-trivial new features or significant design decisions, use `/grill-plan` to produce an ADR before implementing.
 - Major changes are any changes to `src/`. They require a branch, an ADR, and a PR. See `CONTRIBUTING.md`.
 
-## Running the MCP Server
+## Installation
+
+Preferred (development install — exposes `code-indexer` and `code-indexer-serve` entry points):
 
 ```bash
-python src/MCPServer.py
+pip install -e .
 ```
 
-Dependencies are in `requirements.txt`. Install with:
+Or install dependencies only (no entry points):
 
 ```bash
 pip install -r requirements.txt
 ```
 
-No formal test or lint commands are configured. Before merging, manually verify the MCP server starts and `reindex` completes without error.
+## Running
 
-- `faiss-cpu` (or `faiss-gpu`)
-- `sentence-transformers`
-- `transformers`
-- `tree-sitter` + `tree-sitter-python`, `tree-sitter-typescript`, `tree-sitter-javascript`
-- `mcp` (FastMCP)
-- `watchdog` (optional, for auto-reindex)
-- `numpy`
+```bash
+code-indexer          # rebuild the index (incremental by default)
+code-indexer-serve    # start the MCP server with watchdog auto-reindex
+```
+
+Or directly:
+
+```bash
+python src/MCPServer.py
+python src/incremental_indexer.py
+```
+
+## Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+Tests live in `tests/`. The `pyproject.toml` sets `pythonpath = ["src"]` so imports work without installing the package.
+
+Key test files:
+- `tests/test_stable_id.py` — golden fixtures for the 60-bit ID formula; diff categorization; dtype contracts
+
+## Retrieval Eval
+
+```bash
+python tools/eval_retrieval.py [--index-dir .code-index] [--verbose]
+```
+
+Compares tier-1-only baseline vs. three-tier RRF fusion across a fixed 10-query set. Reports MRR@5 and Hit@{1,3,5}. Exits 1 if three-tier degrades quality (surface; do not revert silently — per ADR-002 H3). Requires a built index; run `code-indexer` first.
+
+## Models
+
+All models are downloaded automatically by HuggingFace on first use. To pre-download before going offline (recommended for CI or air-gapped environments), use `huggingface-cli` (ships with `huggingface_hub`, a transitive dep of `sentence-transformers`):
+
+```bash
+huggingface-cli download jinaai/jina-embeddings-v2-base-code   # embedder (~300 MB)
+huggingface-cli download jinaai/jina-reranker-v2-base-code     # reranker (~500 MB, optional)
+huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct      # summarizer (~3 GB, optional)
+```
+
+Model IDs are configured in `indexer.toml` (`[embeddings]`, `[reranker]`, `[summarization]`). The reranker and summarizer are both optional — the indexer degrades gracefully without them.
 
 ## Architecture
 
@@ -49,7 +86,7 @@ Every indexed symbol is chunked and embedded at three granularities, stored in s
 | 2 (component) | ~1500 | `tier2_component.faiss` | Module-level sliding window |
 | 3 (architectural) | ~4000 | `tier3_architectural.faiss` | System-level sliding window |
 
-The companion `graph.db` (SQLite, WAL mode) stores the symbol/edge graph for structural traversal. `doc_store.json` caches full document payloads for fast MCP lookup.
+The companion `graph.db` (SQLite, WAL mode) stores the symbol/edge graph for structural traversal. Chunk payloads are served from SQLite (`chunks` table) via an in-memory cache in `DocumentStore`.
 
 ### Data Flow
 
@@ -66,9 +103,9 @@ Source files
 
 `hybrid_retriever.py` implements a three-step Retrieve → Traverse → Rerank pipeline:
 
-1. **Semantic**: FAISS top-50 candidates from tier-1
-2. **Structural**: One-hop call-graph expansion via SQLite (bidirectional, cycle-guarded CTEs)
-3. **Reranking**: `jina-reranker-v2-base-code` CrossEncoder (500 MB, optional; falls back to FAISS scores)
+1. **Semantic**: FAISS top-50 candidates from each of the three tiers, fused via Reciprocal Rank Fusion (RRF, k=60)
+2. **Structural**: One-hop call-graph expansion via SQLite (bidirectional, cycle-guarded CTEs); edges corroborated against the import graph
+3. **Reranking**: `jina-reranker-v2-base-code` CrossEncoder (≈500 MB, optional; falls back to RRF scores when unavailable)
 
 `iterative_retriever.py` wraps this in multi-round loops with confidence-based early stopping and query enrichment from prior findings.
 

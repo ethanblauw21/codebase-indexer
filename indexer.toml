@@ -1,0 +1,70 @@
+# indexer.toml — Per-repo configuration for the code indexer.
+#
+# Copy or symlink this file to each repository root you want to index,
+# then edit the values below.  All paths are relative to the directory
+# where this file lives (the repo root).
+#
+# Install with:  pip install -e /path/to/indexer
+# Run indexer:   code-indexer
+# Run MCP server: code-indexer-serve
+
+[indexer]
+# Root of the repository to index (relative or absolute).
+repo_root = "."
+
+# Directory where FAISS indexes and graph.db are stored.
+index_dir = ".code-index"
+
+# Optional: path to a rules.yaml file for risk analysis.
+# When absent, no rules are applied (copy examples/firebase-rules.yaml).
+# rules_file = "rules.yaml"
+
+[embeddings]
+# HuggingFace model ID for code embeddings (Jina v2 — multi-language).
+model_id = "jinaai/jina-embeddings-v2-base-code"
+
+# Maximum sequence length fed to the embedding model.
+# Reduce if you hit OOM on GPUs with less than 8 GB VRAM.
+max_seq_length = 512
+
+# Output embedding dimension (must match the model; do not change).
+dimension = 768
+
+[reranker]
+# HuggingFace model ID for cross-encoder reranking (~500 MB, optional).
+# When the model cannot be loaded (OOM, missing weights) the retriever falls
+# back to RRF score ordering automatically — no action required.
+#
+# Pre-download before first use (requires huggingface-cli from the
+# huggingface_hub package, which is a transitive dep of sentence-transformers):
+#
+#   huggingface-cli download jinaai/jina-reranker-v2-base-code
+#
+model_id = "jinaai/jina-reranker-v2-base-code"
+
+[summarization]
+# Set to false to skip LLM chunk summarization (faster indexing, lower recall).
+enabled = true
+
+# HuggingFace model ID for chunk summarization.
+# Use "Qwen/Qwen2.5-Coder-7B-Instruct" for higher quality on GPU.
+#
+# Pre-download before first use:
+#   huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct
+#
+model_id = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+
+[ignore]
+# Directories to skip at any depth during disk scan.
+dirs = [
+    ".next", "node_modules", "dist", ".git", "build",
+    ".code-index", ".continue", ".claude", ".vs", ".vscode",
+    "Modelfiles", "playwright-report", "test-results",
+    ".github", ".firebase", ".idx", "genkit", "indexer", "public", "mocks",
+]
+
+# Directories to skip only at the repository root.
+root_dirs = ["functions"]
+
+# File extensions to index.
+extensions = [".py", ".ts", ".tsx", ".js", ".jsx"]
