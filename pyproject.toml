@@ -21,6 +21,7 @@ dependencies = [
     "textual",
     "rich",
     "pyyaml",
+    "networkx>=3.0",
 ]
 
 [project.scripts]
@@ -34,6 +35,9 @@ py-modules = [
     "category_tagger",
     "core",
     "db",
+    "graph_analytics",
+    "graph_report",
+    "graph_viz",
     "hybrid_retriever",
     "import_resolver",
     "incremental_indexer",
@@ -53,6 +57,9 @@ dev = [
     "pytest-timeout",
     "mutmut",
 ]
+# Leiden community-detection backend (ADR-006 §4). Optional: graph_analytics
+# falls through to NetworkX Louvain when these are absent. Native build deps.
+leiden = ["leidenalg", "python-igraph"]
 
 [tool.pytest.ini_options]
 testpaths  = ["tests"]

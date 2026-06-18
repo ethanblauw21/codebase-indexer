@@ -111,13 +111,20 @@ Source files
 
 ### MCP Tools (MCPServer.py)
 
-Ten AI-facing tools grouped by intent:
+Eleven AI-facing tools grouped by intent:
 
 - **Search**: `semantic_code_search`, `find_similar_code`
 - **Impact**: `analyze_blast_radius`, `detect_pattern_violations`
 - **Tracing**: `trace_data_flow`, `investigate_architecture`
-- **Discovery**: `find_test_coverage`, `find_dead_code`, `find_unabstracted_collection_reads`
+- **Discovery**: `find_test_coverage`, `find_dead_code`, `find_unabstracted_collection_reads`, `map_module_communities`
 - **Maintenance**: `reindex`
+
+`map_module_communities` (ADR-006) is the whole-graph structural view: it reads the
+SQLite edge graph, runs Louvain community detection + betweenness centrality over it
+(`src/graph_analytics.py`, pure NetworkX), and renders a community map + god-object
+report (`src/graph_report.py`). Inspired by Graphify (MIT); reimplemented natively
+over our EXTRACTED edges. Output is explicitly exploratory — its quality bar is
+deferred to ADR-008.
 
 Tool docstrings are intentionally written for AI consumption — they describe *when* to call the tool, not just what it does.
 

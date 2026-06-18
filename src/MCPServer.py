@@ -1510,6 +1510,72 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
     return context
 
 
+@mcp.tool()
+def map_module_communities(target_path: str = "", min_community_size: int = 3,
+                           suggest_splits: bool = False) -> str:
+    """Map the codebase into natural module communities and flag god-objects.
+
+    WHEN TO CALL: the user asks how the codebase is *structured*, which classes
+    have grown too large, where to split a module, or what the high-coupling
+    chokepoints are. Complements analyze_blast_radius (single-symbol impact) and
+    investigate_architecture (narrative) with a whole-graph structural view.
+
+    By default returns a DESCRIPTIVE report: community map (labeled, raw cohesion)
+    and god-objects (betweenness + fan-in/out + communities spanned). Pass
+    suggest_splits=True to ALSO emit proposed module decompositions — each stamped
+    '[HEURISTIC — unverified]'. Also writes the DSM view to
+    .code-index/architecture_matrix.html when the visualization layer is available.
+
+    Inputs:
+      target_path        — optional subtree to scope analysis to (e.g. 'src/'); empty = whole graph.
+      min_community_size — communities smaller than this are omitted from the body (still counted).
+      suggest_splits     — when True, also emit heuristic module-split proposals.
+
+    NOTE: this is an EXPLORATORY structural view, not a verified accuracy claim.
+    A measured quality bar for this output is deferred to ADR-008.
+    """
+    print(f"\n[MCP] map_module_communities: path='{target_path}' "
+          f"min_size={min_community_size} splits={suggest_splits}")
+    import os
+    from incremental_indexer import INDEX_DIR
+    from db import CodeDB
+    import graph_analytics
+    from graph_report import render_report
+
+    db_path = os.path.join(INDEX_DIR, "graph.db")
+    if not os.path.exists(db_path):
+        return (
+            "--- MODULE COMMUNITY MAP ---\n\n"
+            "No index found — `graph.db` does not exist. Run `reindex` first, then "
+            "call this tool again.\n"
+        )
+
+    with CodeDB(db_path) as db:
+        analysis = graph_analytics.analyze(
+            db, target_path=target_path, include_splits=suggest_splits
+        )
+        report = render_report(
+            analysis, target_path=target_path, min_community_size=min_community_size
+        )
+        # DSM visualization is a side-effect (ADR-006 §3, Phase 3). Guard the import
+        # so this tool is fully functional before the viz layer lands, and lights up
+        # automatically once src/graph_viz.py exists.
+        try:
+            from graph_viz import render_dsm
+            dsm_path = render_dsm(
+                analysis, db,
+                out_path=os.path.join(INDEX_DIR, "architecture_matrix.html"),
+            )
+            report += (
+                "\n---\n\n**Design Structure Matrix** written to "
+                f"`{dsm_path}` — open in a browser for the interactive coupling matrix.\n"
+            )
+        except ImportError:
+            report += "\n---\n\n_DSM visualization pending (ADR-006 Phase 3)._\n"
+
+    return report
+
+
 # ---------------------------------------------------------------------------
 # File watchdog — auto-reindex on source changes
 # ---------------------------------------------------------------------------
