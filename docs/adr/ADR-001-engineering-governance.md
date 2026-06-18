@@ -40,3 +40,4 @@ Establish a minimal governance layer covering change classification, branch nami
 
 **Notes:**
 <!-- 2026-06-11: Initial governance scaffolding. Minor/Major split defined around src/ changes rather than "presentation layer" since this is a backend Python tool with no UI layer. -->
+<!-- 2026-06-18: Extended the ADR standard with a bidirectional cross-reference rule for multi-ADR changes (CONTRIBUTING.md §4 + ADR-000-template.md "Depends on" / "Depended on by" fields). Rationale: downstream ADRs can sequence/wait correctly, and upstream ADRs resolve downstream obligations at completion time (freshest context) instead of forcing rediscovery. Motivated by the docs/adr-backlog.md multi-ADR plan. -->

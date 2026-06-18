@@ -37,6 +37,9 @@ ADRs are required for all Major changes.
   1. Write the ADR before implementation begins. Commit it to `master` with status `proposed`.
   2. Work on the feature branch. Update the Implementation Log as you go — record deviations, surprises, and in-the-moment decisions.
   3. Update status to `accepted` and commit the final ADR as part of the PR.
+- **Cross-references (REQUIRED for multi-ADR changes):** When one ADR depends on another, the link must be recorded in *both* ADRs via the header fields, and kept in sync in the same PR. A one-directional link is a defect.
+  - **Downstream ADR → `Depends on:`** name the upstream ADR and the *exact* artifact/decision/confirmation needed from it, so an implementor knows to **wait** and knows *what for* before starting.
+  - **Upstream ADR → `Depended on by:`** name each consumer ADR and what it needs. On completing the upstream implementation, **resolve those obligations** (answer the open questions, confirm the contracts) before setting status to `accepted` — rather than leaving the downstream implementor to rediscover them later.
 - **AI agents:** Use `/grill-plan` to draft an ADR before implementing non-trivial features.
 
 ## 5. Pull Requests
