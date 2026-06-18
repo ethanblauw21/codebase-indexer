@@ -12,6 +12,16 @@ tree-sitter-javascript
 tree-sitter-c-sharp
 tree-sitter-cpp
 
+# Graph analytics — community detection + centrality (ADR-006)
+networkx>=3.0
+
+# Optional, faster/higher-quality community detection (Leiden). Not required —
+# graph_analytics falls through to NetworkX Louvain when these are absent.
+# Native build deps; install only if you want the Leiden backend:
+#   pip install leidenalg python-igraph
+# leidenalg
+# python-igraph
+
 # MCP server
 mcp[cli]
 

@@ -50,3 +50,9 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+
+# Graphify trial artifacts — the tool was removed (ADR-006 builds this natively).
+# Keep only the human-readable reports for reference; ignore all machine data/state/cache.
+graphify-out/*
+!graphify-out/GRAPH_REPORT.md
+!graphify-out/graph.html

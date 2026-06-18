@@ -828,6 +828,21 @@ class CodeDB:
         self._adjacency_cache = adj
         return adj
 
+    def get_graph_edges(self) -> list[tuple[str, str, str]]:
+        """Return every edge as ``(source_fqn, target, kind)`` across all kinds.
+
+        Unlike :meth:`get_adjacency_snapshot` (CALLS only), this exposes the full
+        typed edge set so structural analytics (ADR-006) can weight CALLS /
+        EXTENDS / IMPLEMENTS / IMPORTS / INSTANTIATES / OWNS / *_CONTEXT
+        differently.  ``resolved_target`` is preferred over the raw ``target``
+        when present, so edges point at canonical FQNs.  Read-only; reflects the
+        current committed graph on the shared connection.
+        """
+        rows = self._conn.execute(
+            "SELECT source_fqn, COALESCE(resolved_target, target) AS tgt, kind FROM edges"
+        ).fetchall()
+        return [(r["source_fqn"], r["tgt"], r["kind"]) for r in rows]
+
     # ------------------------------------------------------------------
     # Point lookups and search
     # ------------------------------------------------------------------

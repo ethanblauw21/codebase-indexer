@@ -9,7 +9,7 @@ Instead of grepping for strings, the Codebase Indexer:
 - Parses source code with **tree-sitter** to extract real AST symbols (functions, classes, interfaces)
 - Embeds every symbol at **three granularities** using `jinaai/jina-embeddings-v2-base-code`
 - Stores embeddings in **FAISS** and symbol relationships in **SQLite**
-- Serves **10 AI-facing MCP tools** so any compatible assistant (Claude Code, Continue.dev, etc.) can query it
+- Serves **11 AI-facing MCP tools** so any compatible assistant (Claude Code, Continue.dev, etc.) can query it
 
 ## Architecture
 
@@ -57,8 +57,12 @@ Or install manually:
 ```bash
 pip install faiss-cpu sentence-transformers transformers \
     "tree-sitter>=0.21" tree-sitter-python tree-sitter-typescript tree-sitter-javascript \
-    "mcp[cli]" watchdog numpy textual rich
+    "mcp[cli]" watchdog numpy textual rich "networkx>=3.0"
 ```
+
+> Optional: `pip install leidenalg python-igraph` enables the higher-quality Leiden
+> community-detection backend for `map_module_communities`. Without it the engine uses
+> NetworkX's built-in Louvain — no functionality is lost.
 
 > Use `faiss-gpu` instead of `faiss-cpu` for CUDA GPU acceleration.
 
@@ -108,7 +112,41 @@ Add to your MCP config (`~/.claude/claude_mcp_config.json` or `.mcp.json` in you
 | `find_test_coverage` | Discovery | Locate Vitest test files covering a source file or symbol |
 | `find_dead_code` | Discovery | Determine if a symbol has any consumers in the codebase |
 | `find_unabstracted_collection_reads` | Discovery | Enforce "reads of X must go through Y" patterns |
+| `map_module_communities` | Discovery | Whole-graph structural view: community detection + god-object analysis + a DSM visualization |
 | `reindex` | Maintenance | Rebuild the index (full or incremental) with git-staleness detection |
+
+### Architecture mapping — `map_module_communities`
+
+Where the other tools answer questions about a *single* symbol, `map_module_communities`
+analyzes the **shape of the whole graph**. It reads the stored symbol/edge graph and runs
+**Louvain community detection** + **betweenness centrality** over it (pure
+[NetworkX](https://networkx.org/) — no LLM, deterministic under a fixed seed), then returns:
+
+- a **community map** — natural module clusters, each with a heuristic label and a raw cohesion score;
+- **god-objects** — high-coupling chokepoints whose owned members sprawl across many coupling
+  communities (the "this class has grown too large" signal), ranked by a composite score;
+- a **Design Structure Matrix (DSM)** written to `.code-index/architecture_matrix.html` — a
+  self-contained, single-file interactive matrix (no web server, no CDN) where god-objects
+  show up as dense rows/columns and healthy communities as bright diagonal blocks.
+
+```
+map_module_communities()                      # descriptive report + DSM (default)
+map_module_communities(target_path="src/")    # scope analysis to a subtree
+map_module_communities(suggest_splits=True)   # also emit heuristic module-split proposals
+```
+
+`suggest_splits=True` additionally proposes how an over-large class might decompose, grouping
+its members by coupling community. These proposals are **descriptive heuristics**, not
+recommendations — every one is stamped `[HEURISTIC — unverified]` and should be validated
+against the real call graph before acting. The whole report is explicitly **exploratory**: it
+maps the EXTRACTED graph honestly but is not a verified accuracy claim (a measured quality bar
+is tracked separately).
+
+> **Attribution.** This capability is **inspired by [Graphify](https://github.com/safishamsi/graphify)**
+> (Safi Shamsi, MIT) — specifically its demonstration of community detection + betweenness
+> "god-node" analysis over a code graph. It is **reimplemented natively** over this engine's own
+> EXTRACTED edges (no Graphify source is used), and the DSM is a deliberately different visual idiom
+> from Graphify's force-directed node-link graph. See `docs/adr/ADR-006`.
 
 ## Project Structure
 
@@ -116,10 +154,13 @@ Add to your MCP config (`~/.claude/claude_mcp_config.json` or `.mcp.json` in you
 indexer/
 ├── requirements.txt
 └── src/
-    ├── MCPServer.py            # MCP server entry point — all 10 tools
+    ├── MCPServer.py            # MCP server entry point — all 11 tools
     ├── core.py                 # Embeddings (Jina-Code), FAISS management, token counting
     ├── ast_chunker.py          # tree-sitter AST → symbols, edges, chunks
     ├── db.py                   # SQLite schema and queries (WAL mode)
+    ├── graph_analytics.py      # Community detection + centrality + god-objects (ADR-006)
+    ├── graph_report.py         # Markdown report rendering for map_module_communities
+    ├── graph_viz.py            # Design Structure Matrix (DSM) HTML visualization
     ├── incremental_indexer.py  # MD5-based change detection and rebuild logic
     ├── hybrid_retriever.py     # Retrieve → Traverse → Rerank pipeline
     ├── iterative_retriever.py  # Multi-round retrieval with early stopping
