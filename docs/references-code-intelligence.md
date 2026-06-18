@@ -320,6 +320,84 @@ T. Yu, L. Yuan, L. Lin, H. He. ICSE 2025. *(authors/URL: verify.)*
 
 ---
 
+## M. Speed × accuracy: efficient retrieval, reranking & graph-enhanced code search
+
+> **⚑ FLAG FOR THE NEXT AGENT.** From a targeted Scholar Labs run (2026-06-18) on *speed + accuracy* for this
+> engine; triaged from abstracts, **not yet read in full**. Pull the PDFs and fold into a deep-dive
+> (`docs/study-efficient-graph-retrieval.md`), tied to concrete components/ADRs:
+> - **Reranker cost (speed)** — `hybrid_retriever`'s cross-encoder is the latency hot-spot. [57] Prism
+>   (training-free, −89% latency / −91% memory, single-machine), [58] CoSTV (two-stage bi→cross over FAISS,
+>   −79% time / +7.9% acc via program simplification + distillation), and [61] RANGER (run the cross-encoder
+>   only on MCTS-selected high-value nodes) are the three concrete levers → **ADR-009**.
+> - **Unified vector + relational query (speed)** — [59] VBASE unifies ANN similarity with relational/TopK
+>   filtering (relaxed monotonicity); directly relevant to the FAISS + SQLite split and hybrid filtering → ADR-009.
+> - **Dense+sparse hybrid ANN (speed+accuracy)** — [60] graph-based ANNS for combined dense+sparse vectors
+>   (+1–9% acc, higher CPU throughput at equal accuracy) maps onto the RRF dense + BM25 path.
+> - **Use ADR-006's communities IN retrieval (accuracy)** — [62] Deep GraphRAG does global→local
+>   community→entity hierarchical retrieval with beam-search reranking; [61] RANGER and the survey [64] frame
+>   graph-guided retrieval generally. This is the bridge from the graph-analytics layer (**ADR-006**) into the
+>   RTR pipeline — a candidate future ADR.
+>
+> **Background surveys (cite only if a related-work section needs them; not pulled):** dense retrieval — Zhao
+> et al., *ACM TOIS* 2024 (joint training / dynamic distillation for latency); DL-based ANNS — Li et al.,
+> *IEEE TKDE* 2022; extra GraphRAG surveys — Han et al. 2024 and Zhang et al. 2025 (redundant with [64], but
+> Zhang flags **GraphCoder**'s code-context-graph (control-flow + data-deps) as a concrete lead worth chasing);
+> RAG SLR — Brown et al. 2025 (eval-metrics catalog → ADR-007).
+> **Not added:** *Asteria-Pro* (binary code-similarity / bug search — off-domain) and *CodeT5* (2021 — superseded
+> as a retriever by the current code embedders, refs [37]–[41]).
+> **Already in this file (dedup — all resurfaced by the search):** ASTNN [53], cAST [11], TraceEval [10], CoRNStack [40].
+>
+> **⚠️ Metadata below is from search summaries — verify authors, venue, year, and URL against the source PDF before any formal use.**
+
+**[57] On-device Semantic Selection Made Low-Latency and Memory-Efficient with Monolithic Forwarding (Prism).**
+J. Zhou, C. Lin, D. Li, M. Dong, H. Chen. Proc. 21st EuroSys, 2026. *(venue/URL: verify.)*
+- *Relevance:* **training-free** cross-encoder reranker acceleration via monolithic forwarding + progressive
+  cluster pruning — **−89.2% latency, −91.3% peak memory**, no precision loss, explicitly for resource-bound
+  single-machine deployment. The most direct speed win for `hybrid_retriever`'s reranker.
+
+**[58] CoSTV: Accelerating Code Search with a Two-Stage Paradigm and Vector Retrieval.**
+D. Zheng, Y. Wang, W. Chen, J. Chen, et al. APSEC 2024. *(venue/URL: verify.)*
+- *Relevance:* this project's exact pattern — bi-encoder recall (FAISS/Annoy) + cross-encoder rerank — made
+  faster via program simplification + knowledge distillation: **+7.93% accuracy, −79.1% search time.** Code-specific.
+
+**[59] VBASE: Unifying Online Vector Similarity Search and Relational Queries via Relaxed Monotonicity.**
+Q. Zhang, S. Xu, Q. Chen, et al. USENIX OSDI 2023. *(venue/URL: verify.)*
+- *Relevance:* unifies ANN similarity with relational/TopK operators (relaxed monotonicity) at up to **3 orders
+  of magnitude lower latency**, 99.9% recall — directly relevant to the FAISS (vector) + SQLite (relational/graph)
+  split and to hybrid, metadata-filtered retrieval.
+
+**[60] Efficient and Effective Retrieval of Dense–Sparse Hybrid Vectors using Graph-based ANN Search.**
+H. Zhang, J. Liu, Z. Zhu, S. Zeng, M. Sheng, T. Yang, et al. arXiv (2024). *(authors/URL: verify.)*
+- *Relevance:* a graph-based ANNS built for **combined dense+sparse vectors** with distribution alignment
+  (**+1–9% accuracy**, higher end-to-end CPU throughput at equal accuracy) — maps onto the RRF dense + BM25 path
+  on a single CPU server.
+
+**[61] RANGER: Repository-Level Agent for Graph-Enhanced Retrieval.**
+P. Shah, R. Ghosh, A. Singhal, D. Dutta. arXiv:2509.25257 (2025). *(authors/URL: verify.)*
+- *Relevance:* repo-level KG built from ASTs (down to variable level); fast Cypher lookups for symbolic queries
+  and **MCTS-guided traversal that applies the expensive cross-encoder only to high-value nodes** — a selective-
+  reranking strategy that is both a speed and a precision/recall lever for cross-file dependency retrieval.
+
+**[62] Deep GraphRAG: A Balanced Approach to Hierarchical Retrieval and Adaptive Integration.**
+Y. Li, K. Yang, T. Wang, B. Chen, B. Li, C. Mao. Companion Proc. (WWW), 2026. *(venue/URL: verify.)*
+- *Relevance:* global→local retrieval via **inter-community filtering → community-level refinement →
+  entity-level search**, with a beam-search dynamic reranker (bge-reranker-v2-m3). The clearest template for
+  feeding **ADR-006's community detection into the RTR pipeline** (reports both efficiency and accuracy gains).
+
+**[63] Retrieval-Augmented Code Generation: A Survey with Focus on Repository-Level Approaches.**
+Y. Tao, Y. Li, Y. Qin, Y. Liu. arXiv:2510.04905 (2025). *(authors/URL: verify.)*
+- *Relevance:* the most on-domain survey of the set — repo-level RACG, a taxonomy of sparse/dense/graph/hybrid
+  retrieval, and agent-style retrieval integrating static analysis + iterative refinement. A map of where this
+  engine sits and what it is missing.
+
+**[64] Graph Retrieval-Augmented Generation: A Survey.**
+B. Peng, Y. Zhu, Y. Liu, X. Bo, H. Shi, C. Hong, et al. *ACM TOIS*, 2025. *(authors/URL: verify.)*
+- *Relevance:* the canonical GraphRAG survey — graph-based indexing, graph-guided retrieval
+  (nodes/triples/paths/subgraphs), community detection, and cross-encoder reranking; the published reference
+  point for the graph-retrieval direction (to be applied over this project's EXTRACTED graph, not an LLM-built one).
+
+---
+
 ## F. Theory
 
 **[14] Rice's theorem** (H. G. Rice, 1953). Any non-trivial semantic property of programs is undecidable.
@@ -332,4 +410,4 @@ T. Yu, L. Yuan, L. Lin, H. He. ICSE 2025. *(authors/URL: verify.)*
 - Competitor deep-dive: [study-codebase-memory-mcp.md](./study-codebase-memory-mcp.md)
 - Thesis write-up: [prior-art-depth-over-breadth.md](./prior-art-depth-over-breadth.md)
 - Improvement roadmap: [design-research-informed-improvements.md](./design-research-informed-improvements.md)
-- Related ADRs: ADR-005 (versioning/self-healing), ADR-006 (graph analytics), ADR-017 (tiered languages, renumbered from ADR-004); §K ties to ADR-007/008 (eval + measured conformance), ADR-012 (cross-repo), ADR-016 (persisted symbol tree)
+- Related ADRs: ADR-005 (versioning/self-healing), ADR-006 (graph analytics), ADR-017 (tiered languages, renumbered from ADR-004); §K ties to ADR-007/008 (eval + measured conformance), ADR-012 (cross-repo), ADR-016 (persisted symbol tree); §L ties to `ast_chunker` + `find_similar_code`; §M ties to ADR-009 (retrieval modernization) and bridging ADR-006's graph analytics into the RTR pipeline
