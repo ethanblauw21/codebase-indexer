@@ -270,6 +270,56 @@ O. Cherednichenko, D. Sytnikov, N. Romankiv, et al. CEUR Workshop Proceedings, 2
 
 ---
 
+## L. AST chunking, structural code representation & clone detection
+
+> **⚑ FLAG FOR THE NEXT AGENT.** Triaged 2026-06-18, not yet read in full. These map to two concrete
+> components — `ast_chunker.py` (chunk granularity / splitting large ASTs) and the `find_similar_code`
+> tool (structural clone detection). Pull the PDFs and fold actionable techniques into the §K deep-dive,
+> or a focused `docs/study-ast-chunking-clone-detection.md`. Tie-ins: chunk-granularity rationale for the
+> three-tier index; structural (AST) clone matching as a **precision complement** to embedding cosine
+> similarity in `find_similar_code`.
+>
+> **Excluded — off-topic false positives** (the search conflated *compiler loop vectorization* / SIMD with
+> *vector embeddings*): **Neurovectorizer** (deep-RL loop vectorization in LLVM) and **FROST** (FPGA
+> hardware-accel backend, 512-bit SIMD). Neither concerns vector databases or embeddings — **do not pull.**
+> Also considered but **not added** (off-thesis): a cross-silo *federated-learning* vuln approach (V-ASC /
+> SOEHash — privacy/federation is irrelevant to a local single-user tool; content-defined chunking is already
+> covered by [32] FastCDC), and **VulnScan GPT** (smart-contract vuln detection — the same AST + vector-DB +
+> iterative building blocks this project already uses, applied to a domain we don't target).
+>
+> **⚠️ Metadata below is from search summaries — verify authors, venue, year, and URL against the source PDF before any formal use.**
+
+**[52] CodeWisp: AST-Guided Retrieval-Augmented Generation for Code Generation and Completion.**
+H. El Atrassi, Y. El Idrissi, et al. 2025 12th International Conference (IEEE Xplore), 2025.
+*(authors/venue/URL: verify — ieeexplore.ieee.org.)*
+- *Relevance:* the closest **offline-local** peer to this project — AST-guided segmentation + semantic indexing,
+  LanceDB cosine search, "entirely offline" real-time interaction with large codebases. Direct corroboration of
+  the local/offline + AST-chunk + vector-search stance; LanceDB vs. FAISS is a concrete comparison point.
+
+**[53] A Novel Neural Source Code Representation based on Abstract Syntax Tree (ASTNN).**
+Jian Zhang, Xu Wang, Hongyu Zhang, Hailong Sun, et al. ICSE 2019. *(authors/URL: verify — ~1000 citations.)*
+- *Relevance:* foundational rationale for **splitting large ASTs into smaller statement-level trees** before
+  encoding (large/deep ASTs cause gradient-vanishing / representation degradation) — directly underpins
+  `ast_chunker`'s symbol-granular chunking and the three-tier granularity design. The principle, not the net.
+
+**[54] Clone Detection Using Abstract Syntax Suffix Trees.** R. Koschke, R. Falke, P. Frenzel. WCRE 2006.
+*(authors/URL: verify — ~500 citations.)*
+- *Relevance:* classic **linear-time** syntactic clone detection over ASTs — the structural-matching baseline for
+  lifting `find_similar_code` precision beyond embedding cosine similarity (origin vs. true structural duplicate).
+
+**[55] Fine-grained Code Clone Detection with Block-based Splitting of Abstract Syntax Tree.**
+T. Hu, Z. Xu, Y. Fang, Y. Wu, B. Yuan, D. Zou, et al. (2023). *(authors/venue/URL: verify.)*
+- *Relevance:* splits a complex AST into block-granularity subtrees to accelerate clone detection — a
+  chunk-boundary strategy relevant to both `ast_chunker` and `find_similar_code`.
+
+**[56] A Multiple Representation Transformer with Optimized AST (OAST) for Efficient Code Clone Detection.**
+T. Yu, L. Yuan, L. Lin, H. He. ICSE 2025. *(authors/URL: verify.)*
+- *Relevance:* AST **pruning/optimization** (removes redundant nodes, enhances expression nodes; −61% AST size in
+  C/C++) + Siamese cosine matching — informs leaner AST chunks and a fast structural clone check; the modern
+  (2025) counterpart to [54].
+
+---
+
 ## F. Theory
 
 **[14] Rice's theorem** (H. G. Rice, 1953). Any non-trivial semantic property of programs is undecidable.
