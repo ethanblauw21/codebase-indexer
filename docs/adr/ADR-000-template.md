@@ -4,6 +4,8 @@
 **Date:** YYYY-MM-DD
 **Branch:** `feature/short-description`
 **Reviewer:** @username
+**Depends on:** none | ADR-XXX — *what this ADR needs from it (the specific artifact, decision, or confirmation)*
+**Depended on by:** none yet | ADR-XXX — *what that ADR needs from this one (resolve these before `accepted` — see CONTRIBUTING §4)*
 
 ## Context
 
@@ -32,6 +34,7 @@ What did we decide to do? State it directly.
 
 - [ ] Task or milestone one
 - [ ] Task or milestone two
+- [ ] Resolve every downstream obligation listed in **Depended on by** (answer/confirm what each consumer ADR needs) before setting status to `accepted`
 
 **Notes:**
 <!-- Add dated comments as you go -->
