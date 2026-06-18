@@ -224,6 +224,52 @@ https://arxiv.org/abs/2604.01733
 
 ---
 
+## K. Codebase-indexing systems & hybrid vector+graph architectures
+
+> **⚑ FLAG FOR THE NEXT AGENT — pull these down and write a reference doc.**
+> The three entries below were triaged from a 2026-06-18 paper search but **not yet read in full** —
+> only abstracts / search summaries. Next pass: **fetch the PDFs, read them, and create a thematic
+> deep-dive under `docs/`** in the style of [study-codebase-memory-mcp.md](./study-codebase-memory-mcp.md)
+> and [modernization-stack-review.md](./modernization-stack-review.md) (suggested name:
+> `docs/study-hybrid-indexing-systems.md`). Extract *actionable* takeaways tied to ADRs, not summaries:
+> - **[49] HybridCode** → validates the vector+graph thesis; mine its adaptive query-routing for the RTR
+>   pipeline / `iterative_retriever` (when to traverse vs. rerank). Differentiator to record: it uses an
+>   LLM-inferred graph + cloud DBs (Qdrant/Neo4j) — this project uses **EXTRACTED** edges, local, deterministic.
+> - **[50] Persistent vs. Ephemeral** → the measured baseline for the accuracy moat: **+33.94% relative Exact
+>   Match** from persistent cross-file context. Pull the exact test setup + metric for **ADR-007 (eval harness)**
+>   and **ADR-008 (measured conformance)**; corroborates **ADR-016 (persisted symbol tree)**.
+> - **[51] AI Agent over SaaS codebase** → take the queue-based ingestion-pipeline *shape* for very large
+>   corpora → **ADR-012 (cross-repo/cross-service graph)**; ignore the cloud stack (OpenSearch /
+>   `text-embedding-3-large`), which is counter to the local/offline stance.
+>
+> **⚠️ Metadata below is from search summaries — verify authors, venue, year, and URL against the source PDF before any formal use.**
+
+**[49] HybridCode: A Dual-Database Framework for Intelligent Codebase Analysis and Article Generation.**
+V.S.N.L. Yarramallu, R.J. Gangireddy, et al. 2025 5th Asian Conference (IEEE Xplore), 2025.
+*(authors/venue/URL: verify — ieeexplore.ieee.org.)*
+- *Relevance:* the closest architectural twin in the search — vector (Qdrant + Cohere embeddings) **and** graph
+  (Neo4j), with an adaptive query processor that "dynamically chooses the best retrieval strategy, combining
+  vector similarity with graph traversal." Independent prior art for the hybrid vector+graph thesis; its routing
+  idea is a candidate for `iterative_retriever`. Contrast to record: LLM-inferred graph + cloud DBs vs. this
+  project's EXTRACTED edges, local and deterministic.
+
+**[50] Persistent vs. Ephemeral: A Comparative Analysis of Codebase Indexing in AI Programming Tools.**
+M.T. Khan, D. Yadav, K. Kumar, J. Sharma, F. Siddiqui, et al. *Tejas Journals.*
+*(year/venue/URL: verify — tejasjournals.com PDF.)*
+- *Relevance:* most on-point of the set. Persistent (embedding-based FAISS/HNSW) indexing maintains durable,
+  queryable codebase representations for cross-file context; reports **+33.94% relative Exact Match** from that
+  context — a citable, measured benefit for the persistent-index + provable-accuracy thesis. Feeds ADR-007/008
+  and corroborates ADR-016.
+
+**[51] AI Agent for Conversational Q&A over a SaaS Codebase using Large Language Models.**
+O. Cherednichenko, D. Sytnikov, N. Romankiv, et al. CEUR Workshop Proceedings, 2025.
+*(authors/URL: verify — ceur-ws.org PDF.)*
+- *Relevance:* a queue-based ingestion pipeline for indexing very large SaaS codebases at scale → ADR-012. Uses
+  OpenSearch + `text-embedding-3-large` (1024-dim) — cloud-first, so take the *pipeline shape*, not the stack
+  (counter to the local/offline constraint).
+
+---
+
 ## F. Theory
 
 **[14] Rice's theorem** (H. G. Rice, 1953). Any non-trivial semantic property of programs is undecidable.
@@ -236,4 +282,4 @@ https://arxiv.org/abs/2604.01733
 - Competitor deep-dive: [study-codebase-memory-mcp.md](./study-codebase-memory-mcp.md)
 - Thesis write-up: [prior-art-depth-over-breadth.md](./prior-art-depth-over-breadth.md)
 - Improvement roadmap: [design-research-informed-improvements.md](./design-research-informed-improvements.md)
-- Related ADRs: ADR-004 (tiered languages), ADR-005 (versioning/self-healing), ADR-006 (graph analytics)
+- Related ADRs: ADR-005 (versioning/self-healing), ADR-006 (graph analytics), ADR-017 (tiered languages, renumbered from ADR-004); §K ties to ADR-007/008 (eval + measured conformance), ADR-012 (cross-repo), ADR-016 (persisted symbol tree)
