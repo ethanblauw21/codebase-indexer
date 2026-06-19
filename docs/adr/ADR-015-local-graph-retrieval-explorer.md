@@ -18,11 +18,15 @@ There is no way for a *human* to **see** the codebase the way the engine models 
 (ADR-006), the blast radius of a symbol, a call path, or how a retrieval query actually scores. The
 structural richness exists; it just has no human-facing window.
 
-The hard constraint is architectural and explicit in `src/CLAUDE.md`: **no web server, no build pipeline.**
-The engine is a local, offline tool; bolting on a Node/Vite/Next dev server would betray that and add a
-long-lived process to babysit. So the explorer must be a **static bundle over the index** — HTML/JS reading
-the existing `graph.db` and FAISS artifacts directly, with at most the stdlib `http.server` as an optional
-convenience, never a framework or a build step.
+The hard constraint is architectural and explicit in `src/CLAUDE.md`: **no web server, no build pipeline**
+(and, per Mantra 1, **no runtime CDN** — any JS is vendored locally, never `<script src="https://…">`). The
+engine is a local, offline tool; bolting on a Node/Vite/Next dev server would betray that and add a
+long-lived process to babysit. So the explorer is a **static bundle over the index**. Crucially, a static
+browser bundle *cannot* open `graph.db` (SQLite) or a FAISS file directly — the proven pattern is the one
+ADR-006's DSM already uses: **Python pre-exports the data and embeds it as inline JSON in a self-contained
+HTML** (`src/graph_viz.py`: `_HTML_TEMPLATE.replace("__DATA__", _safe_json(payload))`). So the views render
+*pre-exported* data, with at most the stdlib `http.server` as an optional convenience, never a framework or
+a build step.
 
 ADR-006's static DSM (`architecture_matrix.html`) is the precursor: a single self-contained HTML file
 rendering the community structure. This ADR generalizes that into an interactive explorer. It is Wave 3 UX
@@ -37,10 +41,12 @@ shipping a static bundle that reads the index directly.
 
 ### §1 — Static bundle, no framework (S5)
 
-A new `src/web/` static bundle: hand-written HTML + vanilla JS (no React/Vite/Next, no bundler), reading
-`graph.db` and the FAISS index. Reuse ADR-006's DSM renderer as one component. Optional stdlib
-`http.server` for local serving; nothing long-lived or framework-bound. This honors the
-`src/CLAUDE.md` constraint directly and avoids the orphaned-dev-server class of problem entirely.
+A new `src/web/` static bundle: hand-written HTML + vanilla JS (no React/Vite/Next, no bundler, **no CDN —
+libs vendored locally**), rendering **data pre-exported from `graph.db` and FAISS** (the `graph_viz.py`
+embed-as-JSON pattern), *not* live reads of those files. Reuse ADR-006's DSM renderer (`src/graph_viz.py`)
+as one component. Optional stdlib `http.server` for local serving; nothing long-lived or framework-bound.
+This honors the `src/CLAUDE.md` constraint directly and avoids the orphaned-dev-server class of problem
+entirely.
 
 ### §2 — Community map view
 
@@ -58,10 +64,12 @@ client-side or via a thin local endpoint.
 ### §4 — RTR retrieval playground
 
 A query box that runs the retrieval pipeline and **shows how results scored** — dense vs sparse vs reranker
-contributions (ADR-009's fusion made visible), so a human can see *why* a result ranked where it did. The
-Open Question is **exposing FAISS query to the browser without a long-running server**: options include
-pre-computing for a fixed query set, a short-lived stdlib `http.server` query endpoint, or a WASM FAISS
-shim — resolved at implementation against the no-server constraint.
+contributions (ADR-009's fusion made visible), so a human can see *why* a result ranked where it did. Unlike
+the graph views (which render pre-exported data), the playground needs **live retrieval over arbitrary
+queries** — which is why FAISS-in-browser is the one genuinely hard part. The Open Question is **exposing
+FAISS query without a long-running server**: pre-computing for a fixed query set (fully honors the
+constraint), a short-lived stdlib `http.server` query endpoint (a documented compromise — it *is* a brief
+server), or a WASM FAISS shim (immature) — resolved at implementation.
 
 ## Consequences
 
@@ -106,4 +114,4 @@ shim — resolved at implementation against the no-server constraint.
 - [ ] Resolve FAISS-in-browser without a long-running server (pre-compute / short-lived endpoint / WASM).
 
 **Notes:**
-<!-- 2026-06-18: Wave 3 UX, not research. Default: static bundle, no framework (honors the no-web-server/no-build constraint in src/CLAUDE.md). Successor to ADR-006's static DSM. Done when the local explorer renders community map + blast-radius + an RTR retrieval playground. Open: exposing FAISS query to the browser without a long-running server. Effort M–H. -->
+<!-- 2026-06-18: Wave 3 UX, not research. Default: static bundle, no framework (honors the no-web-server/no-build constraint in src/CLAUDE.md). Successor to ADR-006's static DSM. Static bundle renders PRE-EXPORTED embedded JSON (the graph_viz.py __DATA__ pattern), NOT live graph.db/FAISS reads; no CDN (Mantra 1). Done when the local explorer renders community map + blast-radius + an RTR retrieval playground. Open: only LIVE FAISS retrieval (the playground) needs solving without a long-running server. Effort M–H. -->

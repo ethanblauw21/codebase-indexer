@@ -6,10 +6,10 @@
 **Reviewer:** @ethanblauw21
 **Depends on:**
 - ADR-003 — the `LanguageAdapter` Protocol (extended here with a `version` field) and the `stable_id` invariant that provenance versioning must not violate (§2).
-- ADR-004 — the tier model whose Tier-B/C output the scorer flags and whose Tier-B→Tier-A promotion this ADR triggers (§6).
+- ADR-017 — the tier model whose Tier-B/C output the scorer flags and whose Tier-B→Tier-A promotion this ADR triggers (§6). *(Was mislabeled "ADR-004"; ADR-004 is CI observability, the tier model is ADR-017.)*
 **Depended on by:**
-- ADR-004 — supplies the promotion demand signal and the `recheck` migration trigger for Tier-B→Tier-A (mutual; see ADR-004 §6 / Phase 4).
-- ADR-010 *(planned — docs/adr-backlog.md)* — content-addressed drift detection extends this ADR's `recheck`/self-healing loop and standardizes the change-detection hash (XXH3).
+- ADR-017 — its tier model consumes this ADR's promotion demand signal and `recheck` migration trigger for Tier-B→Tier-A (mutual; see ADR-017 §9 and this ADR's §6).
+- ADR-010 *(planned — docs/adr-backlog.md)* — content-addressed drift detection extends this ADR's `recheck`/self-healing loop and **consumes** the XXH3 change-detection standardization this ADR owns (the 2026-06-18 amendment below); ADR-010's Merkle leaves use the same hash.
 - ADR-016 *(deferred stub — docs/adr/ADR-016)* — persists, as a first-class asset, the symbol containment tree this ADR derives on the fly for coherence scoring (§3). Trigger-gated; no obligation on ADR-005 beyond keeping the on-the-fly derivation as the documented graduation source.
 
 ## Context
@@ -396,3 +396,33 @@ measures which tier-B language to graduate and performs the migration.
 **Notes:**
 <!-- 2026-06-18: Ported from Rust Indexer step-9 self-healing (src/scorer.rs). Centroid here is a chunk-health metric over the structural containment hierarchy, NOT an adapter router — that distinction is the whole reason this is safe in the code project. Stable-ID invariant (§2) is non-negotiable. -->
 <!-- 2026-06-18 (grill): Coherence-via-FAISS-reconstruct REJECTED — index is IndexIDMap(IndexFlatIP), no reverse map; IVFPQ upgrade makes reconstruct lossy + needs the removed make_direct_map(). Coherence now re-embeds chunks.text (exact, index-type-agnostic). Parent = structural container (enclosing class / file-root), not sliding window. Persisted symbol tree deferred to ADR-006. Thresholds to be calibrated, not ported blind. OPEN grill points remaining: version-bump CI discipline for Tier-B/generic adapters; recheck reindex churn + stale-chunk purge when promotion changes scope (FQN scheme change orphans old chunks). -->
+
+---
+
+### AMENDMENT: 2026-06-18 — Standardize change-detection hashing on XXH3
+
+**Context.** Change detection currently uses **two different hashes**: `incremental_indexer.md5_file` (MD5
+over file bytes → `files.content_hash`) and `db.hash_content` (SHA-256). The split is historical, not
+principled — neither is a security hash, both only answer "did this content change?" Two algorithms for one
+job is needless cost and a latent inconsistency.
+
+**Decision.** Standardize **all change-detection hashing on XXH3** (`xxhash`) — a fast non-cryptographic hash
+purpose-built for change detection — replacing both `md5_file` and `hash_content`. This is the
+hashing-standardization amendment that **ADR-010 consumes** (its Merkle leaves are XXH3, ADR-010 §7): ADR-005
+**owns** the migration, ADR-010 builds on it (Rule A — a hashing change inside *this* ADR's change-detection
+boundary is an amendment here, not a fold-in there).
+
+**Mantra-4 carve-out (binding).** "Change-detection hashing" is exactly two call sites: `md5_file`
+(`src/incremental_indexer.py`) and `hash_content` (`src/db.py`). It does **NOT** include:
+- **`src/stable_id.py`'s MD5** — the FAISS **ID formula** (`md5("tier::file::scope")[:15]`), not
+  change-detection; altering it orphans every index (the §2 `stable_id` invariant, Mantra 4). **Off-limits.**
+- the **`chunk_summaries` MD5 cache key** — swapping it silently invalidates the LLM-summary cache; a
+  separate, deliberate one-time-invalidation decision, not part of this sweep.
+
+(Cryptographic hashing, if ever needed for integrity rather than change-detection, stays a separate concern.)
+
+**Consequences.** *Better:* one fast hash replaces the MD5/SHA-256 split — faster disk scanning, no dual-hash
+inconsistency, a single source ADR-010's Merkle layer aligns to. *Worse:* a new `xxhash` dependency, and a
+one-time rehash of `files.content_hash` on the first run after the swap — note this forces re-evaluation but
+**not a reindex**: `stable_id` is untouched, so no vectors are orphaned. *Neutral:* by the carve-out, stable
+IDs and the summary cache are deliberately excluded.

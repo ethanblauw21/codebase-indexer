@@ -5,7 +5,7 @@
 **Branch:** `feature/adr-011-high-precision-call-resolution`
 **Reviewer:** @ethanblauw21
 **Depends on:**
-- ADR-004 — needs the **Tier-A promotion path** (§9); this ADR's hybrid resolution is the mechanism that promotes receiver-typed languages (Go/C/C++) toward Tier-A precision.
+- ADR-017 — needs the **Tier-A promotion path** (fitting-adapter tier); this ADR's hybrid resolution is the mechanism that promotes receiver-typed languages — **C++ and C# today** (existing adapters), **Go, C, and others as their adapters land** — toward Tier-A precision.
 - ADR-008 — needs the shared **`Edge.confidence` field** (A3) to emit graded-confidence edges, and the **precision/recall harness** to measure that resolution rate rises *with precision held*. **Pairs with** ADR-008.
 **Depended on by:**
 - ADR-012 *(planned — docs/adr-backlog.md)* — Cross-Repository/Cross-Service graph consumes the **graded-confidence resolved edges** this ADR produces (shared `Edge.confidence`) as the in-repo precision foundation it extends across services.
@@ -16,14 +16,17 @@
 ## Context
 
 ADR-008 *measures* precision/recall. This ADR is the **mechanism that earns it** for the hardest case:
-**call resolution in receiver-typed languages** (Go, C, C++), where `recv.method()` or `obj->fn()` cannot be
-resolved to a target without knowing the *type* of the receiver. Today such calls are either dropped
-(recall loss) or emitted as name-matched `candidate` edges (precision risk if trusted). The research is
+**call resolution in receiver-typed languages**, where `recv.Method()` (C#) or `obj->fn()` (C++) cannot be
+resolved to a target without knowing the *type* of the receiver. The in-stack targets with adapters today are
+**C++ and C#** — and C# is a textbook case: its adapter currently resolves extension methods to *candidates
+only* ("no receiver-type inference"). **Go, C, and other receiver-typed languages are planned future
+adapters** the same pass will extend to as they land. Today such calls are either dropped (recall loss) or
+emitted as name-matched `candidate` edges (precision risk if trusted). The research is
 blunt about the stakes: [2] Total Recall, [7] PyCG, and the cited **34%→76% type-inference finding** show
 that adding even lightweight type resolution roughly doubles correct call-edge resolution — *if* it's done
 without manufacturing wrong edges.
 
-The non-negotiable constraint, inherited from the depth-over-breadth moat (ADR-004) and the prefer-unknown
+The non-negotiable constraint, inherited from the depth-over-breadth moat and the prefer-unknown
 policy (ADR-008 §5): **a resolution pass must emit `unknown` rather than a wrong resolved target.** A wrong
 edge is worse than a missing one. So the mechanism is not "resolve aggressively"; it is "resolve when
 provably correct, grade the confidence otherwise, and never assert a target you can't stand behind."
@@ -42,8 +45,9 @@ precision held**.
 A new **per-language type-resolution pass module**, run after the adapter's initial parse, that resolves
 receiver types using the information tree-sitter already gives us plus local scope analysis — the
 lightweight end of what an LSP does, without standing up a full language server (that path is rejected
-below and in ADR-004 §7.1 as "Tier-A promotion by another name / a heavyweight verifier"). It targets the
-`src/adapters/cpp_adapter.py` (and a Go adapter when added), resolving:
+below as "Tier-A promotion by another name / a heavyweight verifier"). It targets
+`src/adapters/cpp_adapter.py` and `src/adapters/csharp_adapter.py` today (and Go/C adapters as they land),
+resolving:
 - local variable declared types → method/field targets,
 - parameter types → calls on parameters,
 - field/member access chains where the declaring type is in-repo.
@@ -71,17 +75,32 @@ Each resolution strategy carries a **calibrated confidence**, written to the sha
 tuned against ADR-008's per-language precision/recall so the grades mean something measurable rather than
 being arbitrary.
 
-### §4 — Measured by ADR-008, on Go/C/C++ fixtures
+### §4 — Measured by ADR-008, on C++/C# fixtures
 
-Success is defined operationally: on Go/C/C++ feature-tagged fixtures (ADR-008 §2), the **call-edge
-resolution rate rises while precision is held**. The harness is the referee; this ADR ships no separate
-accuracy claim.
+Success is defined operationally: on C++ and C# feature-tagged fixtures (ADR-008 §2) — and Go/C fixtures as
+those adapters land — the **call-edge resolution rate rises while precision is held**. The harness is the
+referee; this ADR ships no separate accuracy claim.
+
+### §5 — Limits & honest caveats (current state)
+
+The resolver is deliberately lightweight, so its reach is bounded — and every limit resolves to `unknown`,
+never a wrong edge:
+- **In-repo only.** A receiver whose declaring type lives in an **external library or framework** (not in the
+  indexed repo) cannot be resolved — it emits `unknown` / below-floor by design, rather than guessing.
+- **C++ templates / metaprogramming** have a hard ceiling (an Open Question — how far to push them); deeply
+  generic or macro-expanded call sites resolve to `unknown` rather than a fabricated target.
+- **C# `dynamic` and reflection** are opaque to static resolution (the adapter already treats `dynamic` as
+  invisible) → `unknown`.
+
+These are *by-design unknowns*, consistent with prefer-unknown — the recall they cost is recoverable later
+(e.g. via the heavier LSP path explicitly rejected here), but never at precision's expense.
 
 ## Consequences
 
 **Better:**
-- Receiver-typed languages (Go/C/C++) gain resolved call edges where today there are only name-matches or
-  gaps — the recall lift the 34%→76% finding predicts, *captured as graded edges* rather than fragile asserts.
+- Receiver-typed languages (C++ and C# today; Go/C as their adapters land) gain resolved call edges where
+  today there are only name-matches or gaps — the recall lift the 34%→76% finding predicts, *captured as
+  graded edges* rather than fragile asserts.
 - The correctness gate guarantees the lift can't come at precision's expense — the resolution rate goes up
   with precision held, which is the only credible version of "more edges."
 - Graded confidence (shared with ADR-008) feeds downstream: ADR-012 consumes these edges; ADR-006 community
@@ -91,8 +110,9 @@ accuracy claim.
 **Worse:**
 - Per-language resolution passes are real, non-trivial work (effort H); C++ templates in particular have a
   hard ceiling (an Open Question — how far to push them).
-- Go/C adapters aren't Tier-A yet, so this pass partly *precedes* their promotion; sequencing against
-  ADR-004's promotion path needs care.
+- C++ and C# adapters exist but aren't Tier-A yet; this pass is part of their promotion. Go/C and other
+  receiver-typed adapters are **planned but not yet built** — the pass is designed to extend to them as they
+  land. Sequencing against ADR-017's promotion path needs care.
 - Calibrating per-strategy confidence against data is ongoing tuning coupled to ADR-008's fixtures.
 
 **Neutral:**
@@ -104,7 +124,7 @@ accuracy claim.
 | Option | Why rejected |
 |--------|-------------|
 | Resolve aggressively, accept some wrong edges | Direct violation of the prefer-unknown moat (ADR-008 §5); a wrong edge is worse than a missing one and would *lower* the precision ADR-008 reports. |
-| Full on-demand LSP / clangd per language | "Tier-A promotion by another name" (ADR-004 §7.1) — duplicates the heavyweight per-language burden Tier B/this pass exist to avoid; huge runtime/dependency cost. |
+| Full on-demand LSP / clangd per language | "Tier-A promotion by another name" — duplicates the heavyweight per-language burden Tier B / this pass exist to avoid; huge runtime/dependency cost. |
 | Keep emitting name-match `candidate` edges only | Caps resolution where the 34%→76% finding shows lightweight type inference roughly doubles it; leaves recall on the table. |
 | One flat confidence for all resolutions | Throws away the signal that exact local-type resolution is more trustworthy than heuristic member-chain inference; graded per-strategy confidence is what makes the floor tunable. |
 | Skip the correctness gate, measure precision after | Lets wrong edges into the graph first; the gate is cheaper and safer than retroactive cleanup, and protects every downstream consumer. |
@@ -115,10 +135,11 @@ accuracy claim.
 
 - [ ] New per-language type-resolution pass module (runs after adapter parse).
 - [ ] C++ resolution pass in `src/adapters/cpp_adapter.py`: local/param/member type resolution; correctness gate emits `unknown` over wrong.
-- [ ] Go adapter resolution pass (when the Go adapter lands via ADR-004).
+- [ ] C# resolution pass in `src/adapters/csharp_adapter.py`: receiver-type inference (incl. the extension-method case currently resolved to candidates-only); same correctness gate.
+- [ ] Go/C resolution passes when those adapters land (future; ADR-017 promotion path).
 - [ ] Emit graded `confidence` per strategy via the shared `Edge.confidence` (ADR-008 §4); calibrate against ADR-008 fixtures.
-- [ ] Prove on Go/C/C++ fixtures: resolution rate up, precision held (ADR-008 harness).
+- [ ] Prove on C++/C# fixtures (Go/C as their adapters land): resolution rate up, precision held (ADR-008 harness).
 - [ ] Resolve **Depended on by**: confirm the graded resolved-edge contract ADR-012 consumes, before `accepted`.
 
 **Notes:**
-<!-- 2026-06-18: The mechanism behind the ADR-008 precision number. Pairs with ADR-008 (shares Edge.confidence A3). Defaults: correctness gate = emit `unknown`, never a wrong resolved target; graded confidence per resolution strategy (mirrors competitor's 6-strategy scoring). Done when call-edge resolution rises on Go/C/C++ with precision held. Open: how far to push C++ templates; Go/C adapters aren't Tier-A yet. Effort H. -->
+<!-- 2026-06-18: The mechanism behind the ADR-008 precision number. Pairs with ADR-008 (shares Edge.confidence A3). Defaults: correctness gate = emit `unknown`, never a wrong resolved target; graded confidence per resolution strategy (mirrors competitor's 6-strategy scoring). Done when call-edge resolution rises on C++/C# with precision held (Go/C as their adapters land). Open: how far to push C++ templates; C++/C# adapters not Tier-A yet, Go/C adapters not yet built. Effort H. -->

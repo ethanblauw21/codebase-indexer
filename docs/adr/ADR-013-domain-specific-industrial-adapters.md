@@ -5,7 +5,8 @@
 **Branch:** `feature/adr-013-domain-specific-industrial-adapters`
 **Reviewer:** @ethanblauw21
 **Depends on:**
-- ADR-004 — needs the **tier model + adapter registry**; each DSL/industrial adapter registers as a tier (A when it has a conformance suite) and reuses the `LanguageAdapter` Protocol and registration machinery.
+- ADR-003 — needs the **adapter registry + `LanguageAdapter` Protocol** (the L5X stub already registers via it); each DSL adapter reuses this registration machinery unchanged.
+- ADR-017 — needs the **tier model**; each DSL adapter registers as a tier (Tier-A once it has a conformance suite, a Tier-B/probe otherwise).
 - ADR-008 — needs the **per-feature conformance machinery** (feature-tagged fixtures + precision/recall) as each new adapter's acceptance suite.
 **Depended on by:** none yet.
 
@@ -17,22 +18,26 @@
 
 The depth-over-breadth thesis has a natural frontier the mainstream tools ignore: **domain-specific and
 industrial languages** — PLC ladder/Structured Text (IEC 61131-3), HDL, and mapping/config DSLs — where **no
-compiler-grade index exists** and general code tools simply give up. The project already ships an **L5X
-adapter** (Rockwell PLC export XML), which is the beachhead proving this is viable. This is depth-over-breadth
-applied exactly where breadth-first competitors structurally can't follow: there is no tree-sitter grammar
-zoo for ladder logic, so the only way in is a real adapter — and a real adapter with a conformance suite is
-precisely our moat.
+compiler-grade index exists** and general code tools simply give up. The project already **registers an L5X
+adapter seam** (Rockwell PLC export XML) — but today it is a **deferred stub**: `l5x_adapter.py` raises
+`NotImplementedError`, and its extraction design (rung chunking, tag edges, embedding) is deferred per
+**ADR-003 §D4** pending an example corpus and gold queries. So the *interface* beachhead is proven (the
+registry provably contains no tree-sitter assumption), but the *extraction* is unbuilt — and this ADR is what
+turns that stub into a measured adapter. There is no tree-sitter grammar zoo for ladder logic, so the only
+way in is a real adapter — and a real adapter with a conformance suite is precisely our moat.
 
-The enabling machinery already exists: ADR-004's tier model and registry, ADR-008's feature-tagged
-conformance suites. So a new industrial adapter is **mostly assembly** on existing infrastructure plus the
-DSL-specific parsing — not a new subsystem. This is Wave 3, and the backlog flags it as the **best near-term
-differentiation**.
+The enabling machinery already exists: ADR-003's adapter registry + Protocol, ADR-017's tier model, ADR-008's
+feature-tagged conformance suites. So *registering* a new industrial adapter is assembly on existing
+infrastructure — but the DSL-specific parsing and the conformance corpus are **genuinely net-new work** (and,
+for L5X, still entirely unbuilt). Not a new subsystem, but not free either. This is Wave 3, and the backlog
+flags it as the **best near-term differentiation**.
 
 ## Decision
 
-Add **first-class DSL / industrial-language adapters**, each registered as a tier (ADR-004) and gated by a
-curated conformance suite (ADR-008). Start by **expanding the existing L5X / IEC 61131-3 Structured Text
-beachhead** before broadening to other DSLs.
+Add **first-class DSL / industrial-language adapters**, each registered as a tier (ADR-017) via the ADR-003
+registry and gated by a curated conformance suite (ADR-008). Start by **implementing the registered L5X stub**
+(and IEC 61131-3 Structured Text, which has no parser yet) into a measured adapter, before broadening to
+other DSLs.
 
 ### §1 — Adapters follow the existing L5X pattern
 
@@ -50,15 +55,15 @@ The conformance suite *is* the support claim.
 
 ### §3 — First target: expand the IEC 61131-3 beachhead
 
-Concretely, the first work expands the existing **L5X / IEC 61131-3 Structured Text** support: deeper
-symbol/edge extraction (routines, tags, function blocks, call/use relationships) with a curated conformance
-suite. [24] ESBMC-PLC and [25] (IEC 61131-3 static analysis) are the prior art for what structure is
+Concretely, the first work **implements** the L5X stub into real extraction — symbol/edge extraction
+(routines, tags, function blocks, call/use relationships) — and adds **IEC 61131-3 Structured Text** parsing
+(no ST parser exists today), each with a curated conformance suite. [24] ESBMC-PLC and [25] (IEC 61131-3 static analysis) are the prior art for what structure is
 extractable and meaningful in this domain. Subsequent targets (HDL, mapping/config DSLs) follow the same
 registration + conformance recipe, gated by grammar/format availability (the main Open Question).
 
 ### §4 — Tier table updated per adapter
 
-When a DSL adapter passes its conformance suite, the README tier+capability table (ADR-004 §10) is updated —
+When a DSL adapter passes its conformance suite, the README tier+capability table (ADR-017 tier table; ADR-008 measured accuracy) is updated —
 the industrial languages appear as measured, supported languages, which is the differentiation made
 visible.
 
@@ -67,8 +72,9 @@ visible.
 **Better:**
 - Stakes out a **differentiation niche** competitors can't reach: provable structure for industrial DSLs
   where no compiler index exists — depth-over-breadth at its sharpest.
-- Almost pure reuse: ADR-004 registry/tiers + ADR-008 conformance machinery + the existing `l5x_adapter.py`
-  pattern; the net-new work is DSL-specific parsing.
+- High reuse on the *seam*: ADR-003 registry + ADR-017 tiers + ADR-008 conformance machinery + the
+  `l5x_adapter.py` registration stub. The net-new work — DSL-specific parsing and the conformance corpus — is
+  real (the L5X stub is unimplemented), but it rides a proven interface.
 - Each adapter ships *measured* accuracy (ADR-008), so an industrial language is a real support claim, not a
   "we can open the file" claim.
 
@@ -99,11 +105,11 @@ visible.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] Expand L5X / IEC 61131-3 Structured Text extraction (routines, tags, function blocks, call/use edges) following `src/adapters/l5x_adapter.py`.
+- [ ] Implement the L5X stub (`src/adapters/l5x_adapter.py`, currently `NotImplementedError`) into real extraction (routines, tags, function blocks, call/use edges); add IEC 61131-3 Structured Text parsing.
 - [ ] Curated feature-tagged conformance fixtures in `tests/fixtures/`; measure via ADR-008 precision/recall.
 - [ ] Register adapters in `src/adapters/__init__.py`; `lxml` for XML DSLs, tree-sitter where a grammar exists.
 - [ ] Update the README tier+capability table per passing adapter.
 - [ ] Subsequent DSL targets (HDL, mapping/config) by the same recipe, gated on grammar/format availability.
 
 **Notes:**
-<!-- 2026-06-18: Wave 3, best near-term differentiation. Default first target = expand the existing L5X / IEC 61131-3 Structured Text beachhead. Reuses ADR-004 registry/tiers + ADR-008 conformance machinery. Done when a new DSL adapter passes its conformance suite + tier table updated. Open: grammar availability per DSL. Effort M per DSL. -->
+<!-- 2026-06-18: Wave 3, best near-term differentiation. Default first target = IMPLEMENT the L5X stub (currently NotImplementedError, deferred ADR-003 §D4) + IEC 61131-3 ST parsing (no parser today). Reuses ADR-003 registry + ADR-017 tiers + ADR-008 conformance. Done when a new DSL adapter passes its conformance suite + tier table updated. Open: grammar availability per DSL. Effort M per DSL. -->

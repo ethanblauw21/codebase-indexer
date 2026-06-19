@@ -46,14 +46,28 @@ the baseline shows it's worth the change. The embedder is **config-driven** via 
 `[embeddings]`, loaded in `src/core.py` (`MultiIndexManager`).
 
 **This is a one-time reindex.** A new embedder usually changes vector dimensionality, which forces a FAISS
-index rebuild (the index-file dimension is fixed at creation). `stable_id`s are unchanged, so the rebuild is
-purely "recompute vectors for existing chunks" — documented as a migration step, not a schema change.
+index rebuild (the index-file dimension is fixed at creation). The `dimension` field in `[embeddings]`
+(currently `768`, flagged "must match the model") changes with the embedder and is part of this migration.
+`stable_id`s are unchanged, so the rebuild is purely "recompute vectors for existing chunks" — documented as
+a migration step, not a schema change.
+
+**Mantra 1 (local-first).** All candidate models — `jina-code-embeddings-1.5b`, `Qwen3-Embedding`, and the
+P4 rerankers — are HuggingFace weights run **locally** (downloaded once via `huggingface-cli`, then offline
+inference). No cloud API or runtime network call is introduced; the offline guarantee is preserved.
 
 ### §P2 — Late chunking
 
 Add a **late-chunking path** ([42]) in `src/ast_chunker.py`: embed the full document context first, then
 derive chunk vectors from that context-aware representation, rather than embedding each chunk in isolation.
-This improves cross-chunk coherence (a chunk's vector "knows" its surroundings). The LLM summarizer
+This improves cross-chunk coherence (a chunk's vector "knows" its surroundings).
+
+**Mantra 4 safety — this is vectors-only, not re-segmentation.** Late chunking changes only *how a chunk's
+vector is computed*; it must keep the **chunk boundaries identical** (same AST/sliding-window segmentation,
+therefore the same `scope`). Because `scope` is unchanged, `stable_id` is untouched and existing indexes are
+not orphaned — exactly like P1, the change is recompute-vectors-only. (A late-chunking variant that *re-cut*
+boundaries would change `scope` and be index-invalidating; that is explicitly out of scope here.)
+
+The LLM summarizer
 (`src/summarizer.py`) is **demoted to optional** — late chunking captures much of what the summarizer was
 compensating for, and keeping the summarizer mandatory is a cost we no longer need to pay by default.
 
@@ -82,6 +96,18 @@ spike shows a baseline lift that justifies the complexity.
 Every pillar is **off by default until it beats the Wave-0 baseline** on the ADR-007 harness, and every
 pillar is **independently togglable** via config so a swap can be A/B'd and reverted without touching code.
 "Modernization" here means "measured lift," never "newer is better."
+
+### §Validation coverage caveat (current state, with remediation under consideration)
+
+The acceptance test inherits ADR-007 §9's limits, and that must be stated honestly: the Wave-0 baseline
+measures **semantic retrieval on the languages CoIR covers (Python, JS)** only. It does **not** measure
+**C#/C++** or the **structural-graph (Traverse) layer**. Consequence: a swap that "beats the baseline" is
+proven to help *measured* retrieval — but could **silently regress C#/C++ or the graph layer** and the
+harness would not catch it.
+- **Mitigation now:** treat the baseline pass as necessary-not-sufficient; for embedder swaps (P1), spot-check
+  C#/C++ on the legacy smoke queries before committing to a reindex.
+- **Planned (under consideration):** the internal-repo eval (ADR-007 §9 / ADR-008 §7) extends the acceptance
+  test to C#/C++ and the structural layer; once it exists, "beats the baseline" should mean both scorecards.
 
 ## Consequences
 

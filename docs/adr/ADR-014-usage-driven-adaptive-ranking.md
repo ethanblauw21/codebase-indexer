@@ -41,8 +41,14 @@ learned adaptation only if the simpler approach plateaus.
 
 A new **feedback-log table** in `src/db.py` records, per retrieval: the query, the returned candidate set,
 and which results were subsequently **used** (read/edited/cited). `src/MCPServer.py` captures the "used"
-signal — the definition of "used" is an explicit Open Question (read vs. edited vs. cited carry different
-strengths). The log is the training corpus; it is local, never leaves the machine.
+signal — and there are *two* open questions stacked here, not one:
+- **What "used" means** (read vs. edited vs. cited carry different relevance strengths).
+- **How the server even observes "used."** An MCP retrieval tool returns chunks, but the agent then
+  reads/edits them in *its own* context, which the server does not directly see. Capture therefore needs
+  either an **inferred** signal (a later tool call that touches the same file/symbol the retrieval surfaced)
+  or an **explicit feedback call** from the agent — which of those is the load-bearing design choice.
+
+The log is the training corpus; it is local, never leaves the machine.
 
 ### §2 — Weight tuning (start label-free)
 
@@ -61,9 +67,11 @@ the starting point.
 ### §4 — Validation on a held-out split (the anti-overfit gate)
 
 Tuned weights must **beat static RRF/fusion on an ADR-007 held-out split** (a CoIR or usage holdout the
-weights never saw). This is the load-bearing guard: usage-tuned ranking is prone to overfitting the logged
-distribution, so a win only counts on held-out data. Offline training cadence (how often to retune) is an
-Open Question.
+weights never saw). Two honest notes on the holdout: the **CoIR holdout inherits ADR-007 §9's coverage
+limits** (Python/JS semantic retrieval only), so weights validated there are validated on that slice; the
+**usage holdout** (a reserved fraction of the feedback log) is broader but only as representative as logged
+usage. This is the load-bearing guard: usage-tuned ranking is prone to overfitting the logged distribution,
+so a win only counts on held-out data. Offline training cadence (how often to retune) is an Open Question.
 
 ## Consequences
 
@@ -110,4 +118,4 @@ Open Question.
 - [ ] (Optional, gated on plateau) LoRA reranker adaptation (`peft`).
 
 **Notes:**
-<!-- 2026-06-18: Wave 3, research-grade, most novel (potential original paper). Default: start label-free pseudo-relevance / weight tuning before any LoRA fine-tune. Done when tuned weights beat static RRF on a CoIR/usage holdout. Open: define "used"; offline training cadence. Effort M–H. Nothing depends on it — deferrable. -->
+<!-- 2026-06-18: Wave 3, research-grade, most novel (potential original paper). Default: start label-free pseudo-relevance / weight tuning before any LoRA fine-tune. Done when tuned weights beat static RRF on a CoIR/usage holdout. Open: define "used" AND how the server observes it (inferred from later tool calls vs explicit feedback call); offline training cadence. Effort M–H. Nothing depends on it — deferrable. -->
