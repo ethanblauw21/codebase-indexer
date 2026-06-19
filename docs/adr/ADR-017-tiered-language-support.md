@@ -17,6 +17,7 @@
 - ADR-008 *(planned — docs/adr-backlog.md)* — Measured Conformance builds on the tier model and evolves the `candidate` boolean into a graded `confidence`.
 - ADR-011 *(planned)* — High-Precision Call Resolution targets the Tier-A promotion path.
 - ADR-013 *(planned)* — DSL/industrial adapters register as tiers and reuse the conformance machinery.
+- ADR-018 *(planned)* — syntactic clone matching's structural coefficient is available exactly for the tree-sitter-parsed tiers (A/B) defined here.
 
 > Pressure-tested via `/grill-plan` on 2026-06-18. The grill resolved: `tags.scm`
 > sourcing and a runtime capability probe (§2.2–2.3), B1/B2 capability classes
@@ -177,9 +178,11 @@ class GenericTreeSitterAdapter:
 
 **Every Tier-B edge is `candidate=True`, by construction** — `tags.scm` gives
 name-based references with no scope/type resolution, so a Tier-B "call" is a
-*possible* call, never verified. This reuses verbatim the mechanism ADR-003 §2.3
-introduced for C++ overload sets. The verdict tools treat candidate edges per the
-safe-direction rule in §7. One additive field on `Edge` (`adapters/base.py:42`):
+*possible* call, never verified. The `Edge.candidate: bool` field is **introduced
+by the ADR-003 §2.3 amendment** (for C++ overload sets); **Tier-B is its second
+consumer**, and ADR-008 later evolves it to a graded `confidence`. The verdict tools treat
+candidate edges per the safe-direction rule in §7. The field, repeated here for
+context (`adapters/base.py:42`):
 
 ```python
 @dataclass
@@ -191,8 +194,8 @@ class Edge:
     candidate: bool = False          # NEW: name-based / unresolved (Tier-B, C++ overload sets)
 ```
 
-Defaults `False`, so every existing Tier-A edge and the ADR-003 schema are
-untouched.
+Defaults `False`, so introducing it (in ADR-003) leaves every existing Tier-A
+edge unchanged; Tier-B simply sets it `True`.
 
 **Synthesized edges (B2, opt-in).** For definitions-only languages, the adapter
 *may* manufacture loose candidate edges — "an identifier whose text matches a

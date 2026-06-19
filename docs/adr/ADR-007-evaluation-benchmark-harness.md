@@ -4,7 +4,7 @@
 **Date:** 2026-06-18
 **Branch:** `feature/adr-007-evaluation-benchmark-harness`
 **Reviewer:** @ethanblauw21
-**Depends on:** none — this is Wave 0, the foundation. It only extends the existing `tools/eval_retrieval.py` and reads the index we already build.
+**Depends on:** none — this is Wave 0, the foundation. It extends the existing `tools/eval_retrieval.py`; per §7 it indexes CoIR's *own* corpus and reads nothing from the repo `.code-index`.
 **Depended on by:**
 - ADR-008 *(planned — docs/adr-backlog.md)* — Measured Conformance reuses this ADR's **harness pattern** (fixture → run → metric → committed baseline) for its precision/recall *extraction* arm. It needs the harness to be the established shape so the extraction arm is a sibling, not a parallel invention.
 - ADR-009 *(planned)* — Retrieval Modernization needs the **committed Wave-0 baseline numbers** and a **fast CI subset** so every component swap (embedder, fusion, reranker) can be validated as a measurable lift rather than a claim.
@@ -17,7 +17,7 @@
 
 ## Context
 
-The project sells **provable** code structure (the depth-over-breadth thesis, ADR-004). But "provable"
+The project sells **provable** code structure (the depth-over-breadth thesis). But "provable"
 currently means a passing conformance suite — a binary, per-adapter gate — not a *number we can put on a
 README*. The accuracy moat (ADR-008) and the modernization work (ADR-009) are both literally unprovable
 without a scorecard: there is no way to say "this embedder swap helped retrieval by X" or "our extraction
@@ -46,25 +46,57 @@ current stack, and commits those numbers to the repo. This ADR owns the **retrie
 
 ### §1 — Metrics
 
-Report, per run:
-- **Retrieval quality:** MRR@10, NDCG@10, Recall@{1,5,10} — the standard ranked-retrieval set, graded
-  automatically against CoIR qrels.
-- **Operational cost:** tokens consumed, tool-calls issued, and wall-clock latency per query. These are
-  first-class, not afterthoughts — the project's whole pitch is token-efficient retrieval for agents
-  (A7 perf targets, design-doc), so a quality win that doubles tokens is not a win.
+Report, per run, across three groups. Quality says *whether* we found the right code; token economy and
+operational cost say *what it cost to find it* — and for an agent-facing engine the cost half is not a
+footnote, it is half the product.
 
-A run emits one machine-readable record (JSON) and one human-readable table.
+**Group 1 — Retrieval quality** (graded automatically against CoIR qrels):
+- **MRR@10** — rank of the first relevant hit.
+- **NDCG@10** — graded-relevance ranking quality.
+- **Recall@{1,5,10}** — coverage at depth.
+- **Success@{1,5,10}** (a.k.a. Hit@k) — binary "was any relevant doc in the top-k"; cheap, intuitive,
+  and the headline number a reader scans first.
+- **MAP** (mean average precision) — averages precision across *all* relevant docs per query, the honest
+  metric when a query has several (codefeedback-mt and the CodeSearchNet tasks carry multi-judgment qrels;
+  MRR alone hides whether we found the 2nd and 3rd correct docs).
+
+**Group 2 — Token economy** (the billing-efficiency moat; decomposed so a regression is attributable):
+- **Query/input tokens** — cost of issuing the query.
+- **Returned-context tokens** — tokens in the top-k payload an agent would actually pack into context.
+  This is the billing-relevant number and the one the competitor pads.
+- **Token efficiency** = returned-context tokens ÷ relevant docs retrieved — directly measures padding
+  waste. A run that retrieves the same answers in fewer context tokens wins even at equal quality.
+- **Budget adherence** — fraction of queries whose returned context fits under a configured token budget,
+  plus the truncation rate. Mantra 3 (protect local 8B models from VRAM panics) is unprovable without it.
+- **Corpus-embedding tokens** — the one-time index-build token cost, reported **separately** (amortized,
+  not per-query) so build cost is never confused with query cost.
+
+**Group 3 — Operational cost:**
+- **Tool-calls issued** per query. *(Degenerate on single-shot CoIR retrieval — effectively 1. This metric
+  earns its keep in the agentic/iterative eval, where one query can trigger several tool round-trips; it is
+  captured here for schema parity with that future eval, not as a live signal.)*
+- **Wall-clock latency** per query, reported as **mean, p50, and p95** — tail latency, not just the
+  average, is what local interactive UX actually feels (Mantra 3).
+
+A quality win that doubles returned-context tokens or p95 latency is not a win; the scorecard is designed
+so those regressions are as visible as a quality regression. A run emits one machine-readable record (JSON)
+and one human-readable table.
 
 ### §2 — CoIR subset selection
 
-CoIR is broad; we index a focused 5-language stack. Select the CoIR subtasks that are **representative of
-our corpus**: code-retrieval and text↔code tasks whose languages overlap ours (Python, TS/JS, C#, C++).
-Record the chosen subset explicitly in config so the benchmark is reproducible and the selection is
-auditable rather than implicit.
+CoIR is broad; we index a focused 5-language stack (Python, TS/JS, C#, C++). But CoIR's **code-retrieval**
+and **text↔code** tasks cover **Python, JavaScript, Go, Java, Ruby, PHP** — so the overlap we can actually
+grade is **Python and JavaScript**; **C# and C++ have no CoIR coverage at all** (this gap is recorded plainly
+in §9). Select the representative tasks and record the chosen subset explicitly in `indexer.toml [eval]` so
+the benchmark is reproducible and the selection is auditable rather than implicit.
 
-Two open modeling questions are acknowledged, not hidden (see Open Questions): *which* CoIR subtasks are
-truly representative, and how to **project our 3-tier index onto CoIR's flat corpus** (CoIR assumes a flat
-document set; our index is tiered skeleton/chunk/symbol).
+The **Wave-0 core set** (primary languages): `cosqa`, `stackoverflow-qa`, `codefeedback-mt`,
+`CodeSearchNet-python`, `CodeSearchNet-javascript`. The remaining CodeSearchNet languages
+(`go`/`java`/`ruby`/`php`) are an **extensible add-on batch** appended later under the incremental-baseline
+mechanics of §6 — broad, reviewer-recognizable coverage without blocking Wave 0 on a multi-day run.
+
+The once-open "how do we project a tiered index onto CoIR's flat corpus" question is **resolved in §7** — it
+was a category error; we index CoIR's own corpus atomically rather than projecting our index onto it.
 
 ### §3 — Two run profiles: full vs. CI subset
 
@@ -88,11 +120,86 @@ fixing the second validity hole (single aggregate hides per-language weakness).
   and the published table.
 - `indexer.toml` — new `[eval]` block: chosen CoIR subtasks, metric list, CI-subset size, baseline path.
 
-### §6 — The committed baseline is the deliverable
+### §6 — The committed baseline is the deliverable (and it is incremental)
 
 The point of Wave 0 is a **checked-in baseline for the current stack** — the line every later wave must
 beat. Wave 0 is not done when the harness runs; it is done when the current stack's numbers are committed
 to `benchmarks/` so ADR-009's lift is measured against a fixed, version-controlled reference.
+
+The baseline is **append-structured — one JSON record per (subtask × config)** — so it can be cut in batches
+over time without re-running finished work (the corpus embedding is the expensive step; on CPU the core set
+is ~one overnight run, so batchability is not optional):
+- A **`--subtasks` override** runs only the named tasks; records are **deduped on append** (re-running a
+  task replaces its record, never duplicates).
+- Every record stamps the **git SHA of the stack** that produced it. Batches are comparable *only* if the
+  retrieval stack is unchanged between them — the SHA is the audit trail that proves it. Re-cut deliberately;
+  a baseline you silently overwrite is no baseline.
+- Practical consequence: the §2 primary-language core lands first; the broader CodeSearchNet languages append
+  later and merge into the same baseline file under the same frozen stack.
+
+### §7 — Resolved (2026-06-18): what gets indexed — the CoIR protocol
+
+> Resolves the §2 "tier→flat projection" open question, which was a category error in the original framing.
+
+CoIR is a *retrieval* benchmark: each subtask ships its own **corpus** (atomic code/answer documents with
+ids), **queries**, and **qrels** (query→doc relevance). The benchmark measures a retrieval **stack** by
+embedding *CoIR's own corpus* with that stack's embedder, building an index over it, retrieving top-k per
+query, and grading the returned doc-ids against the qrels. **It does not touch the repo's `.code-index`** —
+our repo index holds *our* code, whose ids are absent from CoIR's qrels, so grading our index against CoIR
+would score ~0 and measure nothing. (This is the bug in the first harness draft, now corrected.)
+
+Our three tiers are a **chunking strategy for whole repo files**; CoIR corpus documents are *already*
+chunk-sized atoms. Therefore:
+
+- **Wave-0 baseline = atomic-doc indexing (the default).** Each CoIR corpus doc → one embedding (our stack
+  embedder + the stack's normalization / `max_seq_length` policy) → one FAISS index per subtask. Query →
+  embed → search → doc-ids → grade. Projection is the identity (`"atomic"`). This is a clean, publishable
+  **embedder/retrieval** baseline, directly comparable to published CoIR numbers, and is exactly the
+  fixed reference ADR-009 needs.
+- **Chunk-tier-pipeline measurement is a deliberately deferred, labeled path** — *not* the Wave-0 baseline.
+  Measuring our full chunk→tier pipeline on CoIR means chunking each corpus doc into tiers, indexing all
+  chunks with a chunk→doc backpointer, and projecting chunk-hits back to a single doc-id (`top_tier_per_file`
+  = the doc of the best-ranked chunk). The `_project_*` strategies are retained for this path; they operate
+  over *CoIR-corpus* hits, never the repo index. This path is future work, run and reported separately so it
+  cannot be confused with the embedder baseline.
+
+`[eval].tier_projection` therefore defaults to **`"atomic"`** for the Wave-0 baseline; the tier-projection
+strategies remain documented options for the deferred chunked path.
+
+### §8 — Pipeline configurations baselined
+
+The shipped retrieval stack has optional stages, so the baseline records the **as-shipped configurations**,
+not a single number:
+- **dense** — the embedder alone (atomic top-k over the CoIR corpus). The core embedder/retrieval number.
+- **dense + reranker** — the same retrieval followed by the cross-encoder rerank that ships by default,
+  capturing the reranker's contribution. ADR-009 (Pillar 4) will swap that reranker, so this "before" must
+  be on record.
+
+Two honest caveats: (1) the production **3-tier RRF fusion** has nothing to fuse on CoIR's single flat
+corpus, so it collapses to plain dense top-k here — fusion is exercised on our own repos, not CoIR (§9).
+(2) The reranker pass is **priced separately** — it scales with query-count × rerank-depth, not corpus size,
+so it can be run on the core set only rather than across every appended language batch.
+
+### §9 — Coverage & limits (current state, with remediation under consideration)
+
+CoIR is a real, publishable number for one specific layer; stating its boundaries *in this ADR* is part of
+"correctness over breadth" (Mantra 2) — the number must never be oversold as system accuracy. These are
+**honest current-state limits, not accepted permanent gaps**: each has a planned remediation under
+consideration (none built yet — scoped here so the roadmap owns them rather than letting them hide).
+
+- **Language gap (current state).** CoIR's code-search tasks cover Python, JS, Go, Java, Ruby, PHP — **not
+  C# or C++**, two of our five target languages. As it stands today the CoIR scorecard says *nothing* about
+  C#/C++ retrieval.
+  *Planned (under consideration):* a separate **internal-repo eval** — curated queries with known answers
+  over our own indexed C#/C++ code — reusing ADR-008's fixture machinery.
+- **Layer gap (current state).** CoIR's corpus is flat — no call graph — so today this scorecard measures
+  only the **semantic retrieval layer** (embedder ± reranker) and cannot exercise the
+  Retrieve→**Traverse**→Rerank structural-graph expansion central to the engine.
+  *Planned (under consideration):* the same internal-repo eval, which carries our extracted call graph and
+  can therefore score the structural step CoIR cannot.
+- **Labelling rule (now).** Until those land, published numbers are labelled "CoIR semantic-retrieval,
+  {languages}" — never "system accuracy." The internal-repo eval is the intended closer for both gaps and is
+  tracked toward ADR-008.
 
 ## Consequences
 
@@ -106,10 +213,13 @@ to `benchmarks/` so ADR-009's lift is measured against a fixed, version-controll
   as regressions in quality.
 
 **Worse:**
-- New dependency surface: `coir-eval` (or pulling CoIR via HF `datasets`) plus the cached corpus, which has
-  storage cost.
-- Projecting a tiered index onto CoIR's flat corpus is a genuine modeling problem; a poor projection would
-  understate our true quality. Mitigated by recording the projection method as an auditable config choice.
+- New dependency surface: `datasets` (HF) plus the cached CoIR corpora, which carry storage cost (the large
+  CodeSearchNet corpora are git-ignored and regenerated on demand, not committed).
+- **Coverage gaps by construction (§9):** C#/C++ and the structural-graph layer are unmeasurable on CoIR, so
+  the scorecard is a partial picture today. Mitigated near-term by honest labelling; the planned internal-repo
+  eval (under consideration, §9) is the intended closer.
+- **Compute cost:** cutting the baseline embeds whole corpora with our model — on CPU the core set is roughly
+  an overnight run. Mitigated by the incremental, append-structured baseline (§6).
 - A standing benchmark is maintenance: CoIR versions move, and the baseline must be re-cut deliberately when
   the stack legitimately changes (a baseline you silently overwrite is no baseline).
 
@@ -134,11 +244,25 @@ to `benchmarks/` so ADR-009's lift is measured against a fixed, version-controll
 
 - [ ] Add `coir-eval` (or HF `datasets` pull) dependency; cache the selected CoIR subset under `benchmarks/`.
 - [ ] Choose + record the representative CoIR subtask set in `indexer.toml` `[eval]`; document the rationale.
-- [ ] Decide and document the tier→flat-corpus projection (the load-bearing modeling choice).
-- [ ] Extend `tools/eval_retrieval.py`: CoIR runner, MRR@10 / NDCG@10 / Recall@{1,5,10}, plus tokens / tool-calls / latency capture.
+- [x] Decide and document the tier→flat-corpus projection (the load-bearing modeling choice). **Resolved §7
+  (2026-06-18):** index CoIR's own corpus with our embedder; Wave-0 baseline uses atomic-doc indexing
+  (`tier_projection = "atomic"`); chunk-tier projection is a deferred, separately-reported path.
+- [x] Extend `tools/eval_retrieval.py`: CoIR runner (indexes CoIR's own corpus, §7), MRR@10 / NDCG@10 /
+  Recall@{1,5,10}, plus tokens / tool-calls / latency capture. **Done** (atomic-projection runner).
+- [ ] Extend the metric set per the revised §1: **Success@{1,5,10}**, **MAP**, decomposed **token economy**
+  (query / returned-context / corpus-embedding tokens, token-efficiency, budget-adherence + truncation rate),
+  and **p50/p95** latency. These are net-new compute over the current runner and must land before the
+  single Wave-0 baseline is cut (so the baseline is embedded once, with the full metric set).
+- [ ] Implement the incremental-baseline mechanics (§6): `--subtasks` override, dedupe-on-append, and a
+  git-SHA stamp on every record so appended batches are provably from the same frozen stack.
+- [ ] Run + record both pipeline configs (§8): **dense**, and **dense + reranker** (reranker priced/run on
+  the core set only, per §8 caveat 2).
+- [ ] Record the §9 coverage limits in the published table header (label = "CoIR semantic-retrieval,
+  {languages}"); open the **internal-repo eval** as the complement that covers C#/C++ and the structural
+  graph (tracked toward ADR-008).
 - [ ] Define the fast CI subset; wire it as a regression tripwire on retrieval-path changes.
 - [ ] Cut and **commit the Wave-0 baseline** for the current stack to `benchmarks/` (the actual deliverable).
 - [ ] Resolve every downstream obligation in **Depended on by** (ADR-008 harness pattern, ADR-009 baseline + CI subset, ADR-014 held-out split) before setting status to `accepted`.
 
 **Notes:**
-<!-- 2026-06-18: Wave 0. Retrieval arm only; extraction precision/recall is ADR-008's sibling scorecard. Default metrics MRR@10 + NDCG@10 + Recall@{1,5,10} + tokens/tool-calls/latency; CoIR subset matched to our 5 languages; grading automated vs qrels (no human). Open: representative subtask set; tier→flat projection. -->
+<!-- 2026-06-18: Wave 0. Retrieval arm only; extraction precision/recall is ADR-008's sibling scorecard. Default metrics MRR@10 + NDCG@10 + Recall@{1,5,10} + tokens/tool-calls/latency; CoIR subset matched to our 5 languages; grading automated vs qrels (no human). Open: representative subtask set. RESOLVED (§7): index CoIR's OWN corpus with our embedder (not the repo .code-index); Wave-0 = atomic-doc indexing, tier projection deferred. -->

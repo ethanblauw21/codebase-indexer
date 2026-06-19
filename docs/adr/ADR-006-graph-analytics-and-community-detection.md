@@ -1,6 +1,6 @@
 # ADR-006: Graph Analytics — Community Detection, Centrality, and the Architecture Map Tool
 
-**Status:** proposed
+**Status:** accepted (merged — `7dc7d74`)
 **Date:** 2026-06-18
 **Branch:** `feature/graph-analytics-community-detection`
 **Reviewer:** @ethanblauw21
@@ -292,3 +292,36 @@ Attribution must appear in three places: (1) this ADR; (2) a module docstring he
 <!-- 2026-06-18: Motivated by a Graphify trial on this repo that flagged CodeDB as a god-object. Decision: reimplement the clustering/centrality gap natively over our EXTRACTED graph rather than adopt Graphify (mostly redundant, weaker retrieval, blocks Rust port). DSM chosen over node-link to avoid copying Graphify's deliverable and because it suits coupling analysis better. graspologic/multiprocessing explicitly excluded after the trial's Py3.14/Windows spawn crash. -->
 <!-- 2026-06-18 grill-plan outcomes: (1) ACCEPTANCE BAR = defer to ADR-008 (was numbered ADR-007 at grill time; renumbered behind the harness per docs/adr-backlog.md); ship as exploratory, mechanical/determinism tests only, report labeled 'not an accuracy claim'. (2) SPLIT ALTITUDE = describe-only by default, prescription behind suggest_splits=True, each suggestion stamped '[HEURISTIC — unverified]'. (3) EDGE MIX = keep all 6 edge kinds in clustering + A1 refinement; compute god-object span on a SEPARATE coupling-only view so an owns-clustered class cannot self-mask its span. (4) DOCS-AS-NODES = confirmed deferred (not on roadmap). A1 (Louvain refinement, paper [1] §3.7) folded into §1. -->
 <!-- 2026-06-18 implementation deviations (base layer): (a) EDGE VOCABULARY — the draft assumed lowercase {calls,imports,extends,implements,owns,contains}; the real db.py vocabulary is UPPERCASE {CALLS,IMPORTS,INSTANTIATES,OWNS,EXTENDS,IMPLEMENTS,PROVIDES_CONTEXT,CONSUMES_CONTEXT} with no `contains`. EDGE_WEIGHTS/COUPLING_KINDS remapped to real kinds: coupling = {CALLS,EXTENDS,IMPLEMENTS,INSTANTIATES,IMPORTS}; OWNS=containment(0.4); *_CONTEXT=retrieval plumbing(0.2, non-coupling). (b) BETWEENNESS computed UNWEIGHTED in the base — our edge weights are similarities, not distances, so feeding them to shortest-path betweenness would invert meaning; distance-weighted variant deferred to the scoring pass. (c) get_graph_edges left UNCACHED (single scan) rather than riding the adjacency cache. (d) networkx 3.6.1 already present in VectorEnv; requirements/pyproject pin still pending (Phase 4). (e) Tests run via VectorEnv python (has faiss+networkx+pytest); base interpreter lacks faiss. -->
+
+---
+
+### AMENDMENT: 2026-06-18 — Leiden preferred backend (Louvain fallback)
+
+**Context.** §1 detects communities via NetworkX Louvain (`detect_communities`, `graph_analytics.py:183`,
+seeded by `GRAPH_SEED` for reproducible reports), with the A1 density-gated refinement already folded into
+§1. Louvain has a known defect the **Leiden** paper ([1] §3.7) exists to fix: it can produce
+**badly-connected — even internally disconnected — communities**. For a tool selling *auditable* structure,
+that is a math-reliability gap.
+
+**Decision.**
+- **Prefer Leiden** (`leidenalg` + `python-igraph`) as the community-detection backend **when available** —
+  it guarantees well-connected communities and runs an internal refinement phase (modernization P5, "math
+  reliability").
+- **Keep NetworkX Louvain (+ the §1 density-gated refinement) as the zero-infra fallback.** `leidenalg` /
+  `igraph` are native C-extension builds with real install friction (especially on Windows — the same class
+  of problem that got `graspologic` excluded after its Py3.14/Windows spawn crash, per the base-layer notes).
+  The engine must run with **no native build**, so Leiden is an optional acceleration, never a hard dependency.
+- **Determinism + auditability preserved.** Leiden is seeded identically to the Louvain path (`GRAPH_SEED`),
+  and **every report records which backend produced it** (`leiden` vs `louvain`). Partitions are only
+  comparable within a backend, so the backend is stamped, not assumed.
+- **Refinement relationship.** Under Leiden the internal refinement subsumes most of the §1 A1 density-gated
+  ejection; the §1 post-step stays in force under the Louvain fallback (and as an extra guard). Both backends
+  feed the same `Community` / `GraphAnalysis` output unchanged.
+
+**Consequences.** *Better:* well-connected communities by construction when Leiden is present; seed + backend
+stamp keep reports auditable. *Worse:* a second code path (Leiden vs Louvain) to test; the native-build
+friction is exactly why it stays optional. *Neutral:* output schema unchanged — a backend swap, not a data
+change.
+
+**Status note.** ADR-006's header status corrected to `accepted` (merged `7dc7d74`; the doc still read
+`proposed`).

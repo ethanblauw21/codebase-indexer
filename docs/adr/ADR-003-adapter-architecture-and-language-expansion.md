@@ -1,6 +1,6 @@
 # ADR-003: Adapter Architecture and Language Expansion
 
-**Status:** proposed
+**Status:** accepted (merged — `fe34609`, Phases 1-4)
 **Date:** 2026-06-11
 **Branch:** `feature/adapter-architecture-language-expansion`
 **Reviewer:** @ethanblauw21
@@ -76,7 +76,7 @@ FQN: `ns::Class::method(param-type-list)` — signature-qualified, because C++ o
 
 Include resolution: (1) `compile_commands.json` if present, parsed for `-I`/`-isystem` flags per translation unit; (2) fallback heuristic: relative-to-file, then configured include roots. Angle-bracket system includes terminate as external edges.
 
-Call edges: name-based and H5-corroborated; overload sets resolve to all candidates with a `candidate: true` flag. Verdict tools (blast-radius, dead-code) require non-candidate or single-candidate edges.
+Call edges: name-based and H5-corroborated; overload sets resolve to all candidates with a `candidate: true` flag. Verdict tools (blast-radius, dead-code) require non-candidate or single-candidate edges. *(Spec-vs-code gap — see the 2026-06-18 amendment: the `Edge.candidate` field this describes was never built in Phases 1-4.)*
 
 Inheritance edges from base clauses.
 
@@ -183,3 +183,30 @@ The adapter registry includes a stub `language_id: "l5x"` entry from day one. Th
 
 **Notes:**
 <!-- 2026-06-11: Sourced from indexer-hardening-and-csharp-cpp-spec.md. Phase 1 golden-snapshot gate is non-negotiable. L5X deferred pending example corpus + gold queries; stub only. -->
+
+---
+
+### AMENDMENT: 2026-06-18 — Introduce `Edge.candidate: bool` (resolve the §2.3 spec-vs-code gap)
+
+**Gap.** §2.3 specifies that C++ overload sets "resolve to all candidates with a `candidate: true` flag" and
+that verdict tools "require non-candidate or single-candidate edges." Phases 1-4 shipped the adapters but
+**not** this field: `Edge` (`adapters/base.py`) is still `source_fqn / target / kind / resolved_target`, no
+adapter sets a candidate flag, and the verdict tools rank by RRF rather than gating on candidacy (C++
+overloads were instead disambiguated by signature-qualified FQNs). The §2.3 text is a specification that
+outran the implementation.
+
+**Decision.** Introduce `Edge.candidate: bool = False` in `adapters/base.py` (additive — Tier-A edges default
+`False`, the existing schema and golden snapshots are untouched) **here**, as the earliest ADR that needs it,
+so every downstream consumer *uses* or *evolves* the field rather than re-introducing it:
+- C++ overload-set edges set `candidate=True` (the original §2.3 intent, now actually built).
+- Verdict tools gate via the safe-direction rule formalized in **ADR-017 §7** (VERIFIED / ADVISORY /
+  INSUFFICIENT).
+
+**Depended on by (the field's consumers):**
+- **ADR-017 §3** — Tier-B (`GenericTreeSitterAdapter`) edges are `candidate=True` by construction (second
+  consumer).
+- **ADR-008** — evolves `candidate: bool` → graded `Edge.confidence: float` (Phase 2).
+- **ADR-011 / ADR-012** — emit graded-confidence / contract-verified-vs-`candidate` edges over the same field.
+
+**Status note.** ADR-003's header status is corrected to `accepted` (merged in `fe34609`; the doc still read
+`proposed`). This amendment is the implementation owner of the previously-unbuilt `candidate` field.
