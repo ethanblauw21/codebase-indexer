@@ -13,15 +13,22 @@ Pipeline
                             and immediate callees, keeping latency bounded.
                             Edges are labelled `corroborated=True/False` based on
                             whether an IMPORTS edge corroborates the CALLS edge.
-  3. Reranking            — jina-reranker-v2-base-code CrossEncoder scores every
-                            candidate in the merged pool.  Returns the top-10.
+  3. Reranking            — OPTIONAL. Off by default: the top-10 are chosen by
+                            RRF score. When [reranker].enabled is true in
+                            indexer.toml, the configured model rescores every
+                            candidate in the merged pool (see reranker.py).
 
-Cross-Encoder fallback
------------------------
-Loading a reranker requires ~500 MB of model weights and CUDA/MPS alignment.  If the
-model cannot be loaded (OOM, missing weights, no GPU), _load_reranker() sets
-_reranker_failed=True and all subsequent calls degrade gracefully: the top-10
-are chosen by RRF score instead.  The return type is identical in both paths.
+Reranking is opt-in (honest default)
+------------------------------------
+Reranking is DISABLED unless ``[reranker].enabled = true`` in indexer.toml. The
+default path returns the RRF-ranked top-10 directly — that is the measured Wave-0
+baseline (ADR-007), not a degraded fallback. When enabled, ``load_reranker()``
+(reranker.py) picks the scorer by model id — a Qwen3 causal-LM yes/no scorer or a
+sentence-transformers CrossEncoder. If an enabled reranker fails to load
+(OOM, missing weights, no GPU), _load_reranker() sets _reranker_failed=True and
+subsequent calls fall back to RRF scoring. The return type is identical in every
+path. NOTE: reranker lift on CoIR was neutral/negative (ADR-009 §P4); it stays off
+pending the internal-repo eval.
 
 Stable ID contract
 -------------------
@@ -41,6 +48,8 @@ import numpy as np
 from core import DocumentStore, MultiIndexManager, embed
 from db import CodeDB
 from category_tagger import classify_query
+from config import load_indexer_config
+from reranker import load_reranker
 from stable_id import stable_id
 
 logger = logging.getLogger(__name__)
@@ -111,10 +120,15 @@ class HybridRetriever:
         SQLite database path.
         Default: ``".code-index/graph.db"``.
     reranker_model :
-        HuggingFace model ID for the sentence-transformers CrossEncoder.
-        Default: ``"jinaai/jina-reranker-v2-base-code"``.
+        HuggingFace model ID for the reranker. ``None`` (default) reads
+        ``[reranker].model_id`` from indexer.toml, falling back to
+        ``"Qwen/Qwen3-Reranker-0.6B"``. Only consulted when reranking is enabled.
+    reranker_enabled :
+        Whether to rerank at all. ``None`` (default) reads ``[reranker].enabled``
+        from indexer.toml (default ``False``). When ``False`` the pipeline returns
+        the RRF-ranked top-10 — the honest, measured default (ADR-007 / ADR-009 §P4).
     device :
-        Torch device string passed to CrossEncoder: ``"cpu"``, ``"cuda"``, ``"mps"``.
+        Torch device string passed to the reranker: ``"cpu"``, ``"cuda"``, ``"mps"``.
         Default: ``"cpu"``.
 
     Usage
@@ -129,7 +143,8 @@ class HybridRetriever:
         self,
         index_dir: str = ".code-index",
         db_path: str = ".code-index/graph.db",
-        reranker_model: str = "jinaai/jina-reranker-v2-base-code",
+        reranker_model: Optional[str] = None,
+        reranker_enabled: Optional[bool] = None,
         device: str = "cpu",
     ) -> None:
         self._index_manager = MultiIndexManager(base_dir=index_dir)
@@ -138,7 +153,17 @@ class HybridRetriever:
         self._tier3: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER3_NAME)
         self._doc_store = DocumentStore(db_path)
         self._db = CodeDB(db_path)
-        self._reranker_model_id = reranker_model
+
+        # Reranking is config-driven and OFF by default. Explicit constructor args
+        # win; otherwise we read [reranker] from indexer.toml (empty if absent).
+        rer_cfg = load_indexer_config().get("reranker", {})
+        self._reranker_enabled: bool = (
+            reranker_enabled if reranker_enabled is not None
+            else bool(rer_cfg.get("enabled", False))
+        )
+        self._reranker_model_id: str = (
+            reranker_model or rer_cfg.get("model_id", "Qwen/Qwen3-Reranker-0.6B")
+        )
         self._device = device
 
         self._reranker: Optional[object] = None
@@ -341,25 +366,24 @@ class HybridRetriever:
     # ------------------------------------------------------------------
 
     def _load_reranker(self) -> Optional[object]:
-        """Lazy-load the CrossEncoder.
+        """Lazy-load the configured reranker, or ``None`` if reranking is off/failed.
 
-        Sets ``_reranker_failed=True`` on any error so subsequent calls return
-        immediately without re-attempting the expensive import.
+        Returns ``None`` immediately when ``_reranker_enabled`` is False (the honest
+        default) — no model is fetched. When enabled, ``load_reranker()`` (reranker.py)
+        selects a Qwen3 logit-scorer or a CrossEncoder by model id. Sets
+        ``_reranker_failed=True`` on any error so subsequent calls return immediately
+        without re-attempting the expensive import.
         """
+        if not self._reranker_enabled:
+            return None
         if self._reranker is not None:
             return self._reranker
         if self._reranker_failed:
             return None
         try:
-            from sentence_transformers import CrossEncoder  # type: ignore[import]
-
-            self._reranker = CrossEncoder(
-                self._reranker_model_id,
-                device=self._device,
-                trust_remote_code=True,
-            )
+            self._reranker = load_reranker(self._reranker_model_id, device=self._device)
             logger.info(
-                "Loaded cross-encoder %s on device=%s",
+                "Loaded reranker %s on device=%s",
                 self._reranker_model_id,
                 self._device,
             )
@@ -367,7 +391,7 @@ class HybridRetriever:
         except Exception as exc:
             self._reranker_failed = True
             logger.warning(
-                "CrossEncoder load failed (%s: %s). "
+                "Reranker load failed (%s: %s). "
                 "Falling back to RRF score ranking.",
                 type(exc).__name__,
                 exc,
@@ -398,14 +422,16 @@ class HybridRetriever:
         pairs = [(query, c.text) for c in pool]
 
         try:
-            raw_scores: np.ndarray = reranker.predict(
-                pairs,
-                convert_to_numpy=True,
-                batch_size=min(32, len(pairs)),
+            # Both scorer shapes expose .predict(pairs, batch_size); the Qwen3 path
+            # returns a list of P(yes) floats, the CrossEncoder a numpy array. Coerce
+            # to a float array so the composite scoring below is identical for both.
+            raw_scores: np.ndarray = np.asarray(
+                reranker.predict(pairs, batch_size=min(32, len(pairs))),
+                dtype=float,
             )
         except Exception as exc:
             logger.warning(
-                "CrossEncoder.predict failed (%s: %s). Using RRF scores.",
+                "Reranker.predict failed (%s: %s). Using RRF scores.",
                 type(exc).__name__,
                 exc,
             )

@@ -82,8 +82,18 @@ learns. New `[retrieval]` config block controls fusion mode and weights.
 ### §P4 — Reranker option
 
 Add a code-specialized reranker option ([40] CoRNStack / Qwen3-Reranker) selectable via `indexer.toml`
-`[reranker]`, **keeping the current cross-encoder as the default** until the baseline says otherwise. This
-is a pure config choice — the rerank stage interface is unchanged.
+`[reranker]`. This is a pure config choice — the rerank stage interface is unchanged.
+
+**Correction (2026-06-22).** The original framing — "keeping the current cross-encoder as the default" —
+rested on a false premise. The "current cross-encoder" was `jinaai/jina-reranker-v2-base-code`, a
+**non-existent model id**, and `HybridRetriever()` was constructed with no args. The load therefore failed
+on every startup and the pipeline silently fell back to RRF — production reranking had **never run**. So the
+honest default is **RRF-only with reranking off**, which is exactly the measured Wave-0 baseline (ADR-007),
+not a placeholder. This pillar's first delivered slice is a **truthfulness fix** (see log): correct the id,
+make `HybridRetriever` read `[reranker]` (model_id + an explicit `enabled` flag, default `false`), and wire
+Qwen3-Reranker as a real opt-in via the shared `src/reranker.py` scorer. No quality claim is attached —
+reranker lift on CoIR was neutral (cosqa) to negative (codefeedback-mt) under the ADR-007 harness, so it
+stays off pending the internal-repo eval (ADR-008).
 
 ### §S2 — Late interaction (optional research phase)
 
@@ -150,10 +160,28 @@ harness would not catch it.
 - [ ] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. Validate vs Wave-0 baseline.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
 - [ ] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). Validate.
-- [ ] P4: reranker option ([40]/Qwen3) via `[reranker]`; cross-encoder stays default. Validate.
+- [~] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22)** — see note below; off by default, no quality claim. Quality validation still pending the internal-repo eval.
 - [ ] Document the one-time reindex + FAISS dimension implications.
 - [ ] (Optional) S2 late-interaction research spike; ship only on a measured lift.
 - [ ] Resolve **Depended on by**: confirm the parameterized-fusion contract ADR-014 will learn over, before `accepted`.
 
 **Notes:**
 <!-- 2026-06-18: Highest-ROI engine work; no stable_id/schema/MCP changes. Defaults: embedder = jina-code-embeddings-1.5b; fusion = convex w/ normalization (fallback RRF); sparse = BM25 on; late chunking on, summarizer optional; reranker = cross-encoder default. P1 = one-time reindex (vector-dim → FAISS rebuild). Every pillar gated on beating the ADR-007 Wave-0 baseline. -->
+
+**2026-06-22 — P4 truthfulness slice (no quality claim).** Stacked on the ADR-007 dense-baseline branch
+because it reuses that branch's Qwen3 scorer. What shipped:
+- The configured reranker id `jinaai/jina-reranker-v2-base-code` did not exist; `HybridRetriever()` ignored
+  config entirely. Production reranking had been **silently RRF-only via repeated load failures** — graceful
+  on the surface, but an accident dressed as a feature.
+- Introduced `src/config.py` (first `indexer.toml` reader in `src/`; walks up from cwd) and `src/reranker.py`
+  (canonical home for the `Qwen3Reranker` logit-scorer + `load_reranker()` factory). `tools/coir_eval.py` now
+  imports the scorer from `src/reranker.py` — **one implementation**, no duplication.
+- `HybridRetriever` now reads `[reranker]`: `model_id` (default `Qwen/Qwen3-Reranker-0.6B`) + an explicit
+  `enabled` flag (**default `false`**). When off, `_load_reranker()` returns `None` without fetching a model
+  and the pipeline returns the RRF-ranked top-10 — the *intentional, documented* default, not a fallback.
+  When on, `load_reranker()` routes to the Qwen3 scorer or a CrossEncoder by id.
+- Corrected the docstrings in `hybrid_retriever.py`, the `MCPServer` singleton comment, `src/CLAUDE.md`, and
+  the `[reranker]` block in `indexer.toml`. Scope was deliberately reranker-only: the embedder (`core.py`)
+  and summarizer (`summarizer.py`) still hardcode their ids — P1 owns migrating those.
+- Verified: 85/85 tests pass; `HybridRetriever()` constructs with reranking off and fetches no model. NOT
+  verified: any reranker quality lift (there is none on CoIR; that's why it's off). -->

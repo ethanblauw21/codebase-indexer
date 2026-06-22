@@ -39,14 +39,19 @@ dimension = 768
 # the Qwen3 logit-scoring path. (The prior value `jina-reranker-v2-base-code` was
 # a non-existent model id; it is gone.)
 #
-# Read ONLY by the eval harness today. The production retriever
-# (src/hybrid_retriever.py) still hardcodes its own reranker via a CrossEncoder
-# loader and does not read this block — wiring Qwen3 into production is ADR-009
-# (reranker swap), tracked separately.
+# Read by BOTH the eval harness and the production retriever
+# (src/hybrid_retriever.py, via src/config.py + src/reranker.py).
 #
 # No manual pre-download needed: the calibration launcher (run_reranker_calibrate)
 # fetches it online on first run, then the offline long run reuses the cache.
 model_id = "Qwen/Qwen3-Reranker-0.6B"
+
+# Production reranking is OFF by default (ADR-009 §P4). When false, the retriever
+# returns the RRF-ranked top-10 — the measured Wave-0 baseline (ADR-007), not a
+# degraded fallback. Reranker lift on CoIR was neutral (cosqa) to negative
+# (codefeedback-mt); leave this false until the internal-repo eval shows a win.
+# The eval harness ignores this flag — it reranks whenever --config dense+reranker.
+enabled = false
 
 [summarization]
 # Set to false to skip LLM chunk summarization (faster indexing, lower recall).
