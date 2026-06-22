@@ -55,6 +55,18 @@ a migration step, not a schema change.
 P4 rerankers — are HuggingFace weights run **locally** (downloaded once via `huggingface-cli`, then offline
 inference). No cloud API or runtime network call is introduced; the offline guarantee is preserved.
 
+**Status (2026-06-22) — plumbing done, swap deferred.** The config-driven plumbing is implemented:
+`src/core.py` reads `model_id` / `max_seq_length` / `dimension` from `[embeddings]` (was hardcoded), and
+`MultiIndexManager` refuses to load an index whose dimension ≠ the configured embedder (the explicit reindex
+guard). Per the validation contract the **default stays `jina-v2` (768)** — proven — so behavior is unchanged
+until a swap is measured. The actual embedder swap is a **deferred operator step**: set `model_id` + `dimension`
+to `jina-code-embeddings-1.5b`, delete `.code-index`, reindex, then validate dense vs the committed Wave-0
+baseline. **Caveat for that run:** `jina-code-embeddings-1.5b` is a Qwen2.5-Coder-based *decoder* embedder, not
+a BERT like jina-v2 — it likely wants task-specific query/document **instruction prefixes**, so a naive
+`SentenceTransformer.encode` may underperform its ceiling. Check the model card's prompt usage before
+concluding it lost to the baseline. (CoIR validation needs no code change — the harness already reads
+`[embeddings].model_id`.)
+
 ### §P2 — Late chunking
 
 Add a **late-chunking path** ([42]) in `src/ast_chunker.py`: embed the full document context first, then
@@ -157,7 +169,7 @@ harness would not catch it.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. Validate vs Wave-0 baseline.
+- [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22)** — see note below; default still jina-v2. Swap + reindex + dense validation is the deferred operator run.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
 - [ ] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). Validate.
 - [~] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22)** — see note below; off by default, no quality claim. Quality validation still pending the internal-repo eval.
@@ -194,3 +206,20 @@ promptly: `del mat` after `index.add()` and `shards.clear()` after `np.vstack` i
 id_array` after the FAISS add in `src/incremental_indexer.py` (benefits the production indexer too); and HF
 Arrow-buffer frees in `tools/coir_prepare.py`. Pure memory hygiene — no change to any output. The two
 `src/` edits (`reranker.py`, `incremental_indexer.py`) are why this pass is recorded against ADR-009.
+
+**2026-06-22 — P1 embedder plumbing (config-driven; swap deferred to an operator run).** On
+`feature/adr-009-embedder-refresh` (sibling of P3 off the P4 truthfulness branch — touches `core.py`, not
+`hybrid_retriever.py`, so no conflict). What shipped:
+- `src/core.py` now reads `[embeddings]` (`model_id`, `max_seq_length`, `dimension`) via `src/config.py`
+  instead of hardcoding jina-v2/512/768. The embedder load, the tokenizer, the empty-vector dims, and
+  `MultiIndexManager`'s default dimension are all config-driven. Defaults preserve the jina-v2 stack exactly,
+  so an unconfigured repo is byte-identical to before.
+- **Reindex guard:** `MultiIndexManager.load_or_create` raises if an existing FAISS index's dimension ≠ the
+  configured dimension — turning a silent corrupt-state into a loud "delete `.code-index` and reindex" error.
+- Docs: `[embeddings]` comments + `src/CLAUDE.md` now explain the one-time reindex; the candidate model is
+  `jina-code-embeddings-1.5b`.
+- **Deferred (the operator run, when home):** set `model_id` + `dimension` to the new model, delete
+  `.code-index`, reindex, then validate dense vs the committed Wave-0 baseline (or just run
+  `coir_eval --config dense` after pointing `[embeddings]` at the new model — re-embeds CoIR under a new
+  cache tag, no code change). Heed the instruction-prefix caveat in §P1 before judging the result.
+- Verified: 85/85 tests; defaults resolve to jina-v2/768/512; the reindex guard fires on a dimension change.
