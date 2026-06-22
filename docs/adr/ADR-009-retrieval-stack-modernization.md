@@ -185,3 +185,12 @@ because it reuses that branch's Qwen3 scorer. What shipped:
   and summarizer (`summarizer.py`) still hardcode their ids — P1 owns migrating those.
 - Verified: 85/85 tests pass; `HybridRetriever()` constructs with reranking off and fetches no model. NOT
   verified: any reranker quality lift (there is none on CoIR; that's why it's off). -->
+
+**2026-06-22 — memory-hygiene pass (surfaced running the reranker scorecard on a 16 GB machine).** The
+dense+reranker run appeared to hang for ~1 h; investigation found peak memory swap-thrashing on the larger
+corpora. Root cause was redundant multi-GB arrays held alongside FAISS's own copy. Fixed by freeing them
+promptly: `del mat` after `index.add()` and `shards.clear()` after `np.vstack` in `tools/coir_eval.py`
+(plus `gc.collect()` between subtasks); `del` of per-batch tensors in `src/reranker.py`; `del vec_matrix,
+id_array` after the FAISS add in `src/incremental_indexer.py` (benefits the production indexer too); and HF
+Arrow-buffer frees in `tools/coir_prepare.py`. Pure memory hygiene — no change to any output. The two
+`src/` edits (`reranker.py`, `incremental_indexer.py`) are why this pass is recorded against ADR-009.
