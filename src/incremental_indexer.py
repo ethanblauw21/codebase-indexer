@@ -434,6 +434,7 @@ def ingest_file(
 
         id_array: np.ndarray = to_faiss_ids(all_ids)
         faiss_idx.add_with_ids(vec_matrix, id_array)
+        del vec_matrix, id_array  # FAISS copied the data; free embedding matrix per tier
         print(f"  [ingest:{rel_path}] {tier_name}: FAISS add done", flush=True)
 
     print(f"  [ingest:{rel_path}] writing SQLite...", flush=True)

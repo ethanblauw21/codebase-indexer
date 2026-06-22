@@ -96,6 +96,7 @@ class Qwen3Reranker:
                 pair_logits = torch.stack([last[:, self.false_id], last[:, self.true_id]], dim=1)
                 p_yes = torch.nn.functional.log_softmax(pair_logits, dim=1)[:, 1].exp()
             scores.extend(p_yes.tolist())
+            del batch, last, pair_logits, p_yes  # free tensors between batches
         return scores
 
 

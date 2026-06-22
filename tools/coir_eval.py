@@ -27,6 +27,7 @@ Usage:
     python tools/coir_eval.py --limit-queries 50      # smoke / CI tripwire
 """
 import argparse
+import gc
 import json
 import os
 import random
@@ -165,7 +166,9 @@ def embed_corpus(model, task, texts, model_tag):
         with open(tok_path, "w") as f:
             f.write(str(total_tokens))
 
-    return np.vstack(shards), total_tokens
+    stacked = np.vstack(shards)
+    shards.clear()  # release individual shard arrays before returning the merged copy
+    return stacked, total_tokens
 
 
 def count_tokens(model, texts, max_len=None):
@@ -178,6 +181,7 @@ def count_tokens(model, texts, max_len=None):
         enc = tok(texts[i:i + 512], truncation=True, max_length=max_len,
                   add_special_tokens=True)
         total += sum(len(ids) for ids in enc["input_ids"])
+        del enc
     return total
 
 
@@ -261,6 +265,7 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed):
     dim = mat.shape[1]
     index = faiss.IndexFlatIP(dim)
     index.add(mat)
+    del mat  # FAISS copied the data; mat is redundant and can be several GB
 
     id_arr = np.array(corpus_ids)
     rerank_depth = cfg["rerank_depth"] if reranker is not None else K
@@ -486,6 +491,7 @@ def main():
         path = append_baseline(rec)
         records.append(rec)
         print(f"  -> appended to {path}", flush=True)
+        gc.collect()  # reclaim FAISS index, corpus arrays, and embeddings from prior subtask
 
     print_table(records)
 

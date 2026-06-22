@@ -21,6 +21,7 @@ Requires the CoIR datasets to be present in the HF cache (run once online to pul
 thereafter HF_HUB_OFFLINE=1 is honoured).
 """
 import argparse
+import gc
 import json
 import os
 
@@ -77,28 +78,35 @@ def prepare(task: str, split: str) -> None:
 
     # queries.jsonl — only the queries referenced by the graded split
     needed = set(qrels["query_id"])
+    n_qrels = len(qrels)
+    del qrels, qrels_ds  # no longer needed once needed-set is built
+
     qc = load_dataset(f"CoIR-Retrieval/{prefix}-queries-corpus")
     q_rows = [
         {"id": r["_id"], "text": r["text"]}
         for r in qc["queries"]
         if r["_id"] in needed
     ]
+    del needed
+    n_queries = len(q_rows)
     _write_jsonl(os.path.join(out_dir, "queries.jsonl"), q_rows)
+    del q_rows
 
     # corpus.jsonl — only (re)write when missing; the small corpora are committed.
     corpus_path = os.path.join(out_dir, "corpus.jsonl")
     corpus_n = "(exists, kept)"
     if not os.path.exists(corpus_path):
+        corpus_n = str(len(qc["corpus"]))  # capture before the generator consumes qc
         c_rows = (
             {"id": r["_id"], "text": r["text"], "lang": r["language"]}
             for r in qc["corpus"]
         )
         _write_jsonl(corpus_path, c_rows)
-        corpus_n = str(len(qc["corpus"]))
+    del qc
 
     print(
-        f"{task:28} corpus={corpus_n:>14}  queries={len(q_rows):6}  "
-        f"qrels_rows={len(qrels):6}  -> {out_dir}"
+        f"{task:28} corpus={corpus_n:>14}  queries={n_queries:6}  "
+        f"qrels_rows={n_qrels:6}  -> {out_dir}"
     )
 
 
@@ -117,6 +125,7 @@ def main() -> None:
         if task not in HF_PREFIX:
             raise SystemExit(f"unknown task '{task}' (known: {', '.join(HF_PREFIX)})")
         prepare(task, args.split)
+        gc.collect()  # reclaim HF dataset Arrow buffers before next task loads
 
 
 if __name__ == "__main__":
