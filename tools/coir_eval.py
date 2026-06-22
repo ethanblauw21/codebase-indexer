@@ -16,6 +16,7 @@ Metrics (§1):
   Operational  tool-calls/query (=1, schema parity), latency mean/p50/p95
 
 Configs (§8):  dense  (embedder alone)   |   dense+reranker  (cross-encoder rerank)
+               dense+sparse  (BM25 + convex fusion — ADR-009 §P3 validation arm)
 
 Resumable: corpus embeddings are sharded to benchmarks/coir/<task>/_emb/ so an
 interrupted 11h run resumes without re-embedding finished shards (§6 batchability).
@@ -24,6 +25,7 @@ Usage:
     python tools/coir_eval.py                         # Wave-0 core set, dense
     python tools/coir_eval.py --subtasks cosqa        # one subtask
     python tools/coir_eval.py --config dense+reranker # add the rerank pass
+    python tools/coir_eval.py --config dense+sparse   # BM25 + convex fusion (P3)
     python tools/coir_eval.py --limit-queries 50      # smoke / CI tripwire
 """
 import argparse
@@ -48,6 +50,7 @@ _COIR = os.path.join(_BENCH, "coir")
 # with the production retriever). Make it importable from this standalone script.
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 from reranker import load_reranker  # noqa: E402
+from fusion import tokenize, convex_fuse  # noqa: E402
 
 CORE = [
     "cosqa",
@@ -76,11 +79,14 @@ def load_config():
             cfg = tomllib.load(fh)
     emb = cfg.get("embeddings", {})
     rer = cfg.get("reranker", {})
+    ret = cfg.get("retrieval", {})
     ev = cfg.get("eval", {})
     return {
         "model_id": emb.get("model_id", "jinaai/jina-embeddings-v2-base-code"),
         "max_seq_length": emb.get("max_seq_length", 512),
         "reranker_id": rer.get("model_id", "jinaai/jina-reranker-v2-base-code"),
+        "dense_weight": float(ret.get("dense_weight", 0.7)),
+        "sparse_weight": float(ret.get("sparse_weight", 0.3)),
         "budget_tokens": ev.get("budget_tokens", BUDGET_TOKENS),
         "tier_projection": ev.get("tier_projection", "atomic"),
         "rerank_depth": ev.get("rerank_depth", 100),
@@ -244,8 +250,13 @@ def _ci95(values):
     return 1.96 * float(arr.std(ddof=1)) / (arr.size ** 0.5)
 
 
-def run_subtask(task, model, reranker, cfg, limit_queries, seed):
+def run_subtask(task, model, reranker, cfg, limit_queries, seed, config_name="dense"):
     import faiss
+
+    use_sparse = config_name == "dense+sparse"
+    # Both the reranker and the sparse-fusion arms produce a fused ranking measured
+    # PAIRED against dense-only on the same queries (the diff cancels sampling noise).
+    paired = reranker is not None or use_sparse
 
     t0 = time.time()
     corpus_ids, corpus_text, queries, qrels = load_subtask(task)
@@ -256,7 +267,7 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed):
     universe = len(gradable)
     sampled = bool(limit_queries) and limit_queries < universe
     queries = random.Random(seed).sample(gradable, limit_queries) if sampled else gradable
-    tag = "reranked" if reranker is not None else "scored"
+    tag = "reranked" if reranker is not None else ("fused" if use_sparse else "scored")
     extra = f" (sampled from {universe}, seed {seed})" if sampled else ""
     print(f"  [{task}] corpus={len(corpus_ids)} queries={len(queries)}{extra}", flush=True)
 
@@ -265,10 +276,20 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed):
     dim = mat.shape[1]
     index = faiss.IndexFlatIP(dim)
     index.add(mat)
-    del mat  # FAISS copied the data; mat is redundant and can be several GB
+    # The sparse arm needs the corpus matrix for full-corpus cosine (mat @ qvec), so
+    # keep it; otherwise free it (FAISS holds its own copy — can be several GB).
+    if not use_sparse:
+        del mat
+
+    bm25 = None
+    if use_sparse:
+        from rank_bm25 import BM25Okapi
+        print(f"  [{task}] building BM25 over {len(corpus_text)} docs...", flush=True)
+        bm25 = BM25Okapi([tokenize(t) for t in corpus_text])
+        dense_w, sparse_w = cfg["dense_weight"], cfg["sparse_weight"]
 
     id_arr = np.array(corpus_ids)
-    rerank_depth = cfg["rerank_depth"] if reranker is not None else K
+    rerank_depth = cfg["rerank_depth"] if paired else K
 
     per_q = defaultdict(list)        # headline metrics (reranked if reranker, else dense)
     per_q_dense = defaultdict(list)  # dense-only on the SAME queries → paired lift baseline
@@ -287,22 +308,44 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed):
         ts = time.time()
         qvec = model.encode([qtext], normalize_embeddings=True,
                             convert_to_numpy=True).astype(np.float32)
-        _, idx = index.search(qvec, rerank_depth)
-        cand = [int(i) for i in idx[0] if i != -1]
-        dense_cand = cand[:K]
 
-        if reranker is not None:
-            pairs = [[qtext, corpus_text[c]] for c in cand]
-            scores = np.asarray(reranker.predict(pairs, batch_size=32), dtype=float)
-            # STABLE descending sort: ties keep dense order (cand is dense-ranked).
-            # Plain argsort(scores)[::-1] reverses tie groups, sending the dense-#1
-            # doc to the BOTTOM of its tie — catastrophic on CoIR's duplicate docs,
-            # where the reranker scores identical text identically. Stable sort makes
-            # reranking change order only on a real score difference.
-            order = np.argsort(-scores, kind="stable")[:K]
+        if use_sparse:
+            # Dense via FAISS — the SAME tie-breaking the dense baseline uses, so the
+            # paired dense arm reproduces it exactly (CoIR has many duplicate docs with
+            # tied scores; a different tie order silently shifts MRR). BM25 supplies the
+            # sparse signal; we fuse the union of each signal's top-N.
+            D, I = index.search(qvec, rerank_depth)
+            dense_pos = [int(i) for i in I[0] if i != -1]
+            dense_score = {p: float(s) for p, s in zip(dense_pos, D[0])}
+            bm25_all = np.asarray(bm25.get_scores(tokenize(qtext)), dtype=float)
+            bm25_top = np.argsort(-bm25_all, kind="stable")[:rerank_depth]
+            # Union, dense-ranked first so combined-score ties resolve toward dense order.
+            cand = list(dict.fromkeys(dense_pos + [int(i) for i in bm25_top]))
+            # Dense score: FAISS inner product for dense hits; cosine via mat for the
+            # bm25-only candidates FAISS didn't return.
+            dense_arr = [dense_score[c] if c in dense_score else float(mat[c] @ qvec[0])
+                         for c in cand]
+            combined = convex_fuse(dense_arr, [float(bm25_all[c]) for c in cand],
+                                   dense_w, sparse_w)
+            order = np.argsort(-combined, kind="stable")[:K]
             final_cand = [cand[o] for o in order]
+            dense_cand = dense_pos[:K]
         else:
-            final_cand = dense_cand
+            _, idx = index.search(qvec, rerank_depth)
+            cand = [int(i) for i in idx[0] if i != -1]
+            dense_cand = cand[:K]
+            if reranker is not None:
+                pairs = [[qtext, corpus_text[c]] for c in cand]
+                scores = np.asarray(reranker.predict(pairs, batch_size=32), dtype=float)
+                # STABLE descending sort: ties keep dense order (cand is dense-ranked).
+                # Plain argsort(scores)[::-1] reverses tie groups, sending the dense-#1
+                # doc to the BOTTOM of its tie — catastrophic on CoIR's duplicate docs,
+                # where the reranker scores identical text identically. Stable sort makes
+                # reranking change order only on a real score difference.
+                order = np.argsort(-scores, kind="stable")[:K]
+                final_cand = [cand[o] for o in order]
+            else:
+                final_cand = dense_cand
 
         lat.append(time.time() - ts)
         rel = qrels[qid]
@@ -310,7 +353,7 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed):
         ranked_ids = [id_arr[c] for c in final_cand]
         for kk, vv in score_query(ranked_ids, rel).items():
             per_q[kk].append(vv)
-        if reranker is not None:
+        if paired:
             for kk, vv in score_query([id_arr[c] for c in dense_cand], rel).items():
                 per_q_dense[kk].append(vv)
         n += 1
@@ -341,11 +384,12 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed):
     lat_arr = np.array(lat)
     record = {
         "subtask": task,
-        "config": "dense+reranker" if reranker is not None else "dense",
+        "config": config_name,
         "tier_projection": cfg["tier_projection"],
         "model_id": cfg["model_id"],
         "reranker_id": cfg["reranker_id"] if reranker is not None else None,
-        "rerank_depth": rerank_depth if reranker is not None else None,
+        "fusion_weights": ({"dense": dense_w, "sparse": sparse_w} if use_sparse else None),
+        "rerank_depth": rerank_depth if paired else None,
         "git_sha": git_sha(),
         "corpus_docs": len(corpus_ids),
         "n_queries": n,
@@ -372,10 +416,10 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed):
         "wall_clock_s": round(time.time() - t0, 1),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
     }
-    if reranker is not None:
-        # Paired comparison: dense-only vs reranked on the SAME sampled queries.
-        # The per-query difference cancels sampling noise, so the lift CI stays
-        # tight even when n is small — that's why the headline reranker number is
+    if paired:
+        # Paired comparison: dense-only vs the fused arm (reranker or sparse) on the
+        # SAME queries. The per-query difference cancels sampling noise, so the lift
+        # CI stays tight even when n is small — that's why the headline lift is
         # trustworthy at n=500 despite the wider absolute-score CI.
         dense_quality = {k: float(np.mean(per_q_dense[k])) for k in per_q_dense}
         diffs = {k: np.asarray(per_q[k]) - np.asarray(per_q_dense[k]) for k in per_q}
@@ -422,7 +466,7 @@ def print_table(records):
     print("=" * 110)
 
     # Sampling provenance + 95% CIs + paired reranker lift (only prints when relevant).
-    print("  Sampling & confidence (± = 95% CI half-width; lift is paired dense→reranked):")
+    print("  Sampling & confidence (± = 95% CI half-width; lift is paired dense->fused):")
     for r in records:
         label = f"{r['subtask']}/{r['config']}"
         nq = r.get("n_queries", 0)
@@ -436,7 +480,8 @@ def print_table(records):
               f"ndcg@10={q.get('ndcg@10', 0):.4f}±{ci.get('ndcg@10', 0):.4f}")
         if r.get("lift"):
             lf, lci = r["lift"], r.get("lift_ci95", {})
-            print(f"    {'':<{w}}   reranker lift: "
+            lift_label = "sparse lift" if r.get("config") == "dense+sparse" else "reranker lift"
+            print(f"    {'':<{w}}   {lift_label}: "
                   f"mrr@10={lf.get('mrr@10', 0):+.4f}±{lci.get('mrr@10', 0):.4f}, "
                   f"ndcg@10={lf.get('ndcg@10', 0):+.4f}±{lci.get('ndcg@10', 0):.4f} (paired)")
     print("=" * 110)
@@ -453,7 +498,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--subtasks", default=",".join(CORE),
                     help="comma-separated subtasks (default: Wave-0 core set)")
-    ap.add_argument("--config", choices=["dense", "dense+reranker"], default="dense")
+    ap.add_argument("--config", choices=["dense", "dense+reranker", "dense+sparse"],
+                    default="dense")
     ap.add_argument("--limit-queries", type=int, default=0,
                     help="cap queries/subtask via SEEDED RANDOM sample (0=all). Overrides "
                          "[eval].rerank_sample_queries; use for smoke/CI tripwire.")
@@ -487,7 +533,7 @@ def main():
     records = []
     for task in tasks:
         print(f"\n=== {task} [{args.config}] ===", flush=True)
-        rec = run_subtask(task, model, reranker, cfg, limit, seed)
+        rec = run_subtask(task, model, reranker, cfg, limit, seed, config_name=args.config)
         path = append_baseline(rec)
         records.append(rec)
         print(f"  -> appended to {path}", flush=True)

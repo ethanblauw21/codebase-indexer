@@ -49,6 +49,7 @@ from core import DocumentStore, MultiIndexManager, embed
 from db import CodeDB
 from category_tagger import classify_query
 from config import load_indexer_config
+from fusion import tokenize, convex_fuse
 from reranker import load_reranker
 from stable_id import stable_id
 
@@ -127,6 +128,12 @@ class HybridRetriever:
         Whether to rerank at all. ``None`` (default) reads ``[reranker].enabled``
         from indexer.toml (default ``False``). When ``False`` the pipeline returns
         the RRF-ranked top-10 — the honest, measured default (ADR-007 / ADR-009 §P4).
+    fusion_mode :
+        Dense/sparse fusion. ``None`` (default) reads ``[retrieval].fusion_mode``
+        from indexer.toml (default ``"rrf"``). ``"rrf"`` = dense-only multi-tier RRF
+        (no BM25 built). ``"convex"`` = score-normalized weighted combination of
+        dense + BM25 sparse signal (ADR-009 §P3); builds an in-memory BM25 index at
+        construction. Off by default until it beats the Wave-0 baseline.
     device :
         Torch device string passed to the reranker: ``"cpu"``, ``"cuda"``, ``"mps"``.
         Default: ``"cpu"``.
@@ -145,6 +152,7 @@ class HybridRetriever:
         db_path: str = ".code-index/graph.db",
         reranker_model: Optional[str] = None,
         reranker_enabled: Optional[bool] = None,
+        fusion_mode: Optional[str] = None,
         device: str = "cpu",
     ) -> None:
         self._index_manager = MultiIndexManager(base_dir=index_dir)
@@ -154,9 +162,11 @@ class HybridRetriever:
         self._doc_store = DocumentStore(db_path)
         self._db = CodeDB(db_path)
 
+        cfg = load_indexer_config()
+
         # Reranking is config-driven and OFF by default. Explicit constructor args
         # win; otherwise we read [reranker] from indexer.toml (empty if absent).
-        rer_cfg = load_indexer_config().get("reranker", {})
+        rer_cfg = cfg.get("reranker", {})
         self._reranker_enabled: bool = (
             reranker_enabled if reranker_enabled is not None
             else bool(rer_cfg.get("enabled", False))
@@ -169,8 +179,52 @@ class HybridRetriever:
         self._reranker: Optional[object] = None
         self._reranker_failed: bool = False
 
+        # Fusion is config-driven and defaults to "rrf" (the measured Wave-0
+        # behavior, ADR-009 §P3). "convex" adds a BM25 sparse signal — built once
+        # here from the in-memory chunk corpus (RAM/startup cost; skipped for "rrf").
+        ret_cfg = cfg.get("retrieval", {})
+        self._fusion_mode: str = (fusion_mode or ret_cfg.get("fusion_mode", "rrf")).lower()
+        self._dense_weight: float = float(ret_cfg.get("dense_weight", 0.7))
+        self._sparse_weight: float = float(ret_cfg.get("sparse_weight", 0.3))
+        self._bm25: Optional[object] = None
+        self._bm25_fids: list[int] = []
+        self._bm25_pos: dict[int, int] = {}   # faiss_id → row in the BM25 corpus
+        if self._fusion_mode == "convex":
+            self._build_bm25()
+
         # Per-session import-corroboration cache: target_file → set of importer files
         self._import_cache: dict[str, set[str]] = {}
+
+    def _build_bm25(self) -> None:
+        """Build an in-memory BM25 index over every chunk in the DocumentStore.
+
+        The store already holds all chunk payloads in memory, so this is a tokenize
+        pass, not new I/O. Falls back to dense-only (``_bm25=None``) if rank-bm25 is
+        missing or the corpus is empty, so a misconfigured convex mode degrades to
+        RRF rather than crashing.
+        """
+        try:
+            from rank_bm25 import BM25Okapi  # type: ignore[import]
+        except Exception as exc:
+            logger.warning(
+                "rank-bm25 unavailable (%s: %s); falling back to RRF (dense-only).",
+                type(exc).__name__, exc,
+            )
+            self._fusion_mode = "rrf"
+            return
+
+        corpus, fids = [], []
+        for fid_str, meta in self._doc_store.docs.items():
+            fids.append(int(fid_str))
+            corpus.append(tokenize(meta.get("text", "")))
+        if not corpus:
+            logger.warning("Empty chunk corpus; convex fusion falls back to RRF.")
+            self._fusion_mode = "rrf"
+            return
+        self._bm25 = BM25Okapi(corpus)
+        self._bm25_fids = fids
+        self._bm25_pos = {fid: i for i, fid in enumerate(fids)}
+        logger.info("Built BM25 sparse index over %d chunks (convex fusion).", len(fids))
 
     # ------------------------------------------------------------------
     # Context-manager support
@@ -205,12 +259,14 @@ class HybridRetriever:
     # ------------------------------------------------------------------
 
     def _semantic_search(self, query: str, k: int) -> list[RetrievedChunk]:
-        """Embed `query` and return the top-k chunks via three-tier RRF fusion.
+        """Embed `query` and return the top-k chunks via the configured fusion.
 
-        All three FAISS tiers are searched; their ranked lists are merged using
-        Reciprocal Rank Fusion (k=60).  Tier-1 AST chunks carry FQNs and are
-        preferred as graph traversal seeds; tier-2/3 chunks expand the rerank pool
-        with component- and architectural-level context.
+        All three FAISS tiers are searched and merged via Reciprocal Rank Fusion
+        (k=60) into the dense signal.  When ``fusion_mode == "convex"`` a BM25 sparse
+        signal is combined in (score-normalized weighted sum, ADR-009 §P3); otherwise
+        the dense RRF ranking is returned as-is (the default).  Tier-1 AST chunks
+        carry FQNs and are preferred as graph traversal seeds; tier-2/3 chunks expand
+        the rerank pool with component- and architectural-level context.
         """
         vec = embed(query)
         vec = np.array([vec], dtype=np.float32)
@@ -231,14 +287,20 @@ class HybridRetriever:
         if not fused:
             return []
 
+        # Dense-only RRF (default) or convex(dense, BM25 sparse) when enabled.
+        if self._fusion_mode == "convex" and self._bm25 is not None:
+            scores = self._convex_scores(query, fused, k)
+        else:
+            scores = fused
+
         results: list[RetrievedChunk] = []
-        for fid in sorted(fused, key=lambda x: fused[x], reverse=True)[:k]:
+        for fid in sorted(scores, key=lambda x: scores[x], reverse=True)[:k]:
             meta = self._doc_store.get(fid)
             if meta is None:
                 continue
             results.append(RetrievedChunk(
                 faiss_id=fid,
-                score=fused[fid],
+                score=scores[fid],
                 file=meta.get("file", ""),
                 scope=meta.get("scope", ""),
                 tier=meta.get("tier", _TIER1_NAME),
@@ -248,6 +310,27 @@ class HybridRetriever:
                 corroborated=True,  # semantic hits are always considered corroborated
             ))
         return results
+
+    def _convex_scores(self, query: str, dense_rrf: dict[int, float],
+                       k: int) -> dict[int, float]:
+        """Fuse the dense RRF signal with BM25 sparse scores (ADR-009 §P3).
+
+        The candidate set is the UNION of the dense RRF hits and BM25's own top-k,
+        so the sparse signal can surface exact-identifier matches dense retrieval
+        missed entirely. Each signal is min-max normalized over that candidate set,
+        then combined as a weighted sum (`convex_fuse`).
+        """
+        bm25_scores = self._bm25.get_scores(tokenize(query))
+        bm25_top = np.argsort(bm25_scores)[::-1][:k]
+        cand = list(set(dense_rrf) | {self._bm25_fids[i] for i in bm25_top})
+        dense_arr = [dense_rrf.get(fid, 0.0) for fid in cand]
+        sparse_arr = [
+            bm25_scores[self._bm25_pos[fid]] if fid in self._bm25_pos else 0.0
+            for fid in cand
+        ]
+        combined = convex_fuse(dense_arr, sparse_arr, self._dense_weight,
+                               self._sparse_weight)
+        return {fid: float(c) for fid, c in zip(cand, combined)}
 
     # ------------------------------------------------------------------
     # Step 2 — Structural expansion

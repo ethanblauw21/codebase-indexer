@@ -53,6 +53,27 @@ model_id = "Qwen/Qwen3-Reranker-0.6B"
 # The eval harness ignores this flag — it reranks whenever --config dense+reranker.
 enabled = false
 
+[retrieval]
+# Fusion of the dense (multi-tier FAISS RRF) and sparse (BM25) retrieval signals
+# in src/hybrid_retriever.py (ADR-009 §P3).
+#
+#   "rrf"    — dense-only multi-tier RRF. The DEFAULT and the measured Wave-0
+#              behavior (ADR-007); no BM25 index is built, so zero added cost.
+#   "convex" — score-normalized weighted combination of dense + BM25 sparse signal.
+#              Catches exact-identifier / rare-token matches dense retrieval blurs.
+#              Builds an in-memory BM25 index over all chunks at startup (RAM +
+#              startup cost that scales with corpus size).
+#
+# Stays "rrf" until the ADR-007 harness shows convex beats the dense baseline
+# (ADR-009 validation contract — off by default until a measured lift).
+fusion_mode = "rrf"
+
+# Weights for the convex combination (used only when fusion_mode = "convex").
+# Expressed as a ratio — renormalized to sum to 1 internally. These are the
+# parameters ADR-014 will later learn from usage.
+dense_weight = 0.7
+sparse_weight = 0.3
+
 [summarization]
 # Set to false to skip LLM chunk summarization (faster indexing, lower recall).
 enabled = true

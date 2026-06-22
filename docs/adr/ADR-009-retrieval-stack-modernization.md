@@ -79,6 +79,11 @@ as a fallback). Sparse signal catches exact-identifier and rare-token matches th
 convex fusion with normalization lets the two signals be **weighted** — which is the hook ADR-014 later
 learns. New `[retrieval]` config block controls fusion mode and weights.
 
+**Correction (2026-06-22).** The "convex as the default, RRF as fallback" framing is inverted to honor this
+ADR's own **validation contract**: convex ships as a config *option* with `fusion_mode = "rrf"` the **default**
+until a measured lift proves it — the same discipline applied to the reranker in §P4 (newer is not enabled
+until it beats the baseline). Convex flips to default only when the ADR-007 harness shows it wins (see log).
+
 ### §P4 — Reranker option
 
 Add a code-specialized reranker option ([40] CoRNStack / Qwen3-Reranker) selectable via `indexer.toml`
@@ -159,7 +164,7 @@ harness would not catch it.
 
 - [ ] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. Validate vs Wave-0 baseline.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
-- [ ] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). Validate.
+- [~] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22)** — see note below; off by default (`rrf`). Full-sweep validation pending (cosqa directional: small regression, expected).
 - [~] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22)** — see note below; off by default, no quality claim. Quality validation still pending the internal-repo eval.
 - [ ] Document the one-time reindex + FAISS dimension implications.
 - [ ] (Optional) S2 late-interaction research spike; ship only on a measured lift.
@@ -194,3 +199,24 @@ promptly: `del mat` after `index.add()` and `shards.clear()` after `np.vstack` i
 id_array` after the FAISS add in `src/incremental_indexer.py` (benefits the production indexer too); and HF
 Arrow-buffer frees in `tools/coir_prepare.py`. Pure memory hygiene — no change to any output. The two
 `src/` edits (`reranker.py`, `incremental_indexer.py`) are why this pass is recorded against ADR-009.
+
+**2026-06-22 — P3 sparse + convex fusion (implemented, off by default).** On `feature/adr-009-bm25-fusion`,
+stacked on the P4 truthfulness branch (both touch `hybrid_retriever.py`). What shipped:
+- `src/fusion.py` (new) — the single home for the tokenizer + `minmax_norm` + `convex_fuse`, shared by the
+  production retriever and the eval harness so "convex fusion" means the same thing in both.
+- `src/hybrid_retriever.py` — reads `[retrieval]` (`fusion_mode` + `dense_weight`/`sparse_weight`). When
+  `convex`, builds a `BM25Okapi` index over the in-memory chunk corpus at construction and fuses the union of
+  dense-RRF and BM25 top-k via `convex_fuse`; degrades to RRF if `rank-bm25` is missing or the corpus is empty.
+- `indexer.toml [retrieval]` (default `fusion_mode = "rrf"`, weights 0.7/0.3) + `rank-bm25` in requirements.
+- `tools/coir_eval.py` — new `dense+sparse` config (the §validation arm): BM25 over the CoIR corpus, dense via
+  FAISS (same tie-breaking as the dense baseline — critical, CoIR's duplicate docs otherwise shift MRR by tie
+  order alone), convex-fused, graded paired vs dense with CIs.
+- **Directional result (cosqa, n=500):** sparse lift mrr@10 = **−0.034 ± 0.028** (CI excludes 0) — a small
+  but real regression, the *expected* worst case (NL→code paraphrase, where lexical match is least helpful).
+  This is one subtask; the full sweep (CSN/stackoverflow, where exact identifiers matter) is pending and will
+  decide whether convex ever flips to default. Verified: 85/85 tests; production convex path constructs,
+  builds BM25, and ranks correctly (graceful RRF fallback on an empty index).
+- **Known caveat (flagged, not addressed):** convex scores are in [0,1] vs RRF's ~0.01–0.05, so the
+  structural-expansion thresholds and `_CATEGORY_BOOST` (tuned for the RRF scale) may need retuning when convex
+  is enabled in production. Acceptable while it's off-by-default and validated on the flat CoIR corpus; the
+  internal-repo eval (ADR-019) is where the production-scale interaction gets measured.
