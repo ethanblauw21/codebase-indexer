@@ -223,3 +223,13 @@ Arrow-buffer frees in `tools/coir_prepare.py`. Pure memory hygiene — no change
   `coir_eval --config dense` after pointing `[embeddings]` at the new model — re-embeds CoIR under a new
   cache tag, no code change). Heed the instruction-prefix caveat in §P1 before judging the result.
 - Verified: 85/85 tests; defaults resolve to jina-v2/768/512; the reindex guard fires on a dimension change.
+
+**2026-06-23 — P1 validation is impractical on CPU; deferred to ADR-020 (GPU).** Measured
+`jina-code-embeddings-1.5b` (Qwen2 decoder, 1536-dim) embedding on this CPU at **~1 s/doc** (~64–67 s per
+batch of 64): cosqa alone ≈ ~6 h, the full CoIR core set (452,082 docs) ≈ **~5.5 days** (a floor). A 1.5B
+decoder is ~9–10× the params of jina-v2, so the CPU path cannot run the embedder-swap validation at a usable
+cadence. The model loads cleanly via SentenceTransformer (its own pooling config; 1536-dim normalized), but
+the harness still applies no task **instruction prompts**, so a CPU run would also be a quality *floor*, not
+a verdict. **Decision: defer the actual P1 swap/validation behind a GPU path — see [[ADR-020]]** (AMD RX
+6700 XT via DirectML / WSL2+ROCm). The P1 *plumbing* above stays committed and reversible; only the
+multi-day embed run waits on GPU. The 1.5b weights are already in the HF cache for when it resumes.
