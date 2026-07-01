@@ -50,6 +50,14 @@ _BASELINE = os.path.join(_REAL, "real_repo_baseline.jsonl")
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 from eval_common import score_query, ci95 as _ci95, git_sha as _git_sha, append_baseline as _append_baseline  # noqa: E402
 
+# The reranker (arm C) is loaded inside each HybridRetriever construction — i.e. once
+# per repo — and on CPU that reload dominates wall-clock. Cache the load so the 0.6B
+# model is fetched once and reused across every repo/arm in a run. Patch the name in
+# hybrid_retriever's namespace (where its _load_reranker resolves it).
+import functools  # noqa: E402
+import hybrid_retriever as _hr  # noqa: E402
+_hr.load_reranker = functools.lru_cache(maxsize=4)(_hr.load_reranker)
+
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8")
