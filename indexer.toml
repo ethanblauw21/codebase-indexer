@@ -130,6 +130,15 @@ rerank_depth = 100
 # 500/subtask x 5 x depth 100 ~= 21 h; set to 0 for the full multi-day run.
 rerank_sample_queries = 500
 
+# §P3 sparse-fusion feasibility — the dense+sparse arm scores the FULL BM25 corpus in
+# pure Python on every query (rank_bm25), so per-query cost scales with corpus size:
+# ~16 s/query at 66k docs, more at 280k (CSN-python). Running all ~15k CSN-python queries
+# is a multi-day CPU job. Like the reranker, we score a SEEDED RANDOM sample of this many
+# gradable queries per subtask (0 = all). The sparse lift is measured PAIRED on the same
+# sampled queries, so the comparison stays precise (tight lift CI) even at n=500. The dense
+# baseline is unaffected (always full precision). Shares sample_seed below for reproducibility.
+sparse_sample_queries = 500
+
 # Seed for the reranker query sample — fixes which queries are drawn so a re-run under
 # the same stack reproduces the exact baseline (§6 comparability).
 sample_seed = 13

@@ -91,6 +91,7 @@ def load_config():
         "tier_projection": ev.get("tier_projection", "atomic"),
         "rerank_depth": ev.get("rerank_depth", 100),
         "rerank_sample_queries": ev.get("rerank_sample_queries", 0),
+        "sparse_sample_queries": ev.get("sparse_sample_queries", 0),
         "sample_seed": ev.get("sample_seed", 13),
     }
 
@@ -523,12 +524,16 @@ def main():
         reranker = load_reranker(cfg["reranker_id"])
 
     seed = args.seed if args.seed is not None else cfg["sample_seed"]
-    # Sampling is opt-in: an explicit --limit-queries wins; otherwise the reranker
-    # config samples per [eval].rerank_sample_queries (feasibility), while the dense
+    # Sampling is opt-in: an explicit --limit-queries wins; otherwise the two heavy
+    # arms self-sample for feasibility — the reranker per [eval].rerank_sample_queries,
+    # the BM25 sparse-fusion arm per [eval].sparse_sample_queries (its per-query cost is
+    # a full-corpus BM25 scan in pure Python, so large corpora are CPU-bound). The dense
     # baseline stays full-precision (all queries) unless the user caps it explicitly.
     limit = args.limit_queries
     if limit == 0 and args.config == "dense+reranker":
         limit = cfg["rerank_sample_queries"]
+    elif limit == 0 and args.config == "dense+sparse":
+        limit = cfg["sparse_sample_queries"]
 
     records = []
     for task in tasks:
