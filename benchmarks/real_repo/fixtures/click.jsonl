@@ -1,0 +1,10 @@
+{"id": "click-echo", "query": "print a message to stdout while handling color codes and stream encoding", "gold": ["src/click/utils.py::echo"], "feature": "py/output", "class": "semantic"}
+{"id": "click-prompt", "query": "interactively ask the user to type a value at the terminal", "gold": ["src/click/termui.py::prompt"], "feature": "py/interactive-input", "class": "semantic"}
+{"id": "click-progressbar", "query": "show a progress bar while iterating over a long sequence of items", "gold": ["src/click/termui.py::progressbar"], "feature": "py/progress", "class": "semantic"}
+{"id": "click-confirm", "query": "ask the user a yes or no confirmation question before continuing", "gold": ["src/click/termui.py::confirm"], "feature": "py/interactive-input", "class": "semantic"}
+{"id": "click-option-decorator", "query": "decorator that attaches a named command line option to a command function", "gold": ["src/click/decorators.py::option"], "feature": "py/decorator", "class": "semantic"}
+{"id": "click-argument-decorator", "query": "decorator that adds a positional argument to a command", "gold": ["src/click/decorators.py::argument"], "feature": "py/decorator", "class": "semantic"}
+{"id": "click-command", "query": "the core class representing a single CLI command that parses parameters and invokes its callback", "gold": ["src/click/core.py::Command"], "feature": "py/class", "class": "semantic"}
+{"id": "click-group", "query": "a command that contains and dispatches to multiple named subcommands", "gold": ["src/click/core.py::Group"], "feature": "py/class", "class": "semantic"}
+{"id": "click-option-class", "query": "a parameter passed to a command as an optional named flag with a value", "gold": ["src/click/core.py::Option"], "feature": "py/class", "class": "semantic"}
+{"id": "click-secho", "query": "secho", "gold": ["src/click/termui.py::secho"], "feature": "py/exact-identifier", "class": "semantic"}

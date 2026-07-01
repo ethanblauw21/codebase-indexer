@@ -1,0 +1,7 @@
+{"id": "spd-set-level", "query": "set the minimum severity level for a logger", "gold": ["logger::set_level(level::level_enum)"], "feature": "cpp/config", "class": "semantic"}
+{"id": "spd-flush", "query": "flush buffered log messages to the sinks immediately", "gold": ["logger::flush()"], "feature": "cpp/io", "class": "semantic"}
+{"id": "spd-set-pattern", "query": "set the formatting pattern used to render log messages", "gold": ["logger::set_pattern(std::string, pattern_time_type)"], "feature": "cpp/config", "class": "semantic"}
+{"id": "spd-registry-instance", "query": "get the singleton registry that manages all named loggers", "gold": ["spdlog::details::registry::instance()"], "feature": "cpp/singleton", "class": "semantic"}
+{"id": "spd-registry-dropall", "query": "remove and unregister every logger from the global registry", "gold": ["spdlog::details::registry::drop_all()"], "feature": "cpp/registry", "class": "semantic"}
+{"id": "spd-sink-it", "query": "hand a formatted log message off to each configured sink of an async logger", "gold": ["spdlog::async_logger::sink_it_(const details::log_msg&)"], "feature": "cpp/dispatch", "class": "semantic"}
+{"id": "spd-sink-it-exact", "query": "sink_it_", "gold": ["spdlog::async_logger::sink_it_(const details::log_msg&)"], "feature": "cpp/exact-identifier", "class": "semantic"}
