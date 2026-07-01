@@ -20,14 +20,26 @@ index_dir = ".code-index"
 # rules_file = "rules.yaml"
 
 [embeddings]
-# HuggingFace model ID for code embeddings (Jina v2 — multi-language).
+# HuggingFace model ID for code embeddings. Read by src/core.py (ADR-009 §P1) and
+# by the eval harness, so a single change here swaps the embedder everywhere.
+#
+# CHANGING THE EMBEDDER IS A ONE-TIME REINDEX. A new model usually has a different
+# vector dimension; the FAISS indexes are created at a fixed dimension, so you must
+# update `dimension` to match AND rebuild: delete .code-index and run code-indexer.
+# stable_ids are model-independent, so the rebuild is recompute-vectors-only (no
+# schema change). core.py refuses to load an index whose dimension no longer matches.
+#
+# Default (proven Wave-0 baseline): jinaai/jina-embeddings-v2-base-code (768 dims).
+# ADR-009 §P1 candidate: jina-code-embeddings-1.5b (set model_id + dimension, then
+# reindex, then validate dense vs the committed baseline before keeping it).
 model_id = "jinaai/jina-embeddings-v2-base-code"
 
 # Maximum sequence length fed to the embedding model.
 # Reduce if you hit OOM on GPUs with less than 8 GB VRAM.
 max_seq_length = 512
 
-# Output embedding dimension (must match the model; do not change).
+# Output embedding dimension. MUST match the model AND the built FAISS indexes;
+# change it together with model_id and reindex (see above).
 dimension = 768
 
 [reranker]

@@ -55,6 +55,18 @@ a migration step, not a schema change.
 P4 rerankers — are HuggingFace weights run **locally** (downloaded once via `huggingface-cli`, then offline
 inference). No cloud API or runtime network call is introduced; the offline guarantee is preserved.
 
+**Status (2026-06-22) — plumbing done, swap deferred.** The config-driven plumbing is implemented:
+`src/core.py` reads `model_id` / `max_seq_length` / `dimension` from `[embeddings]` (was hardcoded), and
+`MultiIndexManager` refuses to load an index whose dimension ≠ the configured embedder (the explicit reindex
+guard). Per the validation contract the **default stays `jina-v2` (768)** — proven — so behavior is unchanged
+until a swap is measured. The actual embedder swap is a **deferred operator step**: set `model_id` + `dimension`
+to `jina-code-embeddings-1.5b`, delete `.code-index`, reindex, then validate dense vs the committed Wave-0
+baseline. **Caveat for that run:** `jina-code-embeddings-1.5b` is a Qwen2.5-Coder-based *decoder* embedder, not
+a BERT like jina-v2 — it likely wants task-specific query/document **instruction prefixes**, so a naive
+`SentenceTransformer.encode` may underperform its ceiling. Check the model card's prompt usage before
+concluding it lost to the baseline. (CoIR validation needs no code change — the harness already reads
+`[embeddings].model_id`.)
+
 ### §P2 — Late chunking
 
 Add a **late-chunking path** ([42]) in `src/ast_chunker.py`: embed the full document context first, then
@@ -162,7 +174,7 @@ harness would not catch it.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. Validate vs Wave-0 baseline.
+- [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22)** — see note below; default still jina-v2. Swap + reindex + dense validation is the deferred operator run.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
 - [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR, stays off (`rrf`).** No subtask showed positive paired lift (cosqa & CSN-js significant regressions; stackoverflow & CSN-python neutral); revisit under ADR-014 (weight-learning) / ADR-019 (literal-query eval). See log below.
 - [~] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22)** — see note below; off by default, no quality claim. Quality validation still pending the internal-repo eval.
@@ -220,6 +232,33 @@ stacked on the P4 truthfulness branch (both touch `hybrid_retriever.py`). What s
   structural-expansion thresholds and `_CATEGORY_BOOST` (tuned for the RRF scale) may need retuning when convex
   is enabled in production. Acceptable while it's off-by-default and validated on the flat CoIR corpus; the
   internal-repo eval (ADR-019) is where the production-scale interaction gets measured.
+
+**2026-06-22 — P1 embedder plumbing (config-driven; swap deferred to an operator run).** On
+`feature/adr-009-embedder-refresh` (sibling of P3 off the P4 truthfulness branch — touches `core.py`, not
+`hybrid_retriever.py`, so no conflict). What shipped:
+- `src/core.py` now reads `[embeddings]` (`model_id`, `max_seq_length`, `dimension`) via `src/config.py`
+  instead of hardcoding jina-v2/512/768. The embedder load, the tokenizer, the empty-vector dims, and
+  `MultiIndexManager`'s default dimension are all config-driven. Defaults preserve the jina-v2 stack exactly,
+  so an unconfigured repo is byte-identical to before.
+- **Reindex guard:** `MultiIndexManager.load_or_create` raises if an existing FAISS index's dimension ≠ the
+  configured dimension — turning a silent corrupt-state into a loud "delete `.code-index` and reindex" error.
+- Docs: `[embeddings]` comments + `src/CLAUDE.md` now explain the one-time reindex; the candidate model is
+  `jina-code-embeddings-1.5b`.
+- **Deferred (the operator run, when home):** set `model_id` + `dimension` to the new model, delete
+  `.code-index`, reindex, then validate dense vs the committed Wave-0 baseline (or just run
+  `coir_eval --config dense` after pointing `[embeddings]` at the new model — re-embeds CoIR under a new
+  cache tag, no code change). Heed the instruction-prefix caveat in §P1 before judging the result.
+- Verified: 85/85 tests; defaults resolve to jina-v2/768/512; the reindex guard fires on a dimension change.
+
+**2026-06-23 — P1 validation is impractical on CPU; deferred to ADR-020 (GPU).** Measured
+`jina-code-embeddings-1.5b` (Qwen2 decoder, 1536-dim) embedding on this CPU at **~1 s/doc** (~64–67 s per
+batch of 64): cosqa alone ≈ ~6 h, the full CoIR core set (452,082 docs) ≈ **~5.5 days** (a floor). A 1.5B
+decoder is ~9–10× the params of jina-v2, so the CPU path cannot run the embedder-swap validation at a usable
+cadence. The model loads cleanly via SentenceTransformer (its own pooling config; 1536-dim normalized), but
+the harness still applies no task **instruction prompts**, so a CPU run would also be a quality *floor*, not
+a verdict. **Decision: defer the actual P1 swap/validation behind a GPU path — see [[ADR-020]]** (AMD RX
+6700 XT via DirectML / WSL2+ROCm). The P1 *plumbing* above stays committed and reversible; only the
+multi-day embed run waits on GPU. The 1.5b weights are already in the HF cache for when it resumes.
 
 **2026-07-01 — P3 full-sweep result: convex fusion REJECTED on CoIR (stays off).** Completed the `dense+sparse`
 sweep across all four measurable subtasks. The two large corpora (CSN-python/js) were CPU-bound on the pure-Python

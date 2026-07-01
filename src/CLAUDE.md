@@ -72,7 +72,9 @@ huggingface-cli download jinaai/jina-reranker-v2-base-code     # reranker (~500 
 huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct      # summarizer (~3 GB, optional)
 ```
 
-Model IDs live in `indexer.toml` (`[embeddings]`, `[reranker]`, `[summarization]`). Today only the **reranker** id is actually read from config at runtime (`src/config.py` → `HybridRetriever`); the embedder (`core.py`) and summarizer (`summarizer.py`) still hardcode their ids and have not yet been migrated to read the config (tracked under ADR-009). The reranker and summarizer are both optional — the indexer degrades gracefully without them. **Reranking is off by default** (`[reranker].enabled = false`): the retriever returns the RRF-ranked top-10, which is the measured Wave-0 baseline (ADR-007), not a fallback.
+Model IDs live in `indexer.toml` (`[embeddings]`, `[reranker]`, `[summarization]`) and are read from config at runtime: the **embedder** (`src/core.py`, ADR-009 §P1 — `model_id` + `max_seq_length` + `dimension`) and the **reranker** (`src/config.py` → `HybridRetriever`). The **summarizer** (`summarizer.py`) still hardcodes its id (not yet migrated). The reranker and summarizer are both optional — the indexer degrades gracefully without them. **Reranking is off by default** (`[reranker].enabled = false`): the retriever returns the RRF-ranked top-10, which is the measured Wave-0 baseline (ADR-007), not a fallback.
+
+**Changing the embedder is a one-time reindex** (ADR-009 §P1): a new model usually has a different vector `dimension`, so update `model_id` + `dimension` together, delete `.code-index`, and rerun `code-indexer`. `stable_id`s are model-independent, so it is recompute-vectors-only; `core.py` refuses to load an index whose dimension no longer matches the configured embedder.
 
 The pre-download `huggingface-cli` line for the reranker above lists the configured model; the prior `jinaai/jina-reranker-v2-base-code` id was a non-existent model and has been replaced by `Qwen/Qwen3-Reranker-0.6B`.
 

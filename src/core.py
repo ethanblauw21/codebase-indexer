@@ -12,6 +12,46 @@ warnings.filterwarnings("ignore")
 from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
 
+from config import load_indexer_config
+
+# ---------------------------------------------------------------------------
+# Embedder configuration (ADR-009 §P1) — config-driven via [embeddings].
+#
+# Read once and cached. Defaults preserve the historical jina-v2 stack exactly
+# (model id, 512 max length, 768 dims), so an unconfigured repo behaves as before.
+# Swapping the embedder is a model_id + dimension change in indexer.toml followed
+# by a ONE-TIME reindex (vector dimensionality changes → FAISS rebuild; stable_ids
+# are unchanged so it is recompute-vectors-only). MultiIndexManager guards against
+# loading an index whose dimension no longer matches the configured embedder.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_MODEL_ID = "jinaai/jina-embeddings-v2-base-code"
+_DEFAULT_MAX_SEQ_LENGTH = 512
+_DEFAULT_DIMENSION = 768
+
+_emb_cfg_cache = None
+
+
+def _emb_cfg() -> dict:
+    global _emb_cfg_cache
+    if _emb_cfg_cache is None:
+        _emb_cfg_cache = load_indexer_config().get("embeddings", {})
+    return _emb_cfg_cache
+
+
+def embed_model_id() -> str:
+    return _emb_cfg().get("model_id", _DEFAULT_MODEL_ID)
+
+
+def embed_max_seq_length() -> int:
+    return int(_emb_cfg().get("max_seq_length", _DEFAULT_MAX_SEQ_LENGTH))
+
+
+def embed_dimension() -> int:
+    """Configured embedding dimension; must match the model and the FAISS indexes."""
+    return int(_emb_cfg().get("dimension", _DEFAULT_DIMENSION))
+
+
 # Lazy singleton — loaded on first call to embed() / embed_batch().
 # Deferring the load prevents the Jina model from being loaded inside
 # ProcessPoolExecutor worker processes (which import this module via the
@@ -21,17 +61,16 @@ _embed_model = None
 def _get_embed_model() -> SentenceTransformer:
     global _embed_model
     if _embed_model is None:
-        print("[core] Loading Jina-Code Model (8192 Context Unlocked)...", flush=True)
-        _embed_model = SentenceTransformer(
-            "jinaai/jina-embeddings-v2-base-code", trust_remote_code=True
-        )
+        model_id = embed_model_id()
+        print(f"[core] Loading embedding model: {model_id} ...", flush=True)
+        _embed_model = SentenceTransformer(model_id, trust_remote_code=True)
         # Cap sequence length to prevent native OOM on tier3 architectural chunks
         # (~4000 tokens). Self-attention memory scales as O(L²) — 4000-token inputs
         # require ~9 GB of intermediate tensors, killing the process with an
         # uncatchable Windows SEH exception. 512 tokens covers most semantic content
         # and keeps peak attention memory well under 1 GB even at batch_size=32.
-        _embed_model.max_seq_length = 512
-        print("[core] Jina model ready.", flush=True)
+        _embed_model.max_seq_length = embed_max_seq_length()
+        print("[core] Embedding model ready.", flush=True)
     return _embed_model
 
 class TokenizerManager:
@@ -42,7 +81,7 @@ class TokenizerManager:
     def _get(self):
         if self._tokenizer is None:
             self._tokenizer = AutoTokenizer.from_pretrained(
-                "jinaai/jina-embeddings-v2-base-code",
+                embed_model_id(),
                 trust_remote_code=True,
                 model_max_length=100000,
             )
@@ -67,7 +106,7 @@ def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
     Provides a 5x-15x speedup during indexing by saturating the GPU/CPU matrix.
     """
     if not texts:
-        return np.zeros((0, 768), dtype=np.float32)
+        return np.zeros((0, embed_dimension()), dtype=np.float32)
     print(f"[core] embed_batch: {len(texts)} texts...", flush=True)
     vectors = _get_embed_model().encode(texts, convert_to_numpy=True, batch_size=batch_size)
     print("[core] embed_batch done.", flush=True)
@@ -76,7 +115,7 @@ def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
 def embed(text):
     """Generates code-native embeddings via Jina."""
     if not text or not text.strip():
-        return np.zeros(768, dtype="float32")
+        return np.zeros(embed_dimension(), dtype="float32")
 
     # Jina does NOT require "search_document:" prefixes
     vector = _get_embed_model().encode(text, convert_to_numpy=True)
@@ -88,10 +127,23 @@ class MultiIndexManager:
         os.makedirs(base_dir, exist_ok=True)
         self.indexes = {}
 
-    def load_or_create(self, tier_name: str, dimension=768):
+    def load_or_create(self, tier_name: str, dimension=None):
+        if dimension is None:
+            dimension = embed_dimension()
         index_path = os.path.join(self.base_dir, f"{tier_name}.faiss")
         if os.path.exists(index_path):
             index = faiss.read_index(index_path)
+            # Reindex guard (ADR-009 §P1): an existing index built with a different
+            # embedder has the wrong vector dimension. Querying/adding against it would
+            # raise deep in FAISS or silently corrupt results, so fail loud and early.
+            if index.d != dimension:
+                raise ValueError(
+                    f"FAISS index '{tier_name}' has dimension {index.d}, but the "
+                    f"configured embedder ([embeddings] in indexer.toml) expects "
+                    f"{dimension}. The embedder changed — this is a one-time reindex: "
+                    f"delete '{self.base_dir}' and rebuild (run code-indexer). "
+                    f"stable_ids are unchanged, so it is recompute-vectors-only."
+                )
         else:
             base_index = faiss.IndexFlatIP(dimension)
             index = faiss.IndexIDMap(base_index)
