@@ -33,6 +33,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from collections import defaultdict
 
@@ -66,6 +67,26 @@ ARMS = {
 # (label, minuend arm, subtrahend arm) — the three §5 paired lifts.
 LIFTS = [("graph", "B", "A"), ("reranker", "C", "B"), ("sparse", "D", "B")]
 LIFT_METRICS = ("mrr@10", "ndcg@10")  # the §5 gate metrics
+
+_PART_RE = re.compile(r"_part_\d+$")
+
+
+def _norm(scope):
+    """Strip the chunk-split ``_part_N`` suffix so a symbol grades as one unit."""
+    return _PART_RE.sub("", scope or "")
+
+
+def _matches(scope, gold):
+    """A returned chunk matches a gold FQN by normalized suffix.
+
+    Robust across adapters: JS/Python scopes are ``file::Symbol`` while C#/C++ scopes
+    are bare qualified names. Suffix match (not exact) lets gold be authored as the
+    trailing symbol identifier (e.g. ``PQueue.add``), and the boundary check on
+    ``endswith`` avoids ``.add`` spuriously matching ``.addAll``.
+    """
+    s = _norm(scope)
+    return (s == gold or s.endswith("::" + gold)
+            or s.endswith("." + gold) or s.endswith("/" + gold))
 
 
 def load_manifest(path=_MANIFEST):
@@ -113,12 +134,18 @@ def run_arm(repo_name, arm, fixtures, verbose=False):
             gold = fx["gold"]
             rel = {g: 1 for g in gold}
             chunks = r.retrieve(fx["query"])
-            # Dedup scopes preserving rank order (a symbol can surface at >1 tier).
+            # Map each returned chunk to the gold it matches (or a unique miss token),
+            # preserving rank. Scope format is language-dependent (JS "file::Sym",
+            # C# "Ns.Class.M/arity", plus "_part_N" chunk-split suffixes), so match by
+            # normalized suffix rather than exact string.
             seen, ranked = set(), []
             for c in chunks:
-                if c.scope and c.scope not in seen:
-                    seen.add(c.scope)
-                    ranked.append(c.scope)
+                key = _norm(c.scope)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                hit = next((g for g in gold if _matches(c.scope, g)), None)
+                ranked.append(hit if hit else f"__miss__{len(ranked)}")
             m = score_query(ranked, rel)
             per_query[qid] = m
             rows.append({"qid": qid, "class": fx.get("class", "semantic"),

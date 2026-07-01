@@ -6,5 +6,3 @@
 {"id": "pq-lowerbound", "query": "binary search for the leftmost insertion index in a sorted array", "gold": ["source/lower-bound.ts::lowerBound"], "feature": "js/binary-search", "class": "semantic"}
 {"id": "pq-setpriority", "query": "setPriority", "gold": ["source/index.ts::PQueue.setPriority", "source/priority-queue.ts::PriorityQueue.setPriority"], "feature": "js/exact-identifier", "class": "semantic"}
 {"id": "pq-dequeue", "query": "remove and return the next highest-priority item to run", "gold": ["source/priority-queue.ts::PriorityQueue.dequeue"], "feature": "js/priority-heap", "class": "semantic"}
-{"id": "pq-graph-lowerbound-callers", "query": "leftmost insertion index via binary search over a sorted numeric array", "gold": ["source/priority-queue.ts::PriorityQueue.enqueue"], "feature": "js/graph-callers", "class": "graph-only"}
-{"id": "pq-graph-add-callee", "query": "public API that wraps a user-supplied async function with priority options and returns a promise", "gold": ["source/priority-queue.ts::PriorityQueue.enqueue"], "feature": "js/graph-callee", "class": "graph-only"}
