@@ -164,7 +164,7 @@ harness would not catch it.
 
 - [ ] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. Validate vs Wave-0 baseline.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
-- [~] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22)** — see note below; off by default (`rrf`). Full-sweep validation pending (cosqa directional: small regression, expected).
+- [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR, stays off (`rrf`).** No subtask showed positive paired lift (cosqa & CSN-js significant regressions; stackoverflow & CSN-python neutral); revisit under ADR-014 (weight-learning) / ADR-019 (literal-query eval). See log below.
 - [~] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22)** — see note below; off by default, no quality claim. Quality validation still pending the internal-repo eval.
 - [ ] Document the one-time reindex + FAISS dimension implications.
 - [ ] (Optional) S2 late-interaction research spike; ship only on a measured lift.
@@ -220,3 +220,26 @@ stacked on the P4 truthfulness branch (both touch `hybrid_retriever.py`). What s
   structural-expansion thresholds and `_CATEGORY_BOOST` (tuned for the RRF scale) may need retuning when convex
   is enabled in production. Acceptable while it's off-by-default and validated on the flat CoIR corpus; the
   internal-repo eval (ADR-019) is where the production-scale interaction gets measured.
+
+**2026-07-01 — P3 full-sweep result: convex fusion REJECTED on CoIR (stays off).** Completed the `dense+sparse`
+sweep across all four measurable subtasks. The two large corpora (CSN-python/js) were CPU-bound on the pure-Python
+BM25 full-corpus scan (~7.5 s/query at 280k docs → a multi-day full run), so a seeded query sample was added to
+the sparse arm — `[eval].sparse_sample_queries` (default 500, seed 13), mirroring the reranker's feasibility
+sampling; the lift is measured paired on the sampled queries so its CI stays tight. Paired sparse lift (fused vs
+dense, same queries):
+
+| Subtask | n | mrr@10 lift (95% CI) | ndcg@10 lift (95% CI) | verdict |
+| --- | --- | --- | --- | --- |
+| cosqa | 500 | −0.034 ± 0.028 | −0.035 ± 0.027 | significant regression |
+| stackoverflow-qa | 1994 | −0.008 ± 0.009 | −0.009 ± 0.007 | ~neutral (slightly neg) |
+| CodeSearchNet-python | 500 (of 14918) | −0.004 ± 0.015 | −0.003 ± 0.013 | neutral |
+| CodeSearchNet-javascript | 500 (of 3291) | **−0.051 ± 0.022** | −0.042 ± 0.018 | significant regression |
+
+The decisive exact-identifier case came back against the thesis: CSN-python is a wash, CSN-javascript is a real
+regression (recall@1 −0.064 ± 0.031). **No subtask shows positive lift**, so P3's validation contract (positive
+paired lift, CI excluding 0) is met nowhere. `fusion_mode` stays `"rrf"` — the measured Wave-0 default.
+- **Scope of the rejection:** this is CoIR (NL→code queries), which under-exercises BM25's actual strength
+  (literal identifier / rare-token lookup). Weights are the untuned 0.7/0.3 default (weight-learning is ADR-014).
+  So this rejects convex *on CoIR at the default weights*, not forever — the fair sparse test is the literal-query
+  arm of the internal-repo eval (ADR-019). The code stays shipped-but-off so ADR-014/ADR-019 can revisit it
+  without re-implementing.
