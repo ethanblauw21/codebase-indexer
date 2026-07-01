@@ -73,6 +73,7 @@ import faiss
 import numpy as np
 
 from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
+from call_resolver import resolve_call_edges
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
@@ -571,6 +572,14 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
             errors += 1
             print(f"  ✗  {rel_path}")
             traceback.print_exc()
+
+    # ADR-021: resolve CALLS-edge bare callee names to in-repo FQNs so the graph
+    # Traverse step has real neighbours to walk. Runs once here, over the now-complete
+    # symbols table; precision-first (only provably-unique targets), recomputes every
+    # run so a name that became ambiguous is demoted back to unresolved.
+    res = resolve_call_edges(db)
+    print(f"  Call resolution: {res['resolved']} resolved | "
+          f"{res['ambiguous']} ambiguous | {res['external']} external")
 
     # Flush FAISS indexes to disk.
     # Chunk payloads are already in SQLite (committed per-file by upsert_file).
