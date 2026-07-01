@@ -55,6 +55,18 @@ a migration step, not a schema change.
 P4 rerankers — are HuggingFace weights run **locally** (downloaded once via `huggingface-cli`, then offline
 inference). No cloud API or runtime network call is introduced; the offline guarantee is preserved.
 
+**Status (2026-06-22) — plumbing done, swap deferred.** The config-driven plumbing is implemented:
+`src/core.py` reads `model_id` / `max_seq_length` / `dimension` from `[embeddings]` (was hardcoded), and
+`MultiIndexManager` refuses to load an index whose dimension ≠ the configured embedder (the explicit reindex
+guard). Per the validation contract the **default stays `jina-v2` (768)** — proven — so behavior is unchanged
+until a swap is measured. The actual embedder swap is a **deferred operator step**: set `model_id` + `dimension`
+to `jina-code-embeddings-1.5b`, delete `.code-index`, reindex, then validate dense vs the committed Wave-0
+baseline. **Caveat for that run:** `jina-code-embeddings-1.5b` is a Qwen2.5-Coder-based *decoder* embedder, not
+a BERT like jina-v2 — it likely wants task-specific query/document **instruction prefixes**, so a naive
+`SentenceTransformer.encode` may underperform its ceiling. Check the model card's prompt usage before
+concluding it lost to the baseline. (CoIR validation needs no code change — the harness already reads
+`[embeddings].model_id`.)
+
 ### §P2 — Late chunking
 
 Add a **late-chunking path** ([42]) in `src/ast_chunker.py`: embed the full document context first, then
@@ -79,11 +91,26 @@ as a fallback). Sparse signal catches exact-identifier and rare-token matches th
 convex fusion with normalization lets the two signals be **weighted** — which is the hook ADR-014 later
 learns. New `[retrieval]` config block controls fusion mode and weights.
 
+**Correction (2026-06-22).** The "convex as the default, RRF as fallback" framing is inverted to honor this
+ADR's own **validation contract**: convex ships as a config *option* with `fusion_mode = "rrf"` the **default**
+until a measured lift proves it — the same discipline applied to the reranker in §P4 (newer is not enabled
+until it beats the baseline). Convex flips to default only when the ADR-007 harness shows it wins (see log).
+
 ### §P4 — Reranker option
 
 Add a code-specialized reranker option ([40] CoRNStack / Qwen3-Reranker) selectable via `indexer.toml`
-`[reranker]`, **keeping the current cross-encoder as the default** until the baseline says otherwise. This
-is a pure config choice — the rerank stage interface is unchanged.
+`[reranker]`. This is a pure config choice — the rerank stage interface is unchanged.
+
+**Correction (2026-06-22).** The original framing — "keeping the current cross-encoder as the default" —
+rested on a false premise. The "current cross-encoder" was `jinaai/jina-reranker-v2-base-code`, a
+**non-existent model id**, and `HybridRetriever()` was constructed with no args. The load therefore failed
+on every startup and the pipeline silently fell back to RRF — production reranking had **never run**. So the
+honest default is **RRF-only with reranking off**, which is exactly the measured Wave-0 baseline (ADR-007),
+not a placeholder. This pillar's first delivered slice is a **truthfulness fix** (see log): correct the id,
+make `HybridRetriever` read `[reranker]` (model_id + an explicit `enabled` flag, default `false`), and wire
+Qwen3-Reranker as a real opt-in via the shared `src/reranker.py` scorer. No quality claim is attached —
+reranker lift on CoIR was neutral (cosqa) to negative (codefeedback-mt) under the ADR-007 harness, so it
+stays off pending the internal-repo eval (ADR-008).
 
 ### §S2 — Late interaction (optional research phase)
 
@@ -147,13 +174,111 @@ harness would not catch it.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. Validate vs Wave-0 baseline.
+- [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22)** — see note below; default still jina-v2. Swap + reindex + dense validation is the deferred operator run.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
-- [ ] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). Validate.
-- [ ] P4: reranker option ([40]/Qwen3) via `[reranker]`; cross-encoder stays default. Validate.
+- [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR, stays off (`rrf`).** No subtask showed positive paired lift (cosqa & CSN-js significant regressions; stackoverflow & CSN-python neutral); revisit under ADR-014 (weight-learning) / ADR-019 (literal-query eval). See log below.
+- [~] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22)** — see note below; off by default, no quality claim. Quality validation still pending the internal-repo eval.
 - [ ] Document the one-time reindex + FAISS dimension implications.
 - [ ] (Optional) S2 late-interaction research spike; ship only on a measured lift.
 - [ ] Resolve **Depended on by**: confirm the parameterized-fusion contract ADR-014 will learn over, before `accepted`.
 
 **Notes:**
 <!-- 2026-06-18: Highest-ROI engine work; no stable_id/schema/MCP changes. Defaults: embedder = jina-code-embeddings-1.5b; fusion = convex w/ normalization (fallback RRF); sparse = BM25 on; late chunking on, summarizer optional; reranker = cross-encoder default. P1 = one-time reindex (vector-dim → FAISS rebuild). Every pillar gated on beating the ADR-007 Wave-0 baseline. -->
+
+**2026-06-22 — P4 truthfulness slice (no quality claim).** Stacked on the ADR-007 dense-baseline branch
+because it reuses that branch's Qwen3 scorer. What shipped:
+- The configured reranker id `jinaai/jina-reranker-v2-base-code` did not exist; `HybridRetriever()` ignored
+  config entirely. Production reranking had been **silently RRF-only via repeated load failures** — graceful
+  on the surface, but an accident dressed as a feature.
+- Introduced `src/config.py` (first `indexer.toml` reader in `src/`; walks up from cwd) and `src/reranker.py`
+  (canonical home for the `Qwen3Reranker` logit-scorer + `load_reranker()` factory). `tools/coir_eval.py` now
+  imports the scorer from `src/reranker.py` — **one implementation**, no duplication.
+- `HybridRetriever` now reads `[reranker]`: `model_id` (default `Qwen/Qwen3-Reranker-0.6B`) + an explicit
+  `enabled` flag (**default `false`**). When off, `_load_reranker()` returns `None` without fetching a model
+  and the pipeline returns the RRF-ranked top-10 — the *intentional, documented* default, not a fallback.
+  When on, `load_reranker()` routes to the Qwen3 scorer or a CrossEncoder by id.
+- Corrected the docstrings in `hybrid_retriever.py`, the `MCPServer` singleton comment, `src/CLAUDE.md`, and
+  the `[reranker]` block in `indexer.toml`. Scope was deliberately reranker-only: the embedder (`core.py`)
+  and summarizer (`summarizer.py`) still hardcode their ids — P1 owns migrating those.
+- Verified: 85/85 tests pass; `HybridRetriever()` constructs with reranking off and fetches no model. NOT
+  verified: any reranker quality lift (there is none on CoIR; that's why it's off). -->
+
+**2026-06-22 — memory-hygiene pass (surfaced running the reranker scorecard on a 16 GB machine).** The
+dense+reranker run appeared to hang for ~1 h; investigation found peak memory swap-thrashing on the larger
+corpora. Root cause was redundant multi-GB arrays held alongside FAISS's own copy. Fixed by freeing them
+promptly: `del mat` after `index.add()` and `shards.clear()` after `np.vstack` in `tools/coir_eval.py`
+(plus `gc.collect()` between subtasks); `del` of per-batch tensors in `src/reranker.py`; `del vec_matrix,
+id_array` after the FAISS add in `src/incremental_indexer.py` (benefits the production indexer too); and HF
+Arrow-buffer frees in `tools/coir_prepare.py`. Pure memory hygiene — no change to any output. The two
+`src/` edits (`reranker.py`, `incremental_indexer.py`) are why this pass is recorded against ADR-009.
+
+**2026-06-22 — P3 sparse + convex fusion (implemented, off by default).** On `feature/adr-009-bm25-fusion`,
+stacked on the P4 truthfulness branch (both touch `hybrid_retriever.py`). What shipped:
+- `src/fusion.py` (new) — the single home for the tokenizer + `minmax_norm` + `convex_fuse`, shared by the
+  production retriever and the eval harness so "convex fusion" means the same thing in both.
+- `src/hybrid_retriever.py` — reads `[retrieval]` (`fusion_mode` + `dense_weight`/`sparse_weight`). When
+  `convex`, builds a `BM25Okapi` index over the in-memory chunk corpus at construction and fuses the union of
+  dense-RRF and BM25 top-k via `convex_fuse`; degrades to RRF if `rank-bm25` is missing or the corpus is empty.
+- `indexer.toml [retrieval]` (default `fusion_mode = "rrf"`, weights 0.7/0.3) + `rank-bm25` in requirements.
+- `tools/coir_eval.py` — new `dense+sparse` config (the §validation arm): BM25 over the CoIR corpus, dense via
+  FAISS (same tie-breaking as the dense baseline — critical, CoIR's duplicate docs otherwise shift MRR by tie
+  order alone), convex-fused, graded paired vs dense with CIs.
+- **Directional result (cosqa, n=500):** sparse lift mrr@10 = **−0.034 ± 0.028** (CI excludes 0) — a small
+  but real regression, the *expected* worst case (NL→code paraphrase, where lexical match is least helpful).
+  This is one subtask; the full sweep (CSN/stackoverflow, where exact identifiers matter) is pending and will
+  decide whether convex ever flips to default. Verified: 85/85 tests; production convex path constructs,
+  builds BM25, and ranks correctly (graceful RRF fallback on an empty index).
+- **Known caveat (flagged, not addressed):** convex scores are in [0,1] vs RRF's ~0.01–0.05, so the
+  structural-expansion thresholds and `_CATEGORY_BOOST` (tuned for the RRF scale) may need retuning when convex
+  is enabled in production. Acceptable while it's off-by-default and validated on the flat CoIR corpus; the
+  internal-repo eval (ADR-019) is where the production-scale interaction gets measured.
+
+**2026-06-22 — P1 embedder plumbing (config-driven; swap deferred to an operator run).** On
+`feature/adr-009-embedder-refresh` (sibling of P3 off the P4 truthfulness branch — touches `core.py`, not
+`hybrid_retriever.py`, so no conflict). What shipped:
+- `src/core.py` now reads `[embeddings]` (`model_id`, `max_seq_length`, `dimension`) via `src/config.py`
+  instead of hardcoding jina-v2/512/768. The embedder load, the tokenizer, the empty-vector dims, and
+  `MultiIndexManager`'s default dimension are all config-driven. Defaults preserve the jina-v2 stack exactly,
+  so an unconfigured repo is byte-identical to before.
+- **Reindex guard:** `MultiIndexManager.load_or_create` raises if an existing FAISS index's dimension ≠ the
+  configured dimension — turning a silent corrupt-state into a loud "delete `.code-index` and reindex" error.
+- Docs: `[embeddings]` comments + `src/CLAUDE.md` now explain the one-time reindex; the candidate model is
+  `jina-code-embeddings-1.5b`.
+- **Deferred (the operator run, when home):** set `model_id` + `dimension` to the new model, delete
+  `.code-index`, reindex, then validate dense vs the committed Wave-0 baseline (or just run
+  `coir_eval --config dense` after pointing `[embeddings]` at the new model — re-embeds CoIR under a new
+  cache tag, no code change). Heed the instruction-prefix caveat in §P1 before judging the result.
+- Verified: 85/85 tests; defaults resolve to jina-v2/768/512; the reindex guard fires on a dimension change.
+
+**2026-06-23 — P1 validation is impractical on CPU; deferred to ADR-020 (GPU).** Measured
+`jina-code-embeddings-1.5b` (Qwen2 decoder, 1536-dim) embedding on this CPU at **~1 s/doc** (~64–67 s per
+batch of 64): cosqa alone ≈ ~6 h, the full CoIR core set (452,082 docs) ≈ **~5.5 days** (a floor). A 1.5B
+decoder is ~9–10× the params of jina-v2, so the CPU path cannot run the embedder-swap validation at a usable
+cadence. The model loads cleanly via SentenceTransformer (its own pooling config; 1536-dim normalized), but
+the harness still applies no task **instruction prompts**, so a CPU run would also be a quality *floor*, not
+a verdict. **Decision: defer the actual P1 swap/validation behind a GPU path — see [[ADR-020]]** (AMD RX
+6700 XT via DirectML / WSL2+ROCm). The P1 *plumbing* above stays committed and reversible; only the
+multi-day embed run waits on GPU. The 1.5b weights are already in the HF cache for when it resumes.
+
+**2026-07-01 — P3 full-sweep result: convex fusion REJECTED on CoIR (stays off).** Completed the `dense+sparse`
+sweep across all four measurable subtasks. The two large corpora (CSN-python/js) were CPU-bound on the pure-Python
+BM25 full-corpus scan (~7.5 s/query at 280k docs → a multi-day full run), so a seeded query sample was added to
+the sparse arm — `[eval].sparse_sample_queries` (default 500, seed 13), mirroring the reranker's feasibility
+sampling; the lift is measured paired on the sampled queries so its CI stays tight. Paired sparse lift (fused vs
+dense, same queries):
+
+| Subtask | n | mrr@10 lift (95% CI) | ndcg@10 lift (95% CI) | verdict |
+| --- | --- | --- | --- | --- |
+| cosqa | 500 | −0.034 ± 0.028 | −0.035 ± 0.027 | significant regression |
+| stackoverflow-qa | 1994 | −0.008 ± 0.009 | −0.009 ± 0.007 | ~neutral (slightly neg) |
+| CodeSearchNet-python | 500 (of 14918) | −0.004 ± 0.015 | −0.003 ± 0.013 | neutral |
+| CodeSearchNet-javascript | 500 (of 3291) | **−0.051 ± 0.022** | −0.042 ± 0.018 | significant regression |
+
+The decisive exact-identifier case came back against the thesis: CSN-python is a wash, CSN-javascript is a real
+regression (recall@1 −0.064 ± 0.031). **No subtask shows positive lift**, so P3's validation contract (positive
+paired lift, CI excluding 0) is met nowhere. `fusion_mode` stays `"rrf"` — the measured Wave-0 default.
+- **Scope of the rejection:** this is CoIR (NL→code queries), which under-exercises BM25's actual strength
+  (literal identifier / rare-token lookup). Weights are the untuned 0.7/0.3 default (weight-learning is ADR-014).
+  So this rejects convex *on CoIR at the default weights*, not forever — the fair sparse test is the literal-query
+  arm of the internal-repo eval (ADR-019). The code stays shipped-but-off so ADR-014/ADR-019 can revisit it
+  without re-implementing.

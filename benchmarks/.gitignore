@@ -1,0 +1,13 @@
+# ADR-007 §5/Worse: CoIR corpora + queries are regenerated on demand from the HF
+# cache (tools/coir_prepare.py), not committed — some are large (codefeedback-mt
+# corpus ~103 MB, its queries ~60 MB). The committed deliverable is baseline.jsonl;
+# qrels.tsv (small gold-label files) ARE committed to pin what grading ran against.
+coir/*/corpus.jsonl
+coir/*/queries.jsonl
+
+# Cached corpus embeddings (resume/checkpoint shards) — derived, never committed.
+coir/*/_emb/
+*.faiss
+
+# Run logs — derived, never committed (the baseline.jsonl record is the deliverable).
+*.log

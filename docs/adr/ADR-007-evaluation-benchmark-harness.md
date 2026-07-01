@@ -242,27 +242,101 @@ consideration (none built yet — scoped here so the roadmap owns them rather th
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] Add `coir-eval` (or HF `datasets` pull) dependency; cache the selected CoIR subset under `benchmarks/`.
-- [ ] Choose + record the representative CoIR subtask set in `indexer.toml` `[eval]`; document the rationale.
+- [x] Add `coir-eval` (or HF `datasets` pull) dependency; cache the selected CoIR subset under `benchmarks/`.
+  **Done (2026-06-19):** no new dependency — the CoIR-Retrieval datasets were already in the local HF cache,
+  so "fetch" became a local extraction. `tools/coir_prepare.py` materializes `queries.jsonl` (test split),
+  `qrels.tsv` (test split, score>0), and any missing `corpus.jsonl` into `benchmarks/coir/<task>/` offline
+  (`HF_HUB_OFFLINE=1`). Large CSN corpora are git-ignored and regenerated on demand (§5/Worse).
+- [x] Choose + record the representative CoIR subtask set in `indexer.toml` `[eval]`; document the rationale.
+  **Done (2026-06-19):** `[eval]` block added — `subtasks` (5 core), `tier_projection="atomic"`,
+  `configs`, `budget_tokens`, `ci_subtasks`/`ci_limit_queries`, `baseline_path`.
 - [x] Decide and document the tier→flat-corpus projection (the load-bearing modeling choice). **Resolved §7
   (2026-06-18):** index CoIR's own corpus with our embedder; Wave-0 baseline uses atomic-doc indexing
   (`tier_projection = "atomic"`); chunk-tier projection is a deferred, separately-reported path.
-- [x] Extend `tools/eval_retrieval.py`: CoIR runner (indexes CoIR's own corpus, §7), MRR@10 / NDCG@10 /
-  Recall@{1,5,10}, plus tokens / tool-calls / latency capture. **Done** (atomic-projection runner).
-- [ ] Extend the metric set per the revised §1: **Success@{1,5,10}**, **MAP**, decomposed **token economy**
+- [x] CoIR runner (indexes CoIR's own corpus, §7), MRR@10 / NDCG@10 / Recall@{1,5,10}, plus tokens /
+  tool-calls / latency capture. **Done (2026-06-19) — DEVIATION from the §5 plan:** built as a *new*
+  `tools/coir_eval.py` rather than by extending `tools/eval_retrieval.py`. The legacy 10-query repo-eval
+  is a fundamentally different shape (curated queries vs. the live `.code-index`), and folding the CoIR
+  protocol into it would have entangled the two; cleaner as siblings. `eval_retrieval.py` is left intact
+  as the smoke layer §5 intended. ADR §5 text still says "extended" — treat that as superseded.
+- [x] Extend the metric set per the revised §1: **Success@{1,5,10}**, **MAP**, decomposed **token economy**
   (query / returned-context / corpus-embedding tokens, token-efficiency, budget-adherence + truncation rate),
-  and **p50/p95** latency. These are net-new compute over the current runner and must land before the
-  single Wave-0 baseline is cut (so the baseline is embedded once, with the full metric set).
-- [ ] Implement the incremental-baseline mechanics (§6): `--subtasks` override, dedupe-on-append, and a
-  git-SHA stamp on every record so appended batches are provably from the same frozen stack.
-- [ ] Run + record both pipeline configs (§8): **dense**, and **dense + reranker** (reranker priced/run on
-  the core set only, per §8 caveat 2).
-- [ ] Record the §9 coverage limits in the published table header (label = "CoIR semantic-retrieval,
-  {languages}"); open the **internal-repo eval** as the complement that covers C#/C++ and the structural
-  graph (tracked toward ADR-008).
-- [ ] Define the fast CI subset; wire it as a regression tripwire on retrieval-path changes.
-- [ ] Cut and **commit the Wave-0 baseline** for the current stack to `benchmarks/` (the actual deliverable).
+  and **p50/p95** latency. **Done (2026-06-19):** full §1 metric set emitted per record; corpus-embedding
+  tokens reported separately (amortized). Embedded once, with the complete metric set.
+- [x] Implement the incremental-baseline mechanics (§6): `--subtasks` override, dedupe-on-append, and a
+  git-SHA stamp on every record. **Done (2026-06-19):** `--subtasks`/`--config`/`--limit-queries` CLI;
+  dedupe on `(subtask, config)`; every record stamped with the stack git SHA. Embedding is sharded and
+  resumable (checkpoint every 20K docs) so a reboot mid-run does not lose work.
+- [~] Run + record both pipeline configs (§8): **dense**, and **dense + reranker**. **dense: DONE
+  (2026-06-19)** — all 5 core subtasks cut to `benchmarks/baseline.jsonl` under git `4950d3f`. Headline
+  dense numbers: CSN-python MRR@10 0.937, stackoverflow-qa 0.874, CSN-javascript 0.733, cosqa 0.451,
+  codefeedback-mt 0.407. **dense+reranker: investigated, then DEFERRED to ADR-009 (2026-06-21)** — the
+  reranker (Qwen3-Reranker-0.6B) showed neutral-to-negative lift on CoIR after a real bug fix; running the
+  full ~22–44 h baseline for a non-positive "before" was judged not worth the compute now. Full findings in
+  the dated note below; the dense+reranker "before" is cheap to cut later under a frozen SHA when ADR-009
+  picks a reranker deliberately.
+- [x] Record the §9 coverage limits in the published table header (label = "CoIR semantic-retrieval,
+  {languages}"). **Done (2026-06-19):** the scorecard footer prints the §9 label and the C#/C++ +
+  structural-graph caveat. The **internal-repo eval** complement remains open (tracked toward ADR-008).
+- [~] Define the fast CI subset; wire it as a regression tripwire. **Defined (2026-06-19):** `ci_subtasks`
+  (`cosqa`) + `ci_limit_queries` (50) in `[eval]`, and `--limit-queries` supports it. **Not yet wired into
+  CI** as an automated tripwire.
+- [x] Cut and **commit the Wave-0 baseline** for the current stack to `benchmarks/` (the actual deliverable).
+  **Done (2026-06-21):** `benchmarks/baseline.jsonl` holds the 5 **dense** core records (SHA `4950d3f`).
+  The Wave-0 deliverable is explicitly the **dense** baseline; dense+reranker is deferred (above), so the
+  baseline is "complete" for the dense config the §8 minimum requires. Diagnostic sampled reranker rows used
+  during the investigation were removed from the committed file.
 - [ ] Resolve every downstream obligation in **Depended on by** (ADR-008 harness pattern, ADR-009 baseline + CI subset, ADR-014 held-out split) before setting status to `accepted`.
 
 **Notes:**
 <!-- 2026-06-18: Wave 0. Retrieval arm only; extraction precision/recall is ADR-008's sibling scorecard. Default metrics MRR@10 + NDCG@10 + Recall@{1,5,10} + tokens/tool-calls/latency; CoIR subset matched to our 5 languages; grading automated vs qrels (no human). Open: representative subtask set. RESOLVED (§7): index CoIR's OWN corpus with our embedder (not the repo .code-index); Wave-0 = atomic-doc indexing, tier projection deferred. -->
+
+- **2026-06-19 — reranker model corrected; Qwen3-Reranker wired in.** The configured reranker
+  `jinaai/jina-reranker-v2-base-code` (§8 / `indexer.toml`) **does not exist** — a fabricated id (false
+  analogy from the embedder's `-code` suffix); HF returns 401 for it. Both Jina v2/v3 rerankers are
+  CC-BY-NC (non-commercial) + the v2 multilingual one is gated, so they were rejected for a commercial
+  product. Adopted **`Qwen/Qwen3-Reranker-0.6B`** (Apache-2.0, ungated, code-strong, ~0.6B → CPU-feasible).
+  It is a causal-LM yes/no scorer, not a sentence-transformers CrossEncoder, so the harness got a
+  `Qwen3Reranker` wrapper + a `load_reranker()` factory (branches by model id; CrossEncoder remains the
+  fallback path). Also surfaced: the **production** retriever (`src/hybrid_retriever.py`) hardcodes the same
+  fabricated id and ignores `[reranker].model_id`, so its reranker has been silently RRF-only — fixing that
+  (Qwen3 in production via the same scorer + actually reading config) is **ADR-009** scope, tracked there.
+- **2026-06-19 — harness built and dense Wave-0 baseline cut.** Two new tools: `tools/coir_prepare.py`
+  (offline data materialization from the HF cache) and `tools/coir_eval.py` (the standing harness). **Key
+  deviation:** the harness is a *new* file, not an extension of `tools/eval_retrieval.py` (see the runner
+  log item) — the §5 "extend" wording is superseded; the legacy script stays as the smoke layer. The run was
+  CPU-only (14 threads), embedder `jinaai/jina-embeddings-v2-base-code` (dim 768, `max_seq_length` 512,
+  normalized), FAISS `IndexFlatIP` per subtask. Embedding is sharded/resumable (20K-doc checkpoints), which
+  survived a mid-run lock/sign-in. Full core set ran in roughly one morning (~3h wall): largest corpus
+  CSN-python = 280,310 docs. Launchers `run_wave0.bat` / `run_wave0.sh` were added because PowerShell is
+  Cylance-blocked on this host. **Still open before `accepted`:** dense+reranker rows (§8), git-committing
+  the baseline, wiring the CI tripwire, and the §9 internal-repo eval (C#/C++ + structural graph).
+- **2026-06-21 — dense+reranker investigated on Qwen3-Reranker-0.6B; neutral/negative on CoIR; DEFERRED.**
+  Sized the reranker honestly before committing a multi-day run. Findings, in order:
+  - **Throughput:** Qwen3-Reranker-0.6B (causal-LM yes/no scorer) on CPU runs ~**0.6 s/pair (~64 s/query at
+    rerank_depth=100)**. Reranking all queries × depth across the core set ≈ **~12 days**; hence sampling.
+  - **Harness hardening for feasibility + honesty:** added **seeded random query sampling**
+    (`[eval].rerank_sample_queries`, default 500; `sample_seed`), **95% CIs** on every metric, **paired
+    dense-vs-reranked lift** (cancels sampling noise), and per-query **progress logging**. Dense baseline is
+    unaffected (always full query set). At 500/subtask, depth 100 ≈ ~21 h (vs ~12 days).
+  - **Real bug found & fixed:** candidate ordering used `np.argsort(scores)[::-1]`, which **reverses tied
+    score groups**. CoIR corpora contain **duplicate documents**; the reranker scores identical text
+    identically, so the reversal sent the dense-#1 gold to the *bottom* of its tie group. Fixed with a
+    **stable descending sort** (`argsort(-scores, kind="stable")`) that breaks ties toward dense order.
+    (Two earlier hypotheses — a 401 on the model id, and an attention-mask/padding bug — were wrong: the id
+    was fabricated, see prior note, and `tok.pad` already supplied the mask, so that "fix" was a no-op. The
+    diagnostic that found the real cause printed the duplicate texts + identical scores directly.)
+  - **Effect of the fix:** cosqa paired lift MRR@10 went **−0.26 → −0.08** (clearly-negative → neutral, CI
+    spans zero). Correct/expected for cosqa (duplicate-heavy, single-label).
+  - **But still negative elsewhere:** codefeedback-mt lift **−0.32 ± 0.17** *after* the fix — a different
+    failure mode. **Hypothesis (unconfirmed):** codefeedback-mt has long multi-turn queries; the reranker
+    truncates the *concatenated* query+doc to 512 (`longest_first`) and starves on the query tail, whereas
+    dense embeds query/doc separately (each gets its own 512). Not chased further.
+  - **Decision (2026-06-21):** with neutral-to-negative lift and **no positive datapoint**, running the full
+    ~22–44 h dense+reranker baseline (incl. offloading to a spare laptop) was judged not worth the compute.
+    **Dense is the committed Wave-0 deliverable; the reranker is deferred to ADR-009**, which scopes reranker
+    selection deliberately. The harness reranker path (Qwen3 scorer, sampling, CIs, paired lift, stable sort)
+    is built and validated, so ADR-009 can cut the "before" cheaply under a frozen SHA. New `[eval]` knobs:
+    `rerank_depth`, `rerank_sample_queries`, `sample_seed`. Reranker launchers
+    (`run_reranker_smoke`, `run_reranker_calibrate`, `run_wave0_reranker`) are retained for that future cut.
+

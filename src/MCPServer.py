@@ -706,7 +706,8 @@ def trace_data_flow(target_symbol: str) -> str:
 # investigate_architecture — Agentic high-level investigation tool
 # ---------------------------------------------------------------------------
 
-# Lazy singleton: CrossEncoder is ~500 MB; we load it once on first invocation.
+# Lazy singleton: built on first invocation. Reranking is off by default
+# (see [reranker].enabled in indexer.toml); HybridRetriever() reads that config.
 _hybrid_retriever: "HybridRetriever | None" = None
 _iterative_retriever: "IterativeRetriever | None" = None
 

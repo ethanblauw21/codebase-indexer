@@ -72,7 +72,11 @@ huggingface-cli download jinaai/jina-reranker-v2-base-code     # reranker (~500 
 huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct      # summarizer (~3 GB, optional)
 ```
 
-Model IDs are configured in `indexer.toml` (`[embeddings]`, `[reranker]`, `[summarization]`). The reranker and summarizer are both optional — the indexer degrades gracefully without them.
+Model IDs live in `indexer.toml` (`[embeddings]`, `[reranker]`, `[summarization]`) and are read from config at runtime: the **embedder** (`src/core.py`, ADR-009 §P1 — `model_id` + `max_seq_length` + `dimension`) and the **reranker** (`src/config.py` → `HybridRetriever`). The **summarizer** (`summarizer.py`) still hardcodes its id (not yet migrated). The reranker and summarizer are both optional — the indexer degrades gracefully without them. **Reranking is off by default** (`[reranker].enabled = false`): the retriever returns the RRF-ranked top-10, which is the measured Wave-0 baseline (ADR-007), not a fallback.
+
+**Changing the embedder is a one-time reindex** (ADR-009 §P1): a new model usually has a different vector `dimension`, so update `model_id` + `dimension` together, delete `.code-index`, and rerun `code-indexer`. `stable_id`s are model-independent, so it is recompute-vectors-only; `core.py` refuses to load an index whose dimension no longer matches the configured embedder.
+
+The pre-download `huggingface-cli` line for the reranker above lists the configured model; the prior `jinaai/jina-reranker-v2-base-code` id was a non-existent model and has been replaced by `Qwen/Qwen3-Reranker-0.6B`.
 
 ## Architecture
 
@@ -105,7 +109,7 @@ Source files
 
 1. **Semantic**: FAISS top-50 candidates from each of the three tiers, fused via Reciprocal Rank Fusion (RRF, k=60)
 2. **Structural**: One-hop call-graph expansion via SQLite (bidirectional, cycle-guarded CTEs); edges corroborated against the import graph
-3. **Reranking**: `jina-reranker-v2-base-code` CrossEncoder (≈500 MB, optional; falls back to RRF scores when unavailable)
+3. **Reranking**: optional, **off by default** — returns the RRF-ranked top-10. When `[reranker].enabled = true`, `src/reranker.py` rescores candidates with the configured model (`Qwen/Qwen3-Reranker-0.6B`, a causal-LM yes/no scorer, or a sentence-transformers CrossEncoder by id), falling back to RRF on load/predict failure
 
 `iterative_retriever.py` wraps this in multi-round loops with confidence-based early stopping and query enrichment from prior findings.
 
