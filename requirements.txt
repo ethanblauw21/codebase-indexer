@@ -4,6 +4,10 @@ sentence-transformers
 transformers
 numpy
 
+# Sparse retrieval — BM25 for the convex dense+sparse fusion (ADR-009 §P3).
+# Only built when [retrieval].fusion_mode = "convex"; pure-Python, no native deps.
+rank-bm25
+
 # AST parsing
 tree-sitter>=0.21
 tree-sitter-python

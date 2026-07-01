@@ -20,27 +20,71 @@ index_dir = ".code-index"
 # rules_file = "rules.yaml"
 
 [embeddings]
-# HuggingFace model ID for code embeddings (Jina v2 — multi-language).
+# HuggingFace model ID for code embeddings. Read by src/core.py (ADR-009 §P1) and
+# by the eval harness, so a single change here swaps the embedder everywhere.
+#
+# CHANGING THE EMBEDDER IS A ONE-TIME REINDEX. A new model usually has a different
+# vector dimension; the FAISS indexes are created at a fixed dimension, so you must
+# update `dimension` to match AND rebuild: delete .code-index and run code-indexer.
+# stable_ids are model-independent, so the rebuild is recompute-vectors-only (no
+# schema change). core.py refuses to load an index whose dimension no longer matches.
+#
+# Default (proven Wave-0 baseline): jinaai/jina-embeddings-v2-base-code (768 dims).
+# ADR-009 §P1 candidate: jina-code-embeddings-1.5b (set model_id + dimension, then
+# reindex, then validate dense vs the committed baseline before keeping it).
 model_id = "jinaai/jina-embeddings-v2-base-code"
 
 # Maximum sequence length fed to the embedding model.
 # Reduce if you hit OOM on GPUs with less than 8 GB VRAM.
 max_seq_length = 512
 
-# Output embedding dimension (must match the model; do not change).
+# Output embedding dimension. MUST match the model AND the built FAISS indexes;
+# change it together with model_id and reindex (see above).
 dimension = 768
 
 [reranker]
-# HuggingFace model ID for cross-encoder reranking (~500 MB, optional).
-# When the model cannot be loaded (OOM, missing weights) the retriever falls
-# back to RRF score ordering automatically — no action required.
+# Reranker for cross-encoder rescoring of dense candidates (optional).
 #
-# Pre-download before first use (requires huggingface-cli from the
-# huggingface_hub package, which is a transitive dep of sentence-transformers):
+# Qwen3-Reranker-0.6B: Apache-2.0, ungated, ~0.6B params, strong on code
+# retrieval. NOTE it is a causal-LM yes/no scorer, NOT a sentence-transformers
+# CrossEncoder — the eval harness (tools/coir_eval.py load_reranker) loads it via
+# the Qwen3 logit-scoring path. (The prior value `jina-reranker-v2-base-code` was
+# a non-existent model id; it is gone.)
 #
-#   huggingface-cli download jinaai/jina-reranker-v2-base-code
+# Read by BOTH the eval harness and the production retriever
+# (src/hybrid_retriever.py, via src/config.py + src/reranker.py).
 #
-model_id = "jinaai/jina-reranker-v2-base-code"
+# No manual pre-download needed: the calibration launcher (run_reranker_calibrate)
+# fetches it online on first run, then the offline long run reuses the cache.
+model_id = "Qwen/Qwen3-Reranker-0.6B"
+
+# Production reranking is OFF by default (ADR-009 §P4). When false, the retriever
+# returns the RRF-ranked top-10 — the measured Wave-0 baseline (ADR-007), not a
+# degraded fallback. Reranker lift on CoIR was neutral (cosqa) to negative
+# (codefeedback-mt); leave this false until the internal-repo eval shows a win.
+# The eval harness ignores this flag — it reranks whenever --config dense+reranker.
+enabled = false
+
+[retrieval]
+# Fusion of the dense (multi-tier FAISS RRF) and sparse (BM25) retrieval signals
+# in src/hybrid_retriever.py (ADR-009 §P3).
+#
+#   "rrf"    — dense-only multi-tier RRF. The DEFAULT and the measured Wave-0
+#              behavior (ADR-007); no BM25 index is built, so zero added cost.
+#   "convex" — score-normalized weighted combination of dense + BM25 sparse signal.
+#              Catches exact-identifier / rare-token matches dense retrieval blurs.
+#              Builds an in-memory BM25 index over all chunks at startup (RAM +
+#              startup cost that scales with corpus size).
+#
+# Stays "rrf" until the ADR-007 harness shows convex beats the dense baseline
+# (ADR-009 validation contract — off by default until a measured lift).
+fusion_mode = "rrf"
+
+# Weights for the convex combination (used only when fusion_mode = "convex").
+# Expressed as a ratio — renormalized to sum to 1 internally. These are the
+# parameters ADR-014 will later learn from usage.
+dense_weight = 0.7
+sparse_weight = 0.3
 
 [summarization]
 # Set to false to skip LLM chunk summarization (faster indexing, lower recall).
@@ -53,6 +97,70 @@ enabled = true
 #   huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct
 #
 model_id = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+
+[eval]
+# ADR-007 — CoIR retrieval benchmark harness (Wave-0 baseline).
+# Data is materialized into benchmarks/coir/<subtask>/ by tools/coir_prepare.py;
+# the harness (tools/coir_eval.py) indexes CoIR's OWN corpus atomically (§7) and
+# grades returned doc-ids against the committed qrels — it never reads .code-index.
+
+# Wave-0 core set (§2): the primary-language subtasks (Python + JavaScript overlap).
+# C#/C++ have no CoIR coverage (§9) — covered later by the internal-repo eval.
+subtasks = [
+    "cosqa",
+    "stackoverflow-qa",
+    "codefeedback-mt",
+    "CodeSearchNet-python",
+    "CodeSearchNet-javascript",
+]
+
+# Atomic-doc projection is the Wave-0 baseline (§7); chunk-tier projection is the
+# deferred, separately-reported path.
+tier_projection = "atomic"
+
+# Pipeline configs baselined (§8): "dense" (embedder alone) is the minimum run;
+# "dense+reranker" is the heavier follow-on (priced separately, core set only).
+configs = ["dense", "dense+reranker"]
+
+# §1 token-economy budget-adherence threshold (returned top-k context tokens).
+budget_tokens = 8000
+
+# §8 dense+reranker depth: dense retrieves this many candidates, the cross-encoder
+# rescores them, top-K is graded. Cost scales with queries x rerank_depth (NOT corpus
+# size), so this is the main lever on reranker wall-clock. 100 is the published default;
+# 50 roughly halves rerank time for near-identical quality (reranking rarely rescues a
+# doc dense buried below rank 50). Ignored by the dense-only config.
+rerank_depth = 100
+
+# §8 reranker feasibility — Qwen3-Reranker on CPU is ~0.3 s/pair, so reranking ALL
+# queries x depth would take ~12 days. For the dense+reranker baseline we score a
+# SEEDED RANDOM sample of this many gradable queries per subtask (0 = all). Sampling
+# is statistically unbiased: it widens each score's confidence interval (reported in
+# the scorecard) but does NOT shift the score. The reranker's LIFT is measured paired
+# on the same sampled queries, so the comparison stays precise even at n=500.
+# The dense baseline is unaffected — it always runs all queries (full precision).
+# 500/subtask x 5 x depth 100 ~= 21 h; set to 0 for the full multi-day run.
+rerank_sample_queries = 500
+
+# §P3 sparse-fusion feasibility — the dense+sparse arm scores the FULL BM25 corpus in
+# pure Python on every query (rank_bm25), so per-query cost scales with corpus size:
+# ~16 s/query at 66k docs, more at 280k (CSN-python). Running all ~15k CSN-python queries
+# is a multi-day CPU job. Like the reranker, we score a SEEDED RANDOM sample of this many
+# gradable queries per subtask (0 = all). The sparse lift is measured PAIRED on the same
+# sampled queries, so the comparison stays precise (tight lift CI) even at n=500. The dense
+# baseline is unaffected (always full precision). Shares sample_seed below for reproducibility.
+sparse_sample_queries = 500
+
+# Seed for the reranker query sample — fixes which queries are drawn so a re-run under
+# the same stack reproduces the exact baseline (§6 comparability).
+sample_seed = 13
+
+# Fast CI subset (§3): regression tripwire on retrieval-path changes, not publishable.
+ci_subtasks = ["cosqa"]
+ci_limit_queries = 50
+
+# Append-structured baseline, one record per (subtask × config), git-SHA stamped (§6).
+baseline_path = "benchmarks/baseline.jsonl"
 
 [ignore]
 # Directories to skip at any depth during disk scan.
