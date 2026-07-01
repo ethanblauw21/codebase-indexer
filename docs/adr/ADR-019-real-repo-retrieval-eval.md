@@ -6,12 +6,12 @@
 **Reviewer:** @ethanblauw21
 **Depends on:**
 - ADR-007 — reuses the **harness pattern** (fixture → run → metric → committed baseline) and the concrete **metric/CI/paired-lift helpers** in `tools/coir_eval.py` (`score_query`, `_ci95`, the paired-lift + `append_baseline` logic). This eval is the **§9 complement** ADR-007 promised: it covers the C#/C++ and structural-graph gaps CoIR structurally cannot reach.
-- ADR-009 — reuses the **`reranker_enabled` flag + `load_reranker()` scorer** introduced in §P4. The reranker off-vs-on A/B *is* `HybridRetriever(reranker_enabled=False)` vs `(reranker_enabled=True)`. This ADR is the instrument that decides whether ADR-009 flips `[reranker].enabled` to `true`.
+- ADR-009 — reuses the **`reranker_enabled` flag + `load_reranker()` scorer** (§P4) *and* the **`fusion_mode` + `convex_fuse` path** (§P3), both now merged to `master`. The reranker A/B *is* `HybridRetriever(reranker_enabled=False/True)`; the fusion A/B *is* `fusion_mode="rrf"/"convex"`. This ADR is the instrument that decides whether ADR-009 flips **either** `[reranker].enabled` **or** `[retrieval].fusion_mode` — the two decisions CoIR could not settle.
 - ADR-003 — needs the **language adapters** (C#/C++ extraction) so the indexed corpus carries real symbols + a real call graph for those languages.
 - ADR-008 — *concept only.* ADR-008 nominally "owns" the feature-tagged fixture + precision/recall machinery, but it is **not built**. Rather than serialize behind it, **this ADR defines the shared retrieval-fixture harness itself** (query → gold-FQN, feature-tagged, query-class). ADR-008's *extraction* arm can later reuse the same fixture-loading + CI scaffolding. The two remain **separate scorecards** (retrieval here, extraction there) by design — same split ADR-007/008 already established.
 
 **Depended on by:**
-- ADR-009 *(§P4)* — its "enable the reranker only when it beats the baseline" gate is **operationalized here** (§5 decision rule). ADR-009 cannot move P4 past "off by default, no quality claim" until this eval produces a verdict. **Resolve before `accepted`:** confirm the decision rule + the public/private split satisfy ADR-009's gate.
+- ADR-009 *(§P4 reranker + §P3 fusion)* — **both** "enable only when it beats the baseline" gates are **operationalized here** (§5 rules; arms C−B and D−B). ADR-009 cannot move either pillar past "off by default, no quality claim" until this eval produces a verdict. **Resolve before `accepted`:** confirm the decision rules + the public/private split satisfy ADR-009's gates, and add the reciprocal link back into ADR-009's "Depended on by" note (now on `master`).
 - ADR-014 *(usage-driven adaptive ranking)* — will need a **held-out query set** to learn over without overfitting the eval; this ADR's query corpus is the natural source. **Resolve before `accepted`:** confirm a train/held-out partition exists or is reserved.
 
 ## Context
@@ -23,7 +23,7 @@ ADR-007 built the CoIR retrieval scorecard and was deliberately honest about its
 
 Both gaps were explicitly deferred to a "planned internal-repo eval … reusing ADR-008's fixture machinery." This ADR is that eval — with one deliberate change of identity: **the corpus is pinned public GitHub repositories, not internal code.** The project's moat (ADR-008 Context) is *reporting a number competitors cannot* — and a number is only credible if its corpus is **inspectable and reproducible**. A score on a secret corpus is the very thing the thesis rejects. Public, SHA-pinned repos make the scorecard auditable; anyone can clone the same code and re-grade.
 
-That choice carries a real, named cost: **training-data contamination.** The embedder (`jina-embeddings-v2-base-code`) and the reranker (`Qwen/Qwen3-Reranker-0.6B`) were trained on public GitHub. Popular repos may be *in* the models' training data, which can inflate absolute scores and — more dangerously for our purpose — **compress the reranker's measured lift**: if the embedder already ranks memorized gold at #1, there is no headroom for the reranker to demonstrate value, biasing the off-vs-on decision toward "don't enable." This eval's headline job is exactly that decision (does ADR-009 flip `[reranker].enabled`?), so contamination is not a footnote. We address it directly (§6) by pairing the public scorecard with a **small private, contamination-free slice** used only to confirm the reranker verdict.
+That choice carries a real, named cost: **training-data contamination.** The embedder (`jina-embeddings-v2-base-code`) and the reranker (`Qwen/Qwen3-Reranker-0.6B`) were trained on public GitHub. Popular repos may be *in* the models' training data, which can inflate absolute scores and — more dangerously for our purpose — **compress the reranker's measured lift**: if the embedder already ranks memorized gold at #1, there is no headroom for the reranker to demonstrate value, biasing the off-vs-on decision toward "don't enable." This eval's headline job is exactly those two decisions (does ADR-009 flip `[reranker].enabled` or `[retrieval].fusion_mode`?), so contamination is not a footnote. We address it directly (§6) by pairing the public scorecard with a **small private, contamination-free slice** used only to confirm the enable verdicts.
 
 The pipeline under test is the real one — `src/hybrid_retriever.py` — driven end to end against an index built by the production indexer (`src/incremental_indexer.py`), not a re-implementation. `tools/eval_retrieval.py` already proves the shape of an ablation (tier-1-only vs three-tier RRF over 10 queries); this generalizes it to a committed, multi-language, multi-arm scorecard with confidence intervals.
 
@@ -39,6 +39,18 @@ A curated set of **public GitHub repos covering all five target languages** (Pyt
 - **Moderate, bounded size** — large enough to be non-trivial, small enough to index in minutes and to author trustworthy gold against.
 - **Contamination-aware** — prefer *moderately-known, not ultra-famous* projects and, where possible, recent commit SHAs, to reduce (never eliminate) training-set overlap.
 
+**Selection process — proposed, then vetoed.** Candidates are proposed per language (starter set below); the reviewer swaps in any repo they know better before SHAs are pinned, because gold authoring is far cheaper and more trustworthy on code the author has actually read. Starter candidates (permissive license, moderate size, real cross-symbol structure, deliberately *not* ultra-famous to reduce contamination — **pending veto; SHAs pinned at implementation**):
+
+| Language | Candidate repo | License | Why |
+|---|---|---|---|
+| Python | `pallets/click` | BSD-3 | Real cross-module command/decorator call structure; mid-size |
+| TypeScript | `pmndrs/zustand` | MIT | Genuine cross-file calls (not just type declarations); compact |
+| JavaScript | `sindresorhus/p-queue` | MIT | Small but real call graph (queue/worker orchestration) |
+| C# | `serilog/serilog` | Apache-2.0 | Mid-size, real interface/call structure; not Newtonsoft-famous |
+| C++ | `gabime/spdlog` | MIT | Real cross-file call graph (sinks/loggers), not a header-only single file |
+
+These balance two competing pulls — *rich enough call graph* (rules out single-file utils and pure type/header libs) against *low enough fame* (rules out the most-memorized repos). Final picks + SHAs are settled at implementation with the reviewer's vetoes applied.
+
 Data handling mirrors ADR-007 §6: **commit the queries + gold + the pinning manifest; git-ignore the cloned source and built index** (large, regenerable). A `tools/real_repo_prepare.py` clones each repo at its pinned SHA and runs the production indexer into a throwaway `.code-index`.
 
 ### §2 — Ground truth: hand-authored, feature-tagged, query-classed
@@ -52,35 +64,48 @@ Each fixture is a `query → gold` record, hand-authored and tagged:
 
 The set is deliberately **small and defensible** over large and noisy: authoring trustworthy gold on unfamiliar code (especially the "this is the *only* right answer" claim for `graph-only`) is the real cost, so we bound it to repos we actually read.
 
-### §3 — Scoring the structural-graph layer: ablation arms + graph-only queries
+### §3 — Scoring the graph + fusion layers: ablation arms, graph-only queries
 
-The eval runs three **ablation arms** on the same query set, by toggling stages of the real pipeline:
+The eval runs **four ablation arms** on the same query set, by toggling stages of the real pipeline. Three paired lifts fall out — one per stalled decision (graph value, reranker enable, sparse-fusion enable):
 
-| Arm | Pipeline | Equivalent production config |
+| Arm | Pipeline (`fusion` / graph / rerank) | Equivalent production config |
 |-----|----------|------------------------------|
-| **A — semantic** | multi-tier FAISS RRF only (no traverse, no rerank) | — |
-| **B — semantic+graph** | RRF + one-hop call-graph expansion | `[reranker].enabled = false` (today's default) |
-| **C — full** | RRF + graph + rerank | `[reranker].enabled = true` |
+| **A — semantic** | rrf / — / — (multi-tier FAISS RRF only) | — |
+| **B — semantic+graph** | rrf / graph / — | today's default (`fusion_mode = "rrf"`, `[reranker].enabled = false`) |
+| **C — +rerank** | rrf / graph / rerank | `[reranker].enabled = true` |
+| **D — +sparse fusion** | convex / graph / — | `fusion_mode = "convex"` |
 
-- **Graph lift = B − A** (paired) — quantifies what the Traverse step adds, the thing CoIR cannot measure. The `graph-only` query class is where B should dominate A decisively; if it doesn't, the graph step is not earning its latency.
-- **Reranker lift = C − B** (paired) — the off-vs-on comparison that drives the §5 decision.
+- **Graph lift = B − A** (paired) — what the Traverse step adds, the thing CoIR cannot measure. The `graph-only` query class is where B should dominate A decisively; if it doesn't, the graph step is not earning its latency.
+- **Reranker lift = C − B** (paired) — the reranker off-vs-on comparison; drives the §5 reranker rule.
+- **Sparse-fusion lift = D − B** (paired) — the convex-vs-rrf comparison at the current default (graph on, rerank off); drives the §5 fusion rule. This is the **literal-identifier re-test** CoIR under-powered: ADR-009 §P3 rejected convex on CoIR's NL→code queries, but here the `semantic` fixture set deliberately includes exact-identifier / rare-token queries where BM25 is supposed to win. Isolating D−B (rather than stacking convex under the reranker) keeps the two enable decisions independent.
+
+*(A combined arm E = convex + graph + rerank is deferred — the two enable gates are decided on the isolated paired lifts above; E only matters once both independently pass.)*
 
 ### §4 — Metrics & scorecard
 
-Reuse ADR-007's metric set verbatim for cross-scorecard comparability: **MRR@10, NDCG@10, Recall@{1,5,10}, Success@{1,5,10}, MAP**, plus token-economy and latency where meaningful. To avoid a second implementation, **extract the shared helpers** (`score_query`, `_ci95`, paired-lift, `append_baseline`) from `tools/coir_eval.py` into a small shared module both tools import — the same single-implementation discipline applied to `src/reranker.py` in ADR-009. Every reported number carries a **95% CI** (sampled where the query set is subsampled), and every lift is **paired** (B−A, C−B) so sampling noise cancels. Results are broken down **per language, per arm, and per query class**, appended to a committed `benchmarks/real_repo_baseline.jsonl` (deduped, git-SHA-stamped).
+Reuse ADR-007's metric set verbatim for cross-scorecard comparability: **MRR@10, NDCG@10, Recall@{1,5,10}, Success@{1,5,10}, MAP**, plus token-economy and latency where meaningful. To avoid a second implementation, **extract the shared helpers** (`score_query`, `_ci95`, paired-lift, `append_baseline`) from `tools/coir_eval.py` into a small shared module both tools import — the same single-implementation discipline applied to `src/reranker.py` in ADR-009. Every reported number carries a **95% CI** (sampled where the query set is subsampled), and every lift is **paired** (B−A, C−B, D−B) so sampling noise cancels. Results are broken down **per language, per arm, and per query class**, appended to a committed `benchmarks/real_repo_baseline.jsonl` (deduped, git-SHA-stamped).
 
-### §5 — The reranker decision rule (operationalizes ADR-009 §P4)
+### §5 — The enable decision rules (operationalizes ADR-009 §P4 reranker + §P3 fusion)
 
-`[reranker].enabled` flips to `true` **only if all hold**, measured as the paired reranker lift (arm C − arm B):
+Two ADR-009 config flags flip **only when their paired lift clears the same three-clause bar** — the measured gate ADR-009 promised, with contamination firewalled.
+
+**Rule (applied independently to each decision):** flip the flag **only if all hold** —
 1. **Mean lift > 0** on **both MRR@10 and NDCG@10**, with the **95% CI excluding zero** (a real, not-noise improvement).
 2. **No target-language regression** — no language shows a negative mean lift on MRR@10.
 3. **Confirmed on the private slice (§6)** — the contamination-free eval agrees with the public verdict.
 
-If the public eval says "enable" but the private slice does not, **default to off** (conservative) and investigate the discrepancy. This is the measured gate ADR-009 §P4 promised, with the contamination risk explicitly firewalled.
+| Decision (ADR-009) | Flag | Paired lift |
+|---|---|---|
+| Enable the reranker (§P4) | `[reranker].enabled` → `true` | arm **C − B** |
+| Enable convex fusion (§P3) | `[retrieval].fusion_mode` → `"convex"` | arm **D − B** |
+
+If the public eval says "enable" but the private slice does not, **default to off** (conservative) and investigate the discrepancy. The two decisions are independent — one may pass while the other fails. Note the fusion gate is not a second bite at the same apple: the CoIR full sweep already rejected convex under this rule on NL→code queries (ADR-009 §P3 log); a pass *here* would reflect the literal-identifier query mix CoIR structurally lacked, not a re-run of the same test.
 
 ### §6 — The private slice (contamination-free decision check)
 
-A **small private eval** — same harness, same fixture format, same arms — authored over code **known not to be in the models' training data** (e.g. internal/unpublished repos), kept **entirely out of the repo** (git-ignored, results reported as numbers only). Its sole role is §5 clause 3: confirm the reranker verdict on clean code, so a contamination-compressed public lift cannot, by itself, wrongly veto a reranker that genuinely helps real users. It is **not** part of the publishable scorecard.
+A **small private eval** — same harness, same fixture format, same arms — over a **freshly-written, clean-room repo authored to post-date the models' training cutoff** (contamination-free *by construction*, rather than hoping an internal repo escaped the crawl). Kept **entirely out of the repo** (git-ignored, results reported as numbers only). It need not span all five languages — a compact codebase in ~2 languages with genuine cross-symbol call edges is enough to exercise arms B/C/D. Its sole role is §5 clause 3: confirm the reranker **and** fusion verdicts on clean code, so a contamination-compressed public lift cannot, by itself, wrongly veto a change that genuinely helps real users. It is **not** part of the publishable scorecard.
+
+**Authoring caveat (flag, don't skip).** A hand-written repo must have *real* structure — non-trivial call chains, some rare identifiers, realistic naming — or it becomes the "synthetic fixtures" alternative we rejected. Budget it as a genuine (if small) codebase, not a toy.
 
 ### §7 — CI tripwire
 
@@ -98,7 +123,7 @@ Per Mantra 2, the number must never be oversold:
 **Better:**
 - Closes both ADR-007 §9 gaps: **C#/C++ retrieval** and the **structural-graph layer** finally get a number.
 - Produces the **inspectable, reproducible accuracy artifact** the depth-over-breadth moat needs — a score on a corpus anyone can clone and re-grade.
-- Gives ADR-009 §P4 a **rigorous, contamination-firewalled gate** for the reranker decision instead of CoIR's wrong-instrument neutral/negative datapoints.
+- Gives **both** stalled ADR-009 decisions — the §P4 reranker enable **and** the §P3 convex-fusion enable — a **rigorous, contamination-firewalled gate** on real code, instead of CoIR's wrong-instrument neutral/negative datapoints. One eval, two verdicts.
 - Tests the **real `HybridRetriever`** end to end (not a re-implementation), so the number reflects what ships.
 - Reuses ADR-007 metrics + ADR-009's `reranker_enabled` flag — small net-new surface; the A/B is a constructor argument.
 
@@ -128,17 +153,18 @@ Per Mantra 2, the number must never be oversold:
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] Extract shared metric/CI/paired-lift/append helpers from `tools/coir_eval.py` into a shared module; refactor `coir_eval.py` to import them (no behavior change).
-- [ ] Author the pinned-repo manifest (`[real_repo_eval]` in `indexer.toml` or `benchmarks/real_repo/repos.toml`): name, URL, SHA, language, license — per §1 selection criteria.
+- [ ] Extract shared metric/CI/paired-lift/append helpers from `tools/coir_eval.py` into a shared module (`tools/eval_common.py`); refactor `coir_eval.py` to import them (no behavior change).
+- [ ] Propose the pinned-repo manifest (`benchmarks/real_repo/repos.toml`: name, URL, SHA, language, license) from the §1 starter candidates; apply reviewer vetoes; pin SHAs.
 - [ ] `tools/real_repo_prepare.py`: clone each repo at its SHA + build the index via the production indexer into a git-ignored `.code-index`.
-- [ ] Define the fixture format (`query`, `gold` FQNs, `feature` tag, `class` ∈ {semantic, graph-only}); author the initial committed set across all five languages.
-- [ ] `tools/real_repo_eval.py`: drive the real `HybridRetriever` for arms A/B/C; grade returned chunks against gold FQNs; emit per-language / per-arm / per-class metrics + CIs + paired lifts to `benchmarks/real_repo_baseline.jsonl`.
-- [ ] Implement §5 decision rule as an explicit, printed verdict (PASS/FAIL per clause), run on both public eval and private slice.
-- [ ] Stand up the §6 private slice (git-ignored fixtures + repos) and document how to run it locally.
-- [ ] Wire the §7 CI tripwire (tiny subset, committed MRR@10 floor).
+- [ ] Define the fixture format (`query`, `gold` FQNs, `feature` tag, `class` ∈ {semantic, graph-only}); author the committed set across all **five** languages (incl. exact-identifier/rare-token queries in `semantic` for the fusion arm).
+- [ ] `tools/real_repo_eval.py`: drive the real `HybridRetriever` for arms **A/B/C/D** (fusion_mode + reranker_enabled toggles); grade returned chunks against gold FQNs; emit per-language / per-arm / per-class metrics + CIs + paired lifts (B−A, C−B, D−B) to `benchmarks/real_repo_baseline.jsonl`.
+- [ ] Implement the §5 rules as explicit printed verdicts (PASS/FAIL per clause) for **both** decisions — reranker (C−B) and fusion (D−B) — run on public eval **and** private slice.
+- [ ] Stand up the §6 private slice: author a **freshly-written clean-room repo** (post-cutoff, ~2 languages, real call edges) + git-ignored fixtures; document how to run it locally.
+- [ ] Wire the §7 CI tripwire (tiny subset, arm B, committed MRR@10 floor).
 - [ ] Add the §8 contamination + coverage caveats to the scorecard header and `README` table label.
 - [ ] `.gitignore` the cloned corpora + `.code-index` + private slice; commit only fixtures + manifest + baseline.
-- [ ] Resolve **Depended on by**: confirm the §5 rule satisfies ADR-009 §P4's gate; reserve a held-out partition for ADR-014, before `accepted`.
+- [ ] Resolve **Depended on by**: confirm the §5 rules satisfy ADR-009 §P4 **and** §P3 gates and add the **reciprocal link into ADR-009 on `master`**; reserve a held-out partition for ADR-014 — before `accepted`.
 
 **Notes:**
 <!-- 2026-06-22: Created from /grill-plan. Key decisions captured in the grill: corpus = pinned PUBLIC GitHub repos (transparency/reproducibility = the moat) + a private contamination-free SLICE for the reranker decision; ground truth = hand-authored, feature-tagged, query-classed, harness defined HERE (not blocked on ADR-008); graph layer scored via ablation arms (A semantic / B +graph / C +rerank) PLUS a dedicated graph-only query class; reranker enable rule = paired lift C−B with 95% CI excluding zero on MRR@10 AND NDCG@10, no per-language regression, confirmed on the private slice. Renamed from "internal-repo eval" (ADR-007 §9 / ADR-008 wording) because the committed corpus is public, not internal. -->
+<!-- 2026-07-01: Second /grill-plan pass — sharpened the design into an implementation-ready plan now that ADR-009 (P1/P3/P4) + ADR-007 are merged to master. Four grilled decisions: (1) build the FULL five-language scorecard up front (no phasing); (2) ADD a convex-fusion arm D so this one eval settles BOTH stalled ADR-009 decisions — reranker (C−B) AND sparse fusion (D−B, the literal-identifier re-test CoIR under-powered per the §P3 rejection); (3) private slice = a FRESHLY-WRITTEN clean-room repo (contamination-free by construction, post-cutoff), ~2 languages, not existing internal code; (4) corpus = I propose per-language candidates (starter table in §1), reviewer vetoes before SHA pinning. §5 generalized to two flag-flip rules under one three-clause bar; impl log + cross-refs updated; reciprocal link back into ADR-009 (now on master) is an explicit checklist item. -->
