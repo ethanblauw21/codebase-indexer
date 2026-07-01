@@ -219,15 +219,15 @@ call_graph(fqn, depth, direction, visited) AS (
     UNION ALL
 
     SELECT
-        e.target,
+        COALESCE(e.resolved_target, e.target),
         cg.depth + 1,
         'calls',
-        cg.visited || e.target || char(31)
+        cg.visited || COALESCE(e.resolved_target, e.target) || char(31)
     FROM   edges      e
     JOIN   call_graph cg  ON cg.fqn = e.source_fqn
     WHERE  e.kind         = 'CALLS'
       AND  cg.depth       < :max_depth
-      AND  instr(cg.visited, char(31) || e.target || char(31)) = 0
+      AND  instr(cg.visited, char(31) || COALESCE(e.resolved_target, e.target) || char(31)) = 0
 
     UNION ALL
 
@@ -237,7 +237,7 @@ call_graph(fqn, depth, direction, visited) AS (
         'called_by',
         cg.visited || e.source_fqn || char(31)
     FROM   edges      e
-    JOIN   call_graph cg  ON cg.fqn = e.target
+    JOIN   call_graph cg  ON cg.fqn = COALESCE(e.resolved_target, e.target)
     WHERE  e.kind         = 'CALLS'
       AND  cg.depth       < :max_depth
       AND  instr(cg.visited, char(31) || e.source_fqn || char(31)) = 0

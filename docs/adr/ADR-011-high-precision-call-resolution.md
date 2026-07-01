@@ -5,6 +5,7 @@
 **Branch:** `feature/adr-011-high-precision-call-resolution`
 **Reviewer:** @ethanblauw21
 **Depends on:**
+- ADR-021 — the **baseline call-edge resolution layer this builds on.** ADR-021 resolves the *unambiguous* call (one provable in-repo target) and establishes the `resolved_target` write + `COALESCE(resolved_target, target)` traversal contract. This ADR adds the *hard, ambiguous* receiver-typed case (type inference) with graded `Edge.confidence` **on top of** that contract — it does not re-implement it.
 - ADR-017 — needs the **Tier-A promotion path** (fitting-adapter tier); this ADR's hybrid resolution is the mechanism that promotes receiver-typed languages — **C++ and C# today** (existing adapters), **Go, C, and others as their adapters land** — toward Tier-A precision.
 - ADR-008 — needs the shared **`Edge.confidence` field** (A3) to emit graded-confidence edges, and the **precision/recall harness** to measure that resolution rate rises *with precision held*. **Pairs with** ADR-008.
 **Depended on by:**
