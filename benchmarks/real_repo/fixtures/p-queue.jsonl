@@ -1,0 +1,10 @@
+{"id": "pq-add", "query": "add a single task to the queue and await its result as a promise", "gold": ["source/index.ts::PQueue.add"], "feature": "js/promise-return", "class": "semantic"}
+{"id": "pq-add-all", "query": "enqueue many asynchronous functions at once and wait for all of them", "gold": ["source/index.ts::PQueue.addAll"], "feature": "js/promise-all", "class": "semantic"}
+{"id": "pq-pause", "query": "temporarily stop the queue from starting new tasks", "gold": ["source/index.ts::PQueue.pause"], "feature": "js/state-toggle", "class": "semantic"}
+{"id": "pq-on-idle", "query": "return a promise that resolves once the queue has drained and nothing is pending", "gold": ["source/index.ts::PQueue.onIdle"], "feature": "js/event-wait", "class": "semantic"}
+{"id": "pq-concurrency", "query": "limit how many tasks are allowed to run at the same time", "gold": ["source/index.ts::PQueue.concurrency"], "feature": "js/getter-setter", "class": "semantic"}
+{"id": "pq-lowerbound", "query": "binary search for the leftmost insertion index in a sorted array", "gold": ["source/lower-bound.ts::lowerBound"], "feature": "js/binary-search", "class": "semantic"}
+{"id": "pq-setpriority", "query": "setPriority", "gold": ["source/index.ts::PQueue.setPriority", "source/priority-queue.ts::PriorityQueue.setPriority"], "feature": "js/exact-identifier", "class": "semantic"}
+{"id": "pq-dequeue", "query": "remove and return the next highest-priority item to run", "gold": ["source/priority-queue.ts::PriorityQueue.dequeue"], "feature": "js/priority-heap", "class": "semantic"}
+{"id": "pq-graph-lowerbound-callers", "query": "where is the sorted-insertion lower-bound helper actually used when queuing a prioritized item", "gold": ["source/priority-queue.ts::PriorityQueue.enqueue"], "feature": "js/graph-callers", "class": "graph-only"}
+{"id": "pq-graph-add-callee", "query": "internal enqueue routine invoked by the public method that schedules one task", "gold": ["source/priority-queue.ts::PriorityQueue.enqueue"], "feature": "js/graph-callee", "class": "graph-only"}
