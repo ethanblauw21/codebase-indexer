@@ -421,6 +421,10 @@ Apache-2.0 is compatible with all MIT/Apache vendored `tags.scm` files.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
+**Phase 0 — Tier-A scan-gate fix: C#/C++ source indexing — DONE 2026-07-01**
+- [x] Add `.cs`/`.cpp`/`.cc`/`.cxx`/`.h`/`.hpp` to `incremental_indexer.INDEXABLE_EXTS` so the disk scan **chunks + embeds** C#/C++ source. The Tier-A adapters (ADR-003) and §1's "C#/C++ = Tier A" claim already existed; the scan gate silently omitted these extensions, so C#/C++ **code was never indexed** — only `.csproj`/`.sln` descriptors (edges-only). Surfaced while implementing ADR-019 (its real-repo eval needs C#/C++ chunks for arm A). Validated end-to-end on the fixtures: `sample.cs`/`sample.cpp` → 19 symbol chunks each → embedded (768-d) → FAISS (`tier1_surgical` ntotal 38). Regression test: `tests/test_cs_cpp_indexing.py`.
+- **Scope:** this is *only* the Tier-A integration fix. The Tier-B `GenericTreeSitterAdapter`, capability probe, and candidate-edge semantics (Phases 1–4 below) are untouched — ADR-017 stays `proposed`.
+
 **Phase 1 — Edge.candidate + verdict semantics**
 - [ ] Add `candidate: bool = False` to `Edge`; thread through `db.upsert_file` edge write and read path
 - [ ] Backfill C++ overload-set edges to `candidate=True` (ADR-003 §2.3)
@@ -445,5 +449,6 @@ Apache-2.0 is compatible with all MIT/Apache vendored `tags.scm` files.
 - [ ] Confirm `generic-go/v1` → `go/v1` triggers ADR-005 `recheck` reindex
 
 **Notes:**
+<!-- 2026-07-01: Phase 0 landed independently of the Tier-B work — a correctness fix wiring the existing Tier-A C#/C++ adapters into incremental_indexer's scan gate (INDEXABLE_EXTS). Found while building ADR-019's real-repo eval, which surfaced that §1's "C#/C++ = Tier A" was aspirational: the adapters were built + snapshot-tested (ADR-003), but the shipping indexer never scanned .cs/.cpp source, so C#/C++ code retrieval did not actually work. -->
 <!-- 2026-06-18: Grilled via /grill-plan. EMPIRICAL FINDINGS that drove the design: all five installed grammars bundle queries/tags.scm; C++ tags.scm has definitions but NO @reference.call (proves capability variance is real, forces the probe + B1/B2). nvim-treesitter ships no tags.scm (editor queries only) — official tree-sitter grammar repos are the source. Decisions: A3+B1 pinning/provenance, permissive-only gate, floating only in experimental lane, Apache-2.0, three-state verdicts with safe-direction + two-stage agent verification. -->
 <!-- 2026-06-11: Centroid best-fit router rejected for code (grammar incompatibility); it belongs to the document/filesystem indexer where text chunkers degrade gracefully. -->
