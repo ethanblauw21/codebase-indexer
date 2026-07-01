@@ -241,6 +241,36 @@
         "resolved_target": null
       },
       {
+        "source_fqn": "MyApp.Services.DataService.Fetch/1",
+        "target": "Format",
+        "kind": "call",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "MyApp.Services.DataService.Fetch/2",
+        "target": "Clear",
+        "kind": "call",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "MyApp.Services.DataService.Fetch/2",
+        "target": "Fetch",
+        "kind": "call",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "MyApp.Services.DataService.FetchAsync/1",
+        "target": "Delay",
+        "kind": "call",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "MyApp.Services.DataService.FetchAsync/1",
+        "target": "Fetch",
+        "kind": "call",
+        "resolved_target": null
+      },
+      {
         "source_fqn": "MyApp.Services.DataServiceBase",
         "target": "MyApp.Services.DataServiceBase.BaseTag",
         "kind": "owns",
@@ -250,6 +280,12 @@
         "source_fqn": "MyApp.Services.DataServiceBase",
         "target": "MyApp.Services.DataServiceBase.Format/1",
         "kind": "owns",
+        "resolved_target": null
+      },
+      {
+        "source_fqn": "MyApp.Services.DataServiceBase.Format/1",
+        "target": "Trim",
+        "kind": "call",
         "resolved_target": null
       },
       {
