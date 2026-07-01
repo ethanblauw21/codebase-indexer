@@ -96,7 +96,16 @@ IGNORE_DIRS: frozenset[str] = frozenset({
 })
 IGNORE_ROOT_DIRS: frozenset[str] = frozenset({"functions"})
 
-INDEXABLE_EXTS: frozenset[str] = frozenset({".py", ".ts", ".tsx", ".js", ".jsx"})
+# Source extensions the disk scan chunks + embeds. C#/C++ have full Tier-A adapters
+# (ADR-003; adapters/__init__.py registers .cs/.cpp/.cc/.cxx/.h/.hpp) and ADR-017 §1
+# lists them as Tier A, but the scan gate historically omitted them — so their source
+# was never chunked, only their .csproj/.sln descriptors (edges only). Wiring the
+# extensions here makes the shipping indexer honor the Tier-A claim for C#/C++.
+INDEXABLE_EXTS: frozenset[str] = frozenset({
+    ".py", ".ts", ".tsx", ".js", ".jsx",   # Tier-A: JS/TS/Python
+    ".cs",                                   # Tier-A: C#
+    ".cpp", ".cc", ".cxx", ".h", ".hpp",     # Tier-A: C++ (.h routed to the C++ adapter)
+})
 
 # Project descriptor files: edges only, no chunking or embedding.
 PROJECT_EXTS: frozenset[str] = frozenset({".csproj", ".sln"})
