@@ -134,8 +134,18 @@ def build_index(repo, corpus_dir, force=False):
 
     ii.run_incremental(repo_path=corpus_dir)
 
+    # ADR-021: ensure CALLS edges are resolved so the graph Traverse step works.
+    # run_incremental already resolves during a real index build, but re-running it
+    # here is idempotent and also covers a no-change run (early return, no resolve)
+    # or an index built by a pre-ADR-021 indexer — so a prepared index is always
+    # resolved without needing a full --force re-embed.
+    from call_resolver import resolve_call_edges
     with CodeDB(ii.DB_PATH) as db:
-        return db.stats(), index_dir
+        res = resolve_call_edges(db)
+        stats = db.stats()
+    print(f"  call resolution: {res['resolved']} resolved | "
+          f"{res['ambiguous']} ambiguous | {res['external']} external")
+    return stats, index_dir
 
 
 def _load_prepared():
