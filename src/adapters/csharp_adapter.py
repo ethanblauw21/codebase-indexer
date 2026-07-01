@@ -55,11 +55,15 @@ _USING_QUERY = """
 (using_directive [(identifier) (qualified_name)] @path)
 """
 
+# NOTE: member_access_expression's callee field is `name` in tree-sitter-c-sharp,
+# not `member`. The wrong field name silently made the whole alternation match
+# nothing, so C# emitted ZERO call edges (found via ADR-019: serilog had 0 CALLS
+# across 221 files). Both `Foo()` and `recv.Method()` are captured with `name:`.
 _CALL_QUERY = """
 (invocation_expression
   function: [
     (identifier) @name
-    (member_access_expression member: (identifier) @name)
+    (member_access_expression name: (identifier) @name)
   ])
 """
 
