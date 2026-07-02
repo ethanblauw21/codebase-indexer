@@ -111,6 +111,8 @@ A **small private eval** — same harness, same fixture format, same arms — ov
 
 A tiny subset (one small repo, a handful of queries, arm B only) wired as a **regression tripwire** on retrieval-path changes — the analogue of ADR-007's `ci_subtasks`/`ci_limit_queries`. Fast, not publishable; it fails the build if MRR@10 drops below a committed floor, so a refactor that silently breaks retrieval is caught.
 
+*Implemented (2026-07-02):* `tools/real_repo_tripwire.py` grades **p-queue** (the smallest pinned repo, 8 fixtures) on **arm B** against a committed **MRR@10 floor of 0.45** (measured baseline 0.5875; the floor sits ~one query's worth of MRR below it, so deterministic-embedding noise / a model-version bump never trips it but a real collapse does). It self-prepares (clone at the pinned SHA + production index, incl. ADR-021 call resolution) so the git-ignored corpus need not be committed, then exits non-zero below the floor and lists the missing queries. A dedicated `retrieval-tripwire` job in `.github/workflows/ci.yml` runs it on every PR with the ~300 MB embedder HuggingFace-cached. Re-baseline the floor only on an intentional change (`--floor` overrides for a one-off).
+
 ### §8 — Coverage & limits (honest current state)
 
 Per Mantra 2, the number must never be oversold:
@@ -160,7 +162,7 @@ Per Mantra 2, the number must never be oversold:
 - [x] `tools/real_repo_eval.py`: drive the real `HybridRetriever` for arms **A/B/C/D** (graph/fusion/reranker toggles); grade returned chunks against gold FQNs (normalized suffix match — scope format is language-dependent); emit per-language / per-arm / per-class metrics + CIs + paired lifts to `benchmarks/real_repo_baseline.jsonl`.
 - [x] Implement the §5 rules as explicit printed verdicts (PASS/FAIL per clause) for reranker (C−B) and fusion (D−B). **Public verdicts DONE (2026-07-01): both FAIL → both flags stay off** (reranker +0.078 CI incl 0 + js regression; convex −0.096 negative in all 5 langs). Recorded in ADR-009 §P3/§P4.
 - [~] Stand up the §6 private slice: author a **freshly-written clean-room repo** (post-cutoff, ~2 languages, real call edges) + git-ignored fixtures; document how to run it locally. **Moot for the current decisions** — clause 3 (private confirmation) only gates *enabling* a flag; both public verdicts say *don't enable*, so the contamination-free control cannot flip either decision. Becomes relevant only if a better-powered rerun pushes the reranker C−B over the bar.
-- [ ] Wire the §7 CI tripwire (tiny subset, arm B, committed MRR@10 floor).
+- [x] Wire the §7 CI tripwire (tiny subset, arm B, committed MRR@10 floor). **DONE (2026-07-02):** `tools/real_repo_tripwire.py` (p-queue, arm B, floor 0.45 vs measured 0.5875 baseline; self-prepares clone+index) + a `retrieval-tripwire` job in `.github/workflows/ci.yml` (HF-model-cached). Exits non-zero on collapse below the floor.
 - [ ] Add the §8 contamination + coverage caveats to the scorecard header and `README` table label.
 - [x] `.gitignore` the cloned corpora + `.code-index` + private slice; commit only fixtures + manifest + baseline.
 - [ ] Resolve **Depended on by**: confirm the §5 rules satisfy ADR-009 §P4 **and** §P3 gates and add the **reciprocal link into ADR-009 on `master`**; reserve a held-out partition for ADR-014 — before `accepted`.

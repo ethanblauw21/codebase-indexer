@@ -58,3 +58,32 @@ jobs:
       - name: Write CI summary and enforce thresholds
         if: always()
         run: python tools/ci_summary.py --threshold-high 90 --threshold-low 80
+
+  retrieval-tripwire:
+    name: Retrieval tripwire (ADR-019 §7)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: pip install -e .
+
+      # The embedder (~300 MB) is deterministic; cache it so only the first run
+      # (or a model-id bump) pays the download. Keyed on the model id in core.py.
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-jina-embeddings-v2-base-code
+
+      # One small repo (p-queue), arm B only, committed MRR@10 floor. Self-prepares
+      # (clone at pinned SHA + production index), then fails the build if retrieval
+      # collapsed below the floor. Fast regression guard, not a publishable number.
+      - name: Run real-repo retrieval tripwire
+        run: python tools/real_repo_tripwire.py
