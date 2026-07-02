@@ -1,0 +1,9 @@
+{"id": "zus-create-store", "query": "create a vanilla store that holds state and exposes getState, setState and subscribe", "gold": ["src/vanilla.ts::createStoreImpl"], "feature": "ts/store-factory", "class": "semantic"}
+{"id": "zus-use-store", "query": "react hook that subscribes a component to the store and selects a slice of state", "gold": ["src/react.ts::useStore"], "feature": "ts/react-hook", "class": "semantic"}
+{"id": "zus-persist", "query": "middleware that saves store state to storage and rehydrates it on reload", "gold": ["src/middleware/persist.ts::persistImpl"], "feature": "ts/middleware", "class": "semantic"}
+{"id": "zus-devtools", "query": "middleware connecting a store to the Redux DevTools browser extension", "gold": ["src/middleware/devtools.ts::devtoolsImpl"], "feature": "ts/middleware", "class": "semantic"}
+{"id": "zus-combine", "query": "middleware that merges an initial state object with a state-creator of actions", "gold": ["src/middleware/combine.ts::combine"], "feature": "ts/middleware", "class": "semantic"}
+{"id": "zus-subscribe-selector", "query": "middleware letting you subscribe to changes of a selected portion of state", "gold": ["src/middleware/subscribeWithSelector.ts::subscribeWithSelectorImpl"], "feature": "ts/middleware", "class": "semantic"}
+{"id": "zus-shallow", "query": "shallow equality comparison between two objects, maps or sets", "gold": ["src/vanilla/shallow.ts::shallow"], "feature": "ts/equality", "class": "semantic"}
+{"id": "zus-json-storage", "query": "wrap a synchronous or async storage backend with JSON serialization for persistence", "gold": ["src/middleware/persist.ts::createJSONStorage"], "feature": "ts/storage", "class": "semantic"}
+{"id": "zus-use-shallow", "query": "useShallow", "gold": ["src/react/shallow.ts::useShallow"], "feature": "ts/exact-identifier", "class": "semantic"}

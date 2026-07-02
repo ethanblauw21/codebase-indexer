@@ -8,6 +8,7 @@
 - ADR-007 — needs the **committed Wave-0 baseline** and the **fast CI subset** to validate each component swap as a measured lift, not a claim. No swap lands without a number beating the baseline.
 **Depended on by:**
 - ADR-014 *(planned — docs/adr-backlog.md)* — Adaptive Ranking learns weights over **this ADR's fusion stage** (the convex/weighted combination introduced in P3); it needs the fusion to be parameterized (tunable weights) rather than fixed RRF.
+- ADR-019 *(real-repo retrieval eval)* — **operationalizes the §P3 (fusion) and §P4 (reranker) enable decisions** this ADR could not settle on CoIR. Its 2026-07-01 verdicts (arms D−B and C−B over 5 languages) are recorded in §P3/§P4: **both flags stay off** — convex fusion rejected outright, reranker positive-but-underpowered. ADR-019 is also the instrument that would flip either flag if a better-powered rerun clears the bar.
 
 > Source of record: [docs/adr-backlog.md](../adr-backlog.md) (ADR-009 bucket + build kit) and
 > [modernization-stack-review.md](../modernization-stack-review.md) (Pillars 1–4). Citations `[n]` index
@@ -112,6 +113,16 @@ Qwen3-Reranker as a real opt-in via the shared `src/reranker.py` scorer. No qual
 reranker lift on CoIR was neutral (cosqa) to negative (codefeedback-mt) under the ADR-007 harness, so it
 stays off pending the internal-repo eval (ADR-008).
 
+**Real-repo eval result (2026-07-01, ADR-019).** The reranker was finally measured on real code — 5
+languages, 42 hand-authored queries, the real `HybridRetriever(reranker_enabled=True/False)`, paired lift
+**C−B**. Pooled: **MRR@10 +0.078 ±0.120, NDCG@10 +0.058 ±0.098** — positive means, but the 95% CI includes
+zero and one target language regresses (js / p-queue −0.129). Under the §Validation contract this **FAILS**
+the enable bar, so **`[reranker].enabled` stays `false`.** Crucially this is *not* a rejection like CoIR's:
+the lift is **positive on 4 of 5 languages** and materially so on TypeScript (+0.264) and C# (+0.182) — the
+**first positive reranker signal** the project has produced. Read it as "probably helps, underpowered at
+n=42," not "doesn't help." Tightening that CI (a larger query set; investigate the lone p-queue regression)
+is the path to a definitive verdict. *(Same eval rejected convex fusion §P3 — negative in all 5 languages.)*
+
 ### §S2 — Late interaction (optional research phase)
 
 ColBERT-style late-interaction (token-level multi-vector matching) is listed as an **optional research
@@ -176,8 +187,8 @@ harness would not catch it.
 
 - [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22)** — see note below; default still jina-v2. Swap + reindex + dense validation is the deferred operator run.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
-- [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR, stays off (`rrf`).** No subtask showed positive paired lift (cosqa & CSN-js significant regressions; stackoverflow & CSN-python neutral); revisit under ADR-014 (weight-learning) / ADR-019 (literal-query eval). See log below.
-- [~] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22)** — see note below; off by default, no quality claim. Quality validation still pending the internal-repo eval.
+- [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR AND on the ADR-019 real-repo eval (negative in all 5 languages, incl. the exact-identifier queries BM25 was meant to win), stays off (`rrf`).** See log below.
+- [x] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22); quality validation DONE (2026-07-01, ADR-019).** Off by default: real-repo C−B lift is positive on 4/5 languages but fails the enable bar (CI includes 0; js regresses) — first positive reranker signal, underpowered at n=42. See §P4 + note.
 - [ ] Document the one-time reindex + FAISS dimension implications.
 - [ ] (Optional) S2 late-interaction research spike; ship only on a measured lift.
 - [ ] Resolve **Depended on by**: confirm the parameterized-fusion contract ADR-014 will learn over, before `accepted`.

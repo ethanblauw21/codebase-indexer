@@ -128,6 +128,13 @@ class HybridRetriever:
         Whether to rerank at all. ``None`` (default) reads ``[reranker].enabled``
         from indexer.toml (default ``False``). When ``False`` the pipeline returns
         the RRF-ranked top-10 — the honest, measured default (ADR-007 / ADR-009 §P4).
+    graph_enabled :
+        Whether to run the step-2 structural (call-graph) expansion. ``True``
+        (default) is the production Retrieve-Traverse-Rerank pipeline. ``False``
+        skips expansion so the pool is semantic hits only — this is the ADR-019
+        **arm A** (semantic) vs **arm B** (semantic+graph) ablation, the paired
+        lift B−A that isolates what the Traverse step earns. Production never sets
+        this; only the real-repo eval toggles it.
     fusion_mode :
         Dense/sparse fusion. ``None`` (default) reads ``[retrieval].fusion_mode``
         from indexer.toml (default ``"rrf"``). ``"rrf"`` = dense-only multi-tier RRF
@@ -153,6 +160,7 @@ class HybridRetriever:
         reranker_model: Optional[str] = None,
         reranker_enabled: Optional[bool] = None,
         fusion_mode: Optional[str] = None,
+        graph_enabled: bool = True,
         device: str = "cpu",
     ) -> None:
         self._index_manager = MultiIndexManager(base_dir=index_dir)
@@ -175,6 +183,10 @@ class HybridRetriever:
             reranker_model or rer_cfg.get("model_id", "Qwen/Qwen3-Reranker-0.6B")
         )
         self._device = device
+
+        # Step-2 structural expansion toggle. Production leaves this on; the ADR-019
+        # eval flips it off for arm A (semantic-only) to measure the graph lift B−A.
+        self._graph_enabled: bool = graph_enabled
 
         self._reranker: Optional[object] = None
         self._reranker_failed: bool = False
@@ -251,7 +263,11 @@ class HybridRetriever:
         """
         self._import_cache.clear()
         semantic_hits = self._semantic_search(query, k=_SEMANTIC_K)
-        pool = self._expand_structurally_budgeted(semantic_hits)
+        pool = (
+            self._expand_structurally_budgeted(semantic_hits)
+            if self._graph_enabled
+            else semantic_hits
+        )
         return self._rerank(query, pool)
 
     # ------------------------------------------------------------------

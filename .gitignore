@@ -56,3 +56,10 @@ Thumbs.db
 graphify-out/*
 !graphify-out/GRAPH_REPORT.md
 !graphify-out/graph.html
+
+# ADR-019 real-repo eval: cloned corpora + built indexes are regenerable from the
+# pinned SHAs in benchmarks/real_repo/repos.toml; the private slice (§6) is never
+# committed. Only the manifest, the hand-authored fixtures, and the baseline are tracked.
+benchmarks/real_repo/corpus/
+benchmarks/real_repo/index/
+benchmarks/real_repo/private/

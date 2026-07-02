@@ -1,0 +1,56 @@
+# benchmarks/real_repo/repos.toml — ADR-019 pinned public corpus manifest.
+#
+# The real-repo retrieval eval indexes THESE repositories, at THESE exact commits,
+# with the production indexer, then grades the real HybridRetriever against the
+# hand-authored fixtures in benchmarks/real_repo/fixtures/. Pinning by commit SHA
+# makes the scorecard reproducible and auditable — anyone can clone the same code
+# and re-grade (ADR-019 §1, the moat's "inspectable number").
+#
+# Selection (ADR-019 §1, reviewer-approved 2026-07-01): permissive license, a real
+# cross-symbol call graph (not single-file utils or pure type/header libs), moderate
+# size (indexes in minutes), and deliberately NOT ultra-famous, to limit — never
+# eliminate — training-data contamination (§8; the private slice §6 is the control).
+#
+# Each repo is pinned to its latest stable RELEASE tag's commit (more meaningful and
+# stable than a moving default-branch HEAD). tools/real_repo_prepare.py clones at
+# `sha` into a git-ignored working dir; only this manifest + the fixtures are committed.
+
+[[repos]]
+name     = "click"
+language = "python"
+url      = "https://github.com/pallets/click"
+license  = "BSD-3-Clause"
+tag      = "8.4.2"
+sha      = "b2e30a175449cfda909ee4fbf4a29a6a071cad53"
+
+[[repos]]
+name     = "zustand"
+language = "typescript"
+url      = "https://github.com/pmndrs/zustand"
+license  = "MIT"
+tag      = "v5.0.14"
+sha      = "bfb2a9e7ce52608d54d8a077fb87ac9d12e73c58"
+
+[[repos]]
+name     = "p-queue"
+language = "javascript"
+url      = "https://github.com/sindresorhus/p-queue"
+license  = "MIT"
+tag      = "v9.3.0"
+sha      = "cfa917af261fb6db9eb1281221ba21093eb49e3d"
+
+[[repos]]
+name     = "serilog"
+language = "csharp"
+url      = "https://github.com/serilog/serilog"
+license  = "Apache-2.0"
+tag      = "v4.3.1"
+sha      = "0597ddfbd4ec594d9c42edd745fe728a2198bad9"
+
+[[repos]]
+name     = "spdlog"
+language = "cpp"
+url      = "https://github.com/gabime/spdlog"
+license  = "MIT"
+tag      = "v1.17.0"
+sha      = "79524ddd08a4ec981b7fea76afd08ee05f83755d"

@@ -1,0 +1,8 @@
+{"id": "ser-create-logger", "query": "finalize the configuration and build the logger instance", "gold": ["LoggerConfiguration.CreateLogger/0"], "feature": "cs/builder", "class": "semantic"}
+{"id": "ser-write-to", "query": "configure the sinks where log events should be written", "gold": ["LoggerConfiguration.WriteTo"], "feature": "cs/config", "class": "semantic"}
+{"id": "ser-min-level", "query": "set the minimum event level that the logger will process", "gold": ["LoggerConfiguration.MinimumLevel"], "feature": "cs/config", "class": "semantic"}
+{"id": "ser-level-switch", "query": "a switch whose minimum logging level can be changed dynamically at runtime", "gold": ["LoggingLevelSwitch.MinimumLevel"], "feature": "cs/dynamic-level", "class": "semantic"}
+{"id": "ser-write", "query": "write a log event at a specified level with a message template and properties", "gold": ["Logger.Write/3"], "feature": "cs/log-write", "class": "semantic"}
+{"id": "ser-destructure", "query": "configure how complex objects are broken into properties when logged", "gold": ["LoggerConfiguration.Destructure"], "feature": "cs/config", "class": "semantic"}
+{"id": "ser-audit-to", "query": "configure audit sinks that must not silently drop events on failure", "gold": ["LoggerConfiguration.AuditTo"], "feature": "cs/config", "class": "semantic"}
+{"id": "ser-dummy-threadid", "query": "WithDummyThreadId", "gold": ["DummyLoggerConfigurationExtensions.WithDummyThreadId/1"], "feature": "cs/exact-identifier", "class": "semantic"}

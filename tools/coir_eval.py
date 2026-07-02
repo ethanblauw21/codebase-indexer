@@ -30,10 +30,8 @@ Usage:
 """
 import argparse
 import gc
-import json
 import os
 import random
-import subprocess
 import sys
 import time
 import tomllib
@@ -51,6 +49,15 @@ _COIR = os.path.join(_BENCH, "coir")
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 from reranker import load_reranker  # noqa: E402
 from fusion import tokenize, convex_fuse  # noqa: E402
+# Shared metric/CI/baseline helpers — the single implementation both scorecards use
+# (ADR-019). eval_common lives alongside this script in tools/, so it imports directly.
+from eval_common import (  # noqa: E402
+    read_jsonl as _read_jsonl,
+    git_sha as _git_sha,
+    score_query,
+    ci95 as _ci95,
+    append_baseline as _append_baseline,
+)
 
 CORE = [
     "cosqa",
@@ -103,14 +110,6 @@ def load_config():
 # ---------------------------------------------------------------------------
 
 
-def _read_jsonl(path):
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                yield json.loads(line)
-
-
 def load_subtask(task):
     d = os.path.join(_COIR, task)
     corpus_ids, corpus_text = [], []
@@ -126,15 +125,6 @@ def load_subtask(task):
             if int(score) > 0:
                 qrels.setdefault(qid, {})[cid] = int(score)
     return corpus_ids, corpus_text, queries, qrels
-
-
-def git_sha():
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"], cwd=_ROOT, text=True
-        ).strip()
-    except Exception:
-        return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -193,63 +183,11 @@ def count_tokens(model, texts, max_len=None):
 
 
 # ---------------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------------
-
-def dcg(gains):
-    return sum(g / np.log2(i + 2) for i, g in enumerate(gains))
-
-
-def score_query(ranked_ids, rel):
-    """ranked_ids: top-K doc ids (best first). rel: {doc_id: gain}."""
-    relset = set(rel)
-    hits = [1 if d in relset else 0 for d in ranked_ids]
-    n_rel = len(relset)
-
-    mrr = 0.0
-    for i, d in enumerate(ranked_ids):
-        if d in relset:
-            mrr = 1.0 / (i + 1)
-            break
-
-    # MAP
-    num_correct, ap = 0, 0.0
-    for i, d in enumerate(ranked_ids):
-        if d in relset:
-            num_correct += 1
-            ap += num_correct / (i + 1)
-    ap = ap / n_rel if n_rel else 0.0
-
-    # NDCG@K
-    gains = [rel.get(d, 0) for d in ranked_ids]
-    ideal = sorted(rel.values(), reverse=True)[:len(ranked_ids)]
-    idcg = dcg(ideal)
-    ndcg = (dcg(gains) / idcg) if idcg else 0.0
-
-    out = {"mrr@10": mrr, "ndcg@10": ndcg, "map": ap}
-    for k in (1, 5, 10):
-        topk = set(ranked_ids[:k])
-        out[f"recall@{k}"] = len(topk & relset) / n_rel if n_rel else 0.0
-        out[f"success@{k}"] = 1.0 if (topk & relset) else 0.0
-    return out
-
-
-# ---------------------------------------------------------------------------
 # Run one subtask
 # ---------------------------------------------------------------------------
-
-def _ci95(values):
-    """Half-width of the 95% confidence interval for the mean (normal approx).
-
-    Returned alongside each sampled metric so a subsampled score is reported as an
-    interval, never as false exactness. For a paired lift, pass the per-query
-    differences and the CI accounts for the cancelled sampling noise automatically.
-    """
-    arr = np.asarray(values, dtype=float)
-    if arr.size < 2:
-        return 0.0
-    return 1.96 * float(arr.std(ddof=1)) / (arr.size ** 0.5)
-
+# Metrics (score_query), the CI half-width (_ci95), git_sha, read_jsonl, and
+# append_baseline now live in tools/eval_common.py — imported at the top and shared
+# with the ADR-019 real-repo eval so every scorecard grades identically.
 
 def run_subtask(task, model, reranker, cfg, limit_queries, seed, config_name="dense"):
     import faiss
@@ -391,7 +329,7 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed, config_name="de
         "reranker_id": cfg["reranker_id"] if reranker is not None else None,
         "fusion_weights": ({"dense": dense_w, "sparse": sparse_w} if use_sparse else None),
         "rerank_depth": rerank_depth if paired else None,
-        "git_sha": git_sha(),
+        "git_sha": _git_sha(_ROOT),
         "corpus_docs": len(corpus_ids),
         "n_queries": n,
         "query_universe": universe,
@@ -428,25 +366,6 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed, config_name="de
         record["lift"] = {k: round(float(diffs[k].mean()), 4) for k in diffs}
         record["lift_ci95"] = {k: round(_ci95(diffs[k]), 4) for k in diffs}
     return record
-
-
-# ---------------------------------------------------------------------------
-# Baseline append (dedupe on subtask×config — §6)
-# ---------------------------------------------------------------------------
-
-def append_baseline(record):
-    path = os.path.join(_BENCH, "baseline.jsonl")
-    existing = []
-    if os.path.exists(path):
-        existing = list(_read_jsonl(path))
-    key = (record["subtask"], record["config"])
-    existing = [r for r in existing if (r["subtask"], r["config"]) != key]
-    existing.append(record)
-    existing.sort(key=lambda r: (r["subtask"], r["config"]))
-    with open(path, "w", encoding="utf-8") as f:
-        for r in existing:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    return path
 
 
 def print_table(records):
@@ -539,7 +458,7 @@ def main():
     for task in tasks:
         print(f"\n=== {task} [{args.config}] ===", flush=True)
         rec = run_subtask(task, model, reranker, cfg, limit, seed, config_name=args.config)
-        path = append_baseline(rec)
+        path = _append_baseline(rec, os.path.join(_BENCH, "baseline.jsonl"))
         records.append(rec)
         print(f"  -> appended to {path}", flush=True)
         gc.collect()  # reclaim FAISS index, corpus arrays, and embeddings from prior subtask
