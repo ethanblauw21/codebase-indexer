@@ -1,6 +1,6 @@
 # ADR-021: Baseline Call-Edge Resolution — Make the Traverse Step Actually Traverse
 
-**Status:** proposed
+**Status:** accepted (2026-07-02) — resolver + COALESCE CTE implemented, tested, and merged; call edges now resolve for all five languages. (Note: making the *retrieval* Traverse step surface these neighbours at top-K is a separate, still-open problem — ADR-022.)
 **Date:** 2026-07-01
 **Branch:** `feature/adr-021-baseline-call-resolution`
 **Reviewer:** @ethanblauw21

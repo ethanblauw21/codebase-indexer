@@ -1,6 +1,6 @@
 # ADR-009: Retrieval Stack Modernization — Swap-In Engine Upgrades, Validated Against the Baseline
 
-**Status:** proposed
+**Status:** accepted (2026-07-02) — P1/P3/P4 implemented + merged, all flags off by default; the two open decisions (§P3 convex fusion, §P4 reranker) are now settled — both stay off (convex rejected on CoIR; reranker fails the enable bar on ADR-019's real-repo eval, positive on 4/5 langs but CI includes 0 and n=42 is underpowered).
 **Date:** 2026-06-18
 **Branch:** `feature/adr-009-retrieval-stack-modernization`
 **Reviewer:** @ethanblauw21

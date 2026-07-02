@@ -1,6 +1,6 @@
 # ADR-022: Graph-Neighbor Retrieval Scoring & Pool Budgeting — Let the Traverse Step Reach the Top-K
 
-**Status:** proposed
+**Status:** proposed — **deferred** (2026-07-02). No longer blocks ADR-019 (now `accepted` with the graph recorded as rerank-only, B−A gate dropped). Pick up only if a better-powered reranker rerun makes graph-in-retrieval worth tuning.
 **Date:** 2026-07-01
 **Branch:** `feature/adr-022-graph-neighbor-scoring`
 **Reviewer:** @ethanblauw21
@@ -9,7 +9,7 @@
 - ADR-019 — the real-repo eval is the **measurement instrument**. Any change here is judged by whether it moves the arm **B−A** (graph) lift, per language, without regressing arm B.
 
 **Depended on by:**
-- ADR-019 — its `graph-only` query class and the **B−A graph lift are un-measurable until this lands** (structural neighbours can't reach the graded top-10 under the current scoring). **Resolve before ADR-019 `accepted`:** either this ADR makes B−A measurable, or ADR-019 formally records the graph layer as rerank-only and drops the B−A gate.
+- ADR-019 — its `graph-only` query class and the **B−A graph lift are un-measurable until this lands** (structural neighbours can't reach the graded top-10 under the current scoring). ~~**Resolve before ADR-019 `accepted`:** either this ADR makes B−A measurable, or ADR-019 formally records the graph layer as rerank-only and drops the B−A gate.~~ **Resolved (2026-07-02):** ADR-019 took the second branch — it is `accepted` with the graph recorded as **rerank-only** and the B−A gate **dropped** (ADR-019 §8). This ADR therefore no longer blocks anything; it stays **proposed and deferred**, to be picked up *only if* a better-powered reranker rerun (ADR-009 §P4) pushes C−B over the enable bar and makes graph-in-retrieval worth tuning.
 
 ## Context
 

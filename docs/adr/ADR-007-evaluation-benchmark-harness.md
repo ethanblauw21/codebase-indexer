@@ -1,6 +1,6 @@
 # ADR-007: Evaluation & Benchmark Harness — A Retrieval Scorecard the Rest of the Roadmap Can Stand On
 
-**Status:** proposed
+**Status:** accepted (2026-07-02) — harness + Wave-0 CoIR baseline built, committed, and merged; the C#/C++ + structural-graph §9 gap is now covered by ADR-019.
 **Date:** 2026-06-18
 **Branch:** `feature/adr-007-evaluation-benchmark-harness`
 **Reviewer:** @ethanblauw21
