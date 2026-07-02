@@ -9,8 +9,12 @@ description = "Local code intelligence engine: FAISS + SQLite hybrid indexer wit
 requires-python = ">=3.11"
 dependencies = [
     "faiss-cpu",
-    "sentence-transformers",
-    "transformers",
+    # Pinned to the validated pair: the jina embedder's trust_remote_code modeling
+    # code imports transformers internals that were removed after 4.53.x (CI on the
+    # latest transformers fails with "cannot import name find_pruneable_heads_and_
+    # indices"). These are the versions the eval baseline was measured on.
+    "sentence-transformers==5.5.0",
+    "transformers==4.53.3",
     "numpy",
     "tree-sitter>=0.21",
     "tree-sitter-python",
