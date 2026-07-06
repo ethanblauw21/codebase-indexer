@@ -1,6 +1,6 @@
 # ADR-009: Retrieval Stack Modernization — Swap-In Engine Upgrades, Validated Against the Baseline
 
-**Status:** accepted (2026-07-02) — P1/P3/P4 implemented + merged, all flags off by default; the two open decisions (§P3 convex fusion, §P4 reranker) are now settled — both stay off (convex rejected on CoIR; reranker fails the enable bar on ADR-019's real-repo eval, positive on 4/5 langs but CI includes 0 and n=42 is underpowered).
+**Status:** accepted (2026-07-02) — P1/P3/P4 implemented + merged, all flags off by default. §P3 convex fusion is settled (rejected — stays `rrf`). §P4 reranker is **provisionally cleared but not enabled**: the 2026-07-06 power rerun (ADR-019, n=148) shows C−B passes public clauses 1 & 2 (CI excludes 0, no per-language regression — the n=42 dip was noise), but clause 3 (private slice) is unrun and the bar needs all three, so `[reranker].enabled` stays `false` until the private slice confirms. The private slice is now the sole remaining gate.
 **Date:** 2026-06-18
 **Branch:** `feature/adr-009-retrieval-stack-modernization`
 **Reviewer:** @ethanblauw21
@@ -8,7 +8,7 @@
 - ADR-007 — needs the **committed Wave-0 baseline** and the **fast CI subset** to validate each component swap as a measured lift, not a claim. No swap lands without a number beating the baseline.
 **Depended on by:**
 - ADR-014 *(planned — docs/adr-backlog.md)* — Adaptive Ranking learns weights over **this ADR's fusion stage** (the convex/weighted combination introduced in P3); it needs the fusion to be parameterized (tunable weights) rather than fixed RRF.
-- ADR-019 *(real-repo retrieval eval)* — **operationalizes the §P3 (fusion) and §P4 (reranker) enable decisions** this ADR could not settle on CoIR. Its 2026-07-01 verdicts (arms D−B and C−B over 5 languages) are recorded in §P3/§P4: **both flags stay off** — convex fusion rejected outright, reranker positive-but-underpowered. ADR-019 is also the instrument that would flip either flag if a better-powered rerun clears the bar.
+- ADR-019 *(real-repo retrieval eval)* — **operationalizes the §P3 (fusion) and §P4 (reranker) enable decisions** this ADR could not settle on CoIR. Recorded in §P3/§P4: convex fusion **rejected outright** (D−B negative in all 5 languages); reranker C−B was positive-but-underpowered at n=42 (2026-07-01) and, after the **2026-07-06 power rerun (n=148)**, now **passes both public clauses** — still off pending the private slice (clause 3), the sole remaining gate. Both flags stay off *today*, but the reranker's path to `enabled` is now down to one contamination-free check.
 
 > Source of record: [docs/adr-backlog.md](../adr-backlog.md) (ADR-009 bucket + build kit) and
 > [modernization-stack-review.md](../modernization-stack-review.md) (Pillars 1–4). Citations `[n]` index
@@ -123,6 +123,20 @@ the lift is **positive on 4 of 5 languages** and materially so on TypeScript (+0
 n=42," not "doesn't help." Tightening that CI (a larger query set; investigate the lone p-queue regression)
 is the path to a definitive verdict. *(Same eval rejected convex fusion §P3 — negative in all 5 languages.)*
 
+**Power-rerun update (2026-07-06, ADR-019, n=148).** That path was taken. The C−B arm was re-run on an
+expanded, dip-weighted fixture set (41→148 queries, weighted toward the two languages that had dipped).
+Pooled: **MRR@10 +0.1405 (95% CI [+0.076, +0.205]), NDCG@10 +0.1174 (CI [+0.065, +0.169])** — **both CIs now
+exclude zero (clause 1 PASS)**, and **every language's mean lift is positive (clause 2 PASS)**: the n=82
+interim dips (js −0.014, cpp −0.019) flipped to **+0.032 / +0.132** once the set was large enough, confirming
+they were sampling noise. So the reranker now **clears both public clauses that blocked at n=42** — the flip
+is purely statistical power, not a code change. **It is still not enabled**, and deliberately so: §Validation
+clause 3 (private contamination-free slice) has **not** been run, and the bar requires all three. `[reranker].enabled`
+**stays `false`** pending that slice — which the rerun promotes from "moot" to **the single remaining gate**.
+Honesty notes carried from ADR-019: the pooled CI is *reconstructed* from per-repo aggregates (split run +
+a mid-run crash; exact under the normal-approx CI but not `verdict()`'s own output — a ~35 min clean full-run
+would reproduce it authoritatively); zustand (+0.378) is an outlier leaning the pooled magnitude, though the
+four other languages are all positive without it.
+
 ### §S2 — Late interaction (optional research phase)
 
 ColBERT-style late-interaction (token-level multi-vector matching) is listed as an **optional research
@@ -188,7 +202,7 @@ harness would not catch it.
 - [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22)** — see note below; default still jina-v2. Swap + reindex + dense validation is the deferred operator run.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
 - [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR AND on the ADR-019 real-repo eval (negative in all 5 languages, incl. the exact-identifier queries BM25 was meant to win), stays off (`rrf`).** See log below.
-- [x] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22); quality validation DONE (2026-07-01, ADR-019).** Off by default: real-repo C−B lift is positive on 4/5 languages but fails the enable bar (CI includes 0; js regresses) — first positive reranker signal, underpowered at n=42. See §P4 + note.
+- [x] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22); quality validation DONE (2026-07-01, ADR-019); power rerun DONE (2026-07-06, n=148).** Still off by default: at n=148 the real-repo C−B lift **passes public clauses 1 & 2** (mrr@10 +0.1405 CI excludes 0; no per-language regression — the n=42 js dip was noise), but **clause 3 (private slice) is unrun** and the bar needs all three, so `[reranker].enabled` stays `false`. The private slice is now the sole remaining gate. See §P4 + power-rerun note.
 - [ ] Document the one-time reindex + FAISS dimension implications.
 - [ ] (Optional) S2 late-interaction research spike; ship only on a measured lift.
 - [ ] Resolve **Depended on by**: confirm the parameterized-fusion contract ADR-014 will learn over, before `accepted`.

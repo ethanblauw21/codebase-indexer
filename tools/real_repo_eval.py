@@ -35,7 +35,9 @@ import json
 import os
 import re
 import sys
+import time
 from collections import defaultdict
+from datetime import datetime
 
 import numpy as np
 
@@ -46,6 +48,24 @@ _MANIFEST = os.path.join(_REAL, "repos.toml")
 _FIXTURES = os.path.join(_REAL, "fixtures")
 _INDEX = os.path.join(_REAL, "index")
 _BASELINE = os.path.join(_REAL, "real_repo_baseline.jsonl")
+
+# Per-query progress log. Purely a side effect (never touches scoring). Each line is
+# flushed to disk immediately, so a crash mid-run still leaves every completed query on
+# disk and you can `tail -f` it to watch live ETA instead of waiting blind. Override the
+# destination with EVAL_PROGRESS_LOG.
+_PROGRESS_LOG = os.environ.get("EVAL_PROGRESS_LOG", os.path.join(_REAL, "eval_progress.log"))
+
+
+def _progress(msg):
+    """Append a timestamped, flushed progress line and echo it (unbuffered) to stdout."""
+    line = f"[{datetime.now():%H:%M:%S}] {msg}"
+    try:
+        with open(_PROGRESS_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+            f.flush()
+    except OSError:
+        pass
+    print(line, flush=True)
 
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 from eval_common import score_query, ci95 as _ci95, git_sha as _git_sha, append_baseline as _append_baseline  # noqa: E402
@@ -136,6 +156,9 @@ def run_arm(repo_name, arm, fixtures, verbose=False):
     db_path = os.path.join(idx, "graph.db")
     per_query = {}
     rows = []
+    n = len(fixtures)
+    t0 = time.time()
+    _progress(f"{repo_name}/{arm}: start — {n} queries")
     with HybridRetriever(index_dir=idx, db_path=db_path, **ARMS[arm]) as r:
         for i, fx in enumerate(fixtures):
             qid = fx.get("id", f"{repo_name}:{i}")
@@ -158,9 +181,16 @@ def run_arm(repo_name, arm, fixtures, verbose=False):
             per_query[qid] = m
             rows.append({"qid": qid, "class": fx.get("class", "semantic"),
                          "feature": fx.get("feature", ""), "metrics": m})
+            done = i + 1
+            elapsed = time.time() - t0
+            avg = elapsed / done
+            eta = avg * (n - done)
+            _progress(f"{repo_name}/{arm}: q {done}/{n}  elapsed {elapsed / 60:.1f}m  "
+                      f"avg {avg:.1f}s/q  eta {eta / 60:.1f}m  mrr={m['mrr@10']:.3f}")
             if verbose:
                 hit = "HIT " if m["mrr@10"] > 0 else "miss"
                 print(f"    [{arm}] {hit} mrr={m['mrr@10']:.3f} ndcg={m['ndcg@10']:.3f}  {fx['query'][:60]}")
+    _progress(f"{repo_name}/{arm}: done — {n} queries in {(time.time() - t0) / 60:.1f}m")
     return per_query, rows
 
 

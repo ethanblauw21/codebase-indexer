@@ -63,3 +63,4 @@ graphify-out/*
 benchmarks/real_repo/corpus/
 benchmarks/real_repo/index/
 benchmarks/real_repo/private/
+benchmarks/real_repo/eval_progress.log
