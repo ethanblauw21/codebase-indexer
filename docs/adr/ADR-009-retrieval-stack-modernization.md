@@ -133,8 +133,8 @@ is purely statistical power, not a code change. **It is still not enabled**, and
 clause 3 (private contamination-free slice) has **not** been run, and the bar requires all three. `[reranker].enabled`
 **stays `false`** pending that slice — which the rerun promotes from "moot" to **the single remaining gate**.
 Honesty notes carried from ADR-019: the pooled CI is *reconstructed* from per-repo aggregates (split run +
-a mid-run crash; exact under the normal-approx CI but not `verdict()`'s own output — a ~35 min clean full-run
-would reproduce it authoritatively); zustand (+0.378) is an outlier leaning the pooled magnitude, though the
+a mid-run crash; exact under the normal-approx CI but not `verdict()`'s own output — a clean single-process
+full-run over all five repos, ~2–3 h, would reproduce it authoritatively); zustand (+0.378) is an outlier leaning the pooled magnitude, though the
 four other languages are all positive without it.
 
 ### §S2 — Late interaction (optional research phase)
