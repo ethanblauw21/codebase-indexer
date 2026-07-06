@@ -51,12 +51,12 @@ $args = @(
   "--provisioning-model=SPOT",
   "--instance-termination-action=DELETE",
   "--max-run-duration=10800s",
-  "--image-family=common-cu123-debian-12",
+  "--image-family=common-cu129-ubuntu-2404-nvidia-580",
   "--image-project=deeplearning-platform-release",
   "--boot-disk-size=100GB",
   "--service-account=$SA",
   "--scopes=cloud-platform",
-  "--metadata=install-nvidia-driver=True,eval-bucket=$BUCKET",
+  "--metadata=eval-bucket=$BUCKET",
   "--metadata-from-file=startup-script=cloud/startup.sh"
 )
 gcloud @args

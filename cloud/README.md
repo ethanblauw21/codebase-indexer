@@ -156,6 +156,9 @@ gcloud storage cp eval-args.txt gs://prefabinventoryapp-code-eval/inputs/eval-ar
 - **Spot preemption** (rare over a ~30 min job): the VM just disappears with no results.
   Re-run `.\cloud\launch_eval.ps1` — the bundle is already in the bucket.
 - **First-run failures** are almost always (a) GPU quota not granted yet [step 2], or
-  (b) the DLVM image family name drifted — list current ones with:
-  `gcloud compute images list --project=deeplearning-platform-release --filter="family~debian-12"`
+  (b) the DLVM image family name drifted. The launcher pins
+  `common-cu129-ubuntu-2404-nvidia-580` (Ubuntu 24.04 → Python 3.12, satisfies the
+  repo's `>=3.11`; CUDA + driver pre-baked). If that name 404s, list current CUDA
+  families and pick an **ubuntu-2404** (not 2204 — that's Python 3.10, too old) one:
+  `gcloud compute images list --project=deeplearning-platform-release --format="value(family)" | grep -iE "cu1.*ubuntu-2404"`
   and update `--image-family` in `launch_eval.ps1`.
