@@ -1,0 +1,442 @@
+[startup] Mon Jul  6 19:44:44 UTC 2026 bucket=prefabinventoryapp-code-eval zone=us-central1-a name=adr019-eval-20260706-144338 sa=eval-runner@prefabinventoryapp.iam.gserviceaccount.com
+[startup] GPU ready:
+Mon Jul  6 19:44:45 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 580.159.03             Driver Version: 580.159.03     CUDA Version: 13.0     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  Tesla T4                       On  |   00000000:00:04.0 Off |                    0 |
+| N/A   76C    P0             31W /   70W |       0MiB /  15360MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+[startup] downloading bundle (attempt 1)...
+Copying gs://prefabinventoryapp-code-eval/inputs/bundle.tar.gz to file://./bundle.tar.gz
+  
+...
+
+Average throughput: 102.2MiB/s
+[startup] bundle extracted + verified (attempt 1)
+[startup] system python3 = 3.12 (repo requires >=3.11)
+W: http://packages.cloud.google.com/apt/dists/apt-transport-artifact-registry-stable/InRelease: Key is stored in legacy trusted.gpg keyring (/etc/apt/trusted.gpg), see the DEPRECATION section in apt-key(8) for details.
+W: https://us-apt.pkg.dev/projects/gce-ai-infra/dists/gpudirect-gib-apt/InRelease: Key is stored in legacy trusted.gpg keyring (/etc/apt/trusted.gpg), see the DEPRECATION section in apt-key(8) for details.
+[startup] torch 2.5.1+cu121 cuda? True
+[startup] Mon Jul  6 19:48:24 UTC 2026 running: real_repo_eval.py --arms B,C
+
+══ click (python) — 32 queries, arms B,C ══
+[19:48:30] click/B: start — 32 queries (device=cuda)
+[core] Loading embedding model: jinaai/jina-embeddings-v2-base-code ...
+A new version of the following files was downloaded from https://huggingface.co/jinaai/jina-bert-v2-qk-post-norm:
+- configuration_bert.py
+. Make sure to double-check they do not contain any added malicious code. To avoid downloading new versions of the code file, you can pin a revision.
+A new version of the following files was downloaded from https://huggingface.co/jinaai/jina-bert-v2-qk-post-norm:
+- modeling_bert.py
+. Make sure to double-check they do not contain any added malicious code. To avoid downloading new versions of the code file, you can pin a revision.
+[core] Embedding model ready.
+[19:48:39] click/B: q 1/32  elapsed 0.1m  avg 8.6s/q  eta 4.4m  mrr=1.000
+[19:48:39] click/B: q 2/32  elapsed 0.1m  avg 4.4s/q  eta 2.2m  mrr=0.333
+[19:48:39] click/B: q 3/32  elapsed 0.1m  avg 3.0s/q  eta 1.4m  mrr=1.000
+[19:48:39] click/B: q 4/32  elapsed 0.2m  avg 2.3s/q  eta 1.1m  mrr=1.000
+[19:48:39] click/B: q 5/32  elapsed 0.2m  avg 1.8s/q  eta 0.8m  mrr=1.000
+[19:48:39] click/B: q 6/32  elapsed 0.2m  avg 1.5s/q  eta 0.7m  mrr=0.333
+[19:48:40] click/B: q 7/32  elapsed 0.2m  avg 1.3s/q  eta 0.6m  mrr=0.167
+[19:48:40] click/B: q 8/32  elapsed 0.2m  avg 1.2s/q  eta 0.5m  mrr=0.500
+[19:48:40] click/B: q 9/32  elapsed 0.2m  avg 1.1s/q  eta 0.4m  mrr=0.000
+[19:48:40] click/B: q 10/32  elapsed 0.2m  avg 1.0s/q  eta 0.4m  mrr=0.250
+[19:48:40] click/B: q 11/32  elapsed 0.2m  avg 0.9s/q  eta 0.3m  mrr=1.000
+[19:48:40] click/B: q 12/32  elapsed 0.2m  avg 0.8s/q  eta 0.3m  mrr=0.500
+[19:48:40] click/B: q 13/32  elapsed 0.2m  avg 0.8s/q  eta 0.2m  mrr=0.500
+[19:48:40] click/B: q 14/32  elapsed 0.2m  avg 0.7s/q  eta 0.2m  mrr=0.250
+[19:48:40] click/B: q 15/32  elapsed 0.2m  avg 0.7s/q  eta 0.2m  mrr=0.333
+[19:48:41] click/B: q 16/32  elapsed 0.2m  avg 0.6s/q  eta 0.2m  mrr=0.333
+[19:48:41] click/B: q 17/32  elapsed 0.2m  avg 0.6s/q  eta 0.2m  mrr=0.000
+[19:48:41] click/B: q 18/32  elapsed 0.2m  avg 0.6s/q  eta 0.1m  mrr=1.000
+[19:48:41] click/B: q 19/32  elapsed 0.2m  avg 0.6s/q  eta 0.1m  mrr=1.000
+[19:48:41] click/B: q 20/32  elapsed 0.2m  avg 0.5s/q  eta 0.1m  mrr=0.000
+[19:48:41] click/B: q 21/32  elapsed 0.2m  avg 0.5s/q  eta 0.1m  mrr=0.000
+[19:48:41] click/B: q 22/32  elapsed 0.2m  avg 0.5s/q  eta 0.1m  mrr=0.000
+[19:48:41] click/B: q 23/32  elapsed 0.2m  avg 0.5s/q  eta 0.1m  mrr=1.000
+[19:48:41] click/B: q 24/32  elapsed 0.2m  avg 0.5s/q  eta 0.1m  mrr=0.000
+[19:48:41] click/B: q 25/32  elapsed 0.2m  avg 0.4s/q  eta 0.1m  mrr=1.000
+[19:48:41] click/B: q 26/32  elapsed 0.2m  avg 0.4s/q  eta 0.0m  mrr=0.500
+[19:48:41] click/B: q 27/32  elapsed 0.2m  avg 0.4s/q  eta 0.0m  mrr=0.000
+[19:48:41] click/B: q 28/32  elapsed 0.2m  avg 0.4s/q  eta 0.0m  mrr=0.250
+[19:48:41] click/B: q 29/32  elapsed 0.2m  avg 0.4s/q  eta 0.0m  mrr=0.000
+[19:48:41] click/B: q 30/32  elapsed 0.2m  avg 0.4s/q  eta 0.0m  mrr=0.000
+[19:48:41] click/B: q 31/32  elapsed 0.2m  avg 0.4s/q  eta 0.0m  mrr=1.000
+[19:48:42] click/B: q 32/32  elapsed 0.2m  avg 0.4s/q  eta 0.0m  mrr=0.000
+[19:48:42] click/B: done — 32 queries in 0.2m
+[19:48:42] click/C: start — 32 queries (device=cuda)
+Loading reranker (Qwen3 logit-scorer): Qwen/Qwen3-Reranker-0.6B
+[19:49:06] click/C: q 1/32  elapsed 0.4m  avg 24.6s/q  eta 12.7m  mrr=0.250
+[19:49:13] click/C: q 2/32  elapsed 0.5m  avg 15.7s/q  eta 7.8m  mrr=0.500
+[19:49:20] click/C: q 3/32  elapsed 0.6m  avg 12.8s/q  eta 6.2m  mrr=0.500
+[19:49:27] click/C: q 4/32  elapsed 0.8m  avg 11.3s/q  eta 5.3m  mrr=1.000
+[19:49:34] click/C: q 5/32  elapsed 0.9m  avg 10.4s/q  eta 4.7m  mrr=1.000
+[19:49:41] click/C: q 6/32  elapsed 1.0m  avg 9.8s/q  eta 4.3m  mrr=1.000
+[19:49:48] click/C: q 7/32  elapsed 1.1m  avg 9.5s/q  eta 3.9m  mrr=0.143
+[19:49:55] click/C: q 8/32  elapsed 1.2m  avg 9.2s/q  eta 3.7m  mrr=0.500
+[19:50:02] click/C: q 9/32  elapsed 1.3m  avg 9.0s/q  eta 3.4m  mrr=0.000
+[19:50:10] click/C: q 10/32  elapsed 1.5m  avg 8.8s/q  eta 3.2m  mrr=1.000
+[19:50:17] click/C: q 11/32  elapsed 1.6m  avg 8.7s/q  eta 3.0m  mrr=1.000
+[19:50:25] click/C: q 12/32  elapsed 1.7m  avg 8.6s/q  eta 2.9m  mrr=1.000
+[19:50:32] click/C: q 13/32  elapsed 1.8m  avg 8.5s/q  eta 2.7m  mrr=0.200
+[19:50:39] click/C: q 14/32  elapsed 2.0m  avg 8.4s/q  eta 2.5m  mrr=0.333
+[19:50:47] click/C: q 15/32  elapsed 2.1m  avg 8.3s/q  eta 2.4m  mrr=1.000
+[19:50:54] click/C: q 16/32  elapsed 2.2m  avg 8.3s/q  eta 2.2m  mrr=0.333
+[19:51:01] click/C: q 17/32  elapsed 2.3m  avg 8.2s/q  eta 2.1m  mrr=0.000
+[19:51:09] click/C: q 18/32  elapsed 2.5m  avg 8.2s/q  eta 1.9m  mrr=1.000
+[19:51:16] click/C: q 19/32  elapsed 2.6m  avg 8.1s/q  eta 1.8m  mrr=0.250
+[19:51:23] click/C: q 20/32  elapsed 2.7m  avg 8.1s/q  eta 1.6m  mrr=0.000
+[19:51:31] click/C: q 21/32  elapsed 2.8m  avg 8.1s/q  eta 1.5m  mrr=0.000
+[19:51:38] click/C: q 22/32  elapsed 2.9m  avg 8.0s/q  eta 1.3m  mrr=0.000
+[19:51:45] click/C: q 23/32  elapsed 3.1m  avg 8.0s/q  eta 1.2m  mrr=0.500
+[19:51:53] click/C: q 24/32  elapsed 3.2m  avg 8.0s/q  eta 1.1m  mrr=0.143
+[19:52:00] click/C: q 25/32  elapsed 3.3m  avg 7.9s/q  eta 0.9m  mrr=1.000
+[19:52:07] click/C: q 26/32  elapsed 3.4m  avg 7.9s/q  eta 0.8m  mrr=1.000
+[19:52:15] click/C: q 27/32  elapsed 3.6m  avg 7.9s/q  eta 0.7m  mrr=0.500
+[19:52:22] click/C: q 28/32  elapsed 3.7m  avg 7.9s/q  eta 0.5m  mrr=1.000
+[19:52:30] click/C: q 29/32  elapsed 3.8m  avg 7.9s/q  eta 0.4m  mrr=0.000
+[19:52:37] click/C: q 30/32  elapsed 3.9m  avg 7.8s/q  eta 0.3m  mrr=0.000
+[19:52:44] click/C: q 31/32  elapsed 4.0m  avg 7.8s/q  eta 0.1m  mrr=0.143
+[19:52:52] click/C: q 32/32  elapsed 4.2m  avg 7.8s/q  eta 0.0m  mrr=0.000
+[19:52:52] click/C: done — 32 queries in 4.2m
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+
+══ zustand (typescript) — 27 queries, arms B,C ══
+[19:52:52] zustand/B: start — 27 queries (device=cuda)
+[19:52:52] zustand/B: q 1/27  elapsed 0.0m  avg 0.4s/q  eta 0.2m  mrr=0.500
+[19:52:52] zustand/B: q 2/27  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.500
+[19:52:52] zustand/B: q 3/27  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.333
+[19:52:52] zustand/B: q 4/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.167
+[19:52:52] zustand/B: q 5/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.333
+[19:52:52] zustand/B: q 6/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.250
+[19:52:52] zustand/B: q 7/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.167
+[19:52:52] zustand/B: q 8/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.250
+[19:52:52] zustand/B: q 9/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.167
+[19:52:52] zustand/B: q 10/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.100
+[19:52:52] zustand/B: q 11/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.100
+[19:52:52] zustand/B: q 12/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[19:52:52] zustand/B: q 13/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.333
+[19:52:52] zustand/B: q 14/27  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[19:52:52] zustand/B: q 15/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.250
+[19:52:53] zustand/B: q 16/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.167
+[19:52:53] zustand/B: q 17/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.167
+[19:52:53] zustand/B: q 18/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.250
+[19:52:53] zustand/B: q 19/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.000
+[19:52:53] zustand/B: q 20/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.333
+[19:52:53] zustand/B: q 21/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.333
+[19:52:53] zustand/B: q 22/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.200
+[19:52:53] zustand/B: q 23/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:52:53] zustand/B: q 24/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.250
+[19:52:53] zustand/B: q 25/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.125
+[19:52:53] zustand/B: q 26/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.333
+[19:52:53] zustand/B: q 27/27  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.250
+[19:52:53] zustand/B: done — 27 queries in 0.0m
+[19:52:53] zustand/C: start — 27 queries (device=cuda)
+[19:53:00] zustand/C: q 1/27  elapsed 0.1m  avg 7.3s/q  eta 3.2m  mrr=0.333
+[19:53:07] zustand/C: q 2/27  elapsed 0.2m  avg 7.2s/q  eta 3.0m  mrr=1.000
+[19:53:15] zustand/C: q 3/27  elapsed 0.4m  avg 7.3s/q  eta 2.9m  mrr=0.200
+[19:53:22] zustand/C: q 4/27  elapsed 0.5m  avg 7.3s/q  eta 2.8m  mrr=0.143
+[19:53:29] zustand/C: q 5/27  elapsed 0.6m  avg 7.3s/q  eta 2.7m  mrr=1.000
+[19:53:36] zustand/C: q 6/27  elapsed 0.7m  avg 7.3s/q  eta 2.6m  mrr=0.167
+[19:53:44] zustand/C: q 7/27  elapsed 0.8m  avg 7.3s/q  eta 2.4m  mrr=1.000
+[19:53:51] zustand/C: q 8/27  elapsed 1.0m  avg 7.3s/q  eta 2.3m  mrr=1.000
+[19:53:57] zustand/C: q 9/27  elapsed 1.1m  avg 7.2s/q  eta 2.2m  mrr=0.200
+[19:54:05] zustand/C: q 10/27  elapsed 1.2m  avg 7.2s/q  eta 2.0m  mrr=0.111
+[19:54:12] zustand/C: q 11/27  elapsed 1.3m  avg 7.2s/q  eta 1.9m  mrr=0.143
+[19:54:19] zustand/C: q 12/27  elapsed 1.4m  avg 7.2s/q  eta 1.8m  mrr=1.000
+[19:54:26] zustand/C: q 13/27  elapsed 1.6m  avg 7.2s/q  eta 1.7m  mrr=0.250
+[19:54:34] zustand/C: q 14/27  elapsed 1.7m  avg 7.2s/q  eta 1.6m  mrr=0.333
+[19:54:41] zustand/C: q 15/27  elapsed 1.8m  avg 7.2s/q  eta 1.4m  mrr=1.000
+[19:54:48] zustand/C: q 16/27  elapsed 1.9m  avg 7.2s/q  eta 1.3m  mrr=1.000
+[19:54:55] zustand/C: q 17/27  elapsed 2.0m  avg 7.2s/q  eta 1.2m  mrr=1.000
+[19:55:03] zustand/C: q 18/27  elapsed 2.2m  avg 7.2s/q  eta 1.1m  mrr=1.000
+[19:55:10] zustand/C: q 19/27  elapsed 2.3m  avg 7.2s/q  eta 1.0m  mrr=0.111
+[19:55:17] zustand/C: q 20/27  elapsed 2.4m  avg 7.2s/q  eta 0.8m  mrr=0.333
+[19:55:24] zustand/C: q 21/27  elapsed 2.5m  avg 7.2s/q  eta 0.7m  mrr=1.000
+[19:55:31] zustand/C: q 22/27  elapsed 2.6m  avg 7.2s/q  eta 0.6m  mrr=1.000
+[19:55:38] zustand/C: q 23/27  elapsed 2.8m  avg 7.2s/q  eta 0.5m  mrr=1.000
+[19:55:45] zustand/C: q 24/27  elapsed 2.9m  avg 7.2s/q  eta 0.4m  mrr=1.000
+[19:55:52] zustand/C: q 25/27  elapsed 3.0m  avg 7.2s/q  eta 0.2m  mrr=1.000
+[19:56:00] zustand/C: q 26/27  elapsed 3.1m  avg 7.2s/q  eta 0.1m  mrr=1.000
+[19:56:07] zustand/C: q 27/27  elapsed 3.2m  avg 7.2s/q  eta 0.0m  mrr=0.250
+[19:56:07] zustand/C: done — 27 queries in 3.2m
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+
+══ p-queue (javascript) — 24 queries, arms B,C ══
+[19:56:07] p-queue/B: start — 24 queries (device=cuda)
+[19:56:07] p-queue/B: q 1/24  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=1.000
+[19:56:07] p-queue/B: q 2/24  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[19:56:07] p-queue/B: q 3/24  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[19:56:07] p-queue/B: q 4/24  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[19:56:07] p-queue/B: q 5/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:07] p-queue/B: q 6/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:07] p-queue/B: q 7/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.500
+[19:56:07] p-queue/B: q 8/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.200
+[19:56:07] p-queue/B: q 9/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:07] p-queue/B: q 10/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:07] p-queue/B: q 11/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:07] p-queue/B: q 12/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.000
+[19:56:07] p-queue/B: q 13/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.000
+[19:56:07] p-queue/B: q 14/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.500
+[19:56:07] p-queue/B: q 15/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.333
+[19:56:07] p-queue/B: q 16/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.500
+[19:56:08] p-queue/B: q 17/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.500
+[19:56:08] p-queue/B: q 18/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.000
+[19:56:08] p-queue/B: q 19/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:08] p-queue/B: q 20/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:08] p-queue/B: q 21/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=0.000
+[19:56:08] p-queue/B: q 22/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:08] p-queue/B: q 23/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:08] p-queue/B: q 24/24  elapsed 0.0m  avg 0.0s/q  eta 0.0m  mrr=1.000
+[19:56:08] p-queue/B: done — 24 queries in 0.0m
+[19:56:08] p-queue/C: start — 24 queries (device=cuda)
+[19:56:15] p-queue/C: q 1/24  elapsed 0.1m  avg 7.3s/q  eta 2.8m  mrr=0.333
+[19:56:22] p-queue/C: q 2/24  elapsed 0.2m  avg 7.4s/q  eta 2.7m  mrr=1.000
+[19:56:30] p-queue/C: q 3/24  elapsed 0.4m  avg 7.4s/q  eta 2.6m  mrr=0.000
+[19:56:37] p-queue/C: q 4/24  elapsed 0.5m  avg 7.4s/q  eta 2.5m  mrr=0.000
+[19:56:45] p-queue/C: q 5/24  elapsed 0.6m  avg 7.4s/q  eta 2.3m  mrr=0.000
+[19:56:52] p-queue/C: q 6/24  elapsed 0.7m  avg 7.4s/q  eta 2.2m  mrr=1.000
+[19:56:59] p-queue/C: q 7/24  elapsed 0.9m  avg 7.4s/q  eta 2.1m  mrr=1.000
+[19:57:06] p-queue/C: q 8/24  elapsed 1.0m  avg 7.4s/q  eta 2.0m  mrr=0.333
+[19:57:14] p-queue/C: q 9/24  elapsed 1.1m  avg 7.4s/q  eta 1.8m  mrr=1.000
+[19:57:21] p-queue/C: q 10/24  elapsed 1.2m  avg 7.4s/q  eta 1.7m  mrr=1.000
+[19:57:29] p-queue/C: q 11/24  elapsed 1.3m  avg 7.4s/q  eta 1.6m  mrr=1.000
+[19:57:36] p-queue/C: q 12/24  elapsed 1.5m  avg 7.4s/q  eta 1.5m  mrr=0.000
+[19:57:43] p-queue/C: q 13/24  elapsed 1.6m  avg 7.4s/q  eta 1.4m  mrr=0.000
+[19:57:51] p-queue/C: q 14/24  elapsed 1.7m  avg 7.4s/q  eta 1.2m  mrr=0.143
+[19:57:58] p-queue/C: q 15/24  elapsed 1.8m  avg 7.4s/q  eta 1.1m  mrr=1.000
+[19:58:05] p-queue/C: q 16/24  elapsed 2.0m  avg 7.4s/q  eta 1.0m  mrr=1.000
+[19:58:13] p-queue/C: q 17/24  elapsed 2.1m  avg 7.4s/q  eta 0.9m  mrr=1.000
+[19:58:20] p-queue/C: q 18/24  elapsed 2.2m  avg 7.4s/q  eta 0.7m  mrr=0.500
+[19:58:28] p-queue/C: q 19/24  elapsed 2.3m  avg 7.4s/q  eta 0.6m  mrr=1.000
+[19:58:35] p-queue/C: q 20/24  elapsed 2.5m  avg 7.4s/q  eta 0.5m  mrr=1.000
+[19:58:42] p-queue/C: q 21/24  elapsed 2.6m  avg 7.4s/q  eta 0.4m  mrr=0.000
+[19:58:50] p-queue/C: q 22/24  elapsed 2.7m  avg 7.4s/q  eta 0.2m  mrr=1.000
+[19:58:57] p-queue/C: q 23/24  elapsed 2.8m  avg 7.4s/q  eta 0.1m  mrr=1.000
+[19:59:05] p-queue/C: q 24/24  elapsed 2.9m  avg 7.4s/q  eta 0.0m  mrr=1.000
+[19:59:05] p-queue/C: done — 24 queries in 2.9m
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+
+══ serilog (csharp) — 30 queries, arms B,C ══
+[19:59:05] serilog/B: start — 30 queries (device=cuda)
+[19:59:06] serilog/B: q 1/30  elapsed 0.0m  avg 1.2s/q  eta 0.6m  mrr=0.125
+[19:59:06] serilog/B: q 2/30  elapsed 0.0m  avg 0.6s/q  eta 0.3m  mrr=0.000
+[19:59:06] serilog/B: q 3/30  elapsed 0.0m  avg 0.4s/q  eta 0.2m  mrr=0.500
+[19:59:06] serilog/B: q 4/30  elapsed 0.0m  avg 0.3s/q  eta 0.1m  mrr=0.500
+[19:59:06] serilog/B: q 5/30  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.500
+[19:59:06] serilog/B: q 6/30  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.000
+[19:59:06] serilog/B: q 7/30  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.000
+[19:59:06] serilog/B: q 8/30  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.000
+[19:59:06] serilog/B: q 9/30  elapsed 0.0m  avg 0.1s/q  eta 0.1m  mrr=0.167
+[19:59:06] serilog/B: q 10/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[19:59:06] serilog/B: q 11/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[19:59:06] serilog/B: q 12/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[19:59:06] serilog/B: q 13/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[19:59:06] serilog/B: q 14/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.250
+[19:59:06] serilog/B: q 15/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.250
+[19:59:06] serilog/B: q 16/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[19:59:06] serilog/B: q 17/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[19:59:06] serilog/B: q 18/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.125
+[19:59:06] serilog/B: q 19/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[19:59:06] serilog/B: q 20/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.200
+[19:59:06] serilog/B: q 21/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[19:59:06] serilog/B: q 22/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[19:59:06] serilog/B: q 23/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[19:59:06] serilog/B: q 24/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.333
+[19:59:06] serilog/B: q 25/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[19:59:06] serilog/B: q 26/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[19:59:06] serilog/B: q 27/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.125
+[19:59:06] serilog/B: q 28/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.250
+[19:59:06] serilog/B: q 29/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[19:59:06] serilog/B: q 30/30  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.333
+[19:59:06] serilog/B: done — 30 queries in 0.0m
+[19:59:06] serilog/C: start — 30 queries (device=cuda)
+[19:59:14] serilog/C: q 1/30  elapsed 0.1m  avg 7.3s/q  eta 3.5m  mrr=1.000
+[19:59:21] serilog/C: q 2/30  elapsed 0.2m  avg 7.3s/q  eta 3.4m  mrr=0.000
+[19:59:28] serilog/C: q 3/30  elapsed 0.4m  avg 7.3s/q  eta 3.3m  mrr=0.333
+[19:59:35] serilog/C: q 4/30  elapsed 0.5m  avg 7.2s/q  eta 3.1m  mrr=1.000
+[19:59:42] serilog/C: q 5/30  elapsed 0.6m  avg 7.2s/q  eta 3.0m  mrr=0.500
+[19:59:49] serilog/C: q 6/30  elapsed 0.7m  avg 7.2s/q  eta 2.9m  mrr=0.000
+[19:59:57] serilog/C: q 7/30  elapsed 0.8m  avg 7.2s/q  eta 2.8m  mrr=0.000
+[20:00:03] serilog/C: q 8/30  elapsed 0.9m  avg 7.0s/q  eta 2.6m  mrr=0.250
+[20:00:10] serilog/C: q 9/30  elapsed 1.1m  avg 7.1s/q  eta 2.5m  mrr=0.250
+[20:00:17] serilog/C: q 10/30  elapsed 1.2m  avg 7.1s/q  eta 2.4m  mrr=1.000
+[20:00:24] serilog/C: q 11/30  elapsed 1.3m  avg 7.1s/q  eta 2.2m  mrr=1.000
+[20:00:31] serilog/C: q 12/30  elapsed 1.4m  avg 7.1s/q  eta 2.1m  mrr=0.000
+[20:00:39] serilog/C: q 13/30  elapsed 1.5m  avg 7.1s/q  eta 2.0m  mrr=0.500
+[20:00:46] serilog/C: q 14/30  elapsed 1.7m  avg 7.1s/q  eta 1.9m  mrr=0.200
+[20:00:53] serilog/C: q 15/30  elapsed 1.8m  avg 7.1s/q  eta 1.8m  mrr=0.500
+[20:00:58] serilog/C: q 16/30  elapsed 1.9m  avg 7.0s/q  eta 1.6m  mrr=1.000
+[20:01:06] serilog/C: q 17/30  elapsed 2.0m  avg 7.0s/q  eta 1.5m  mrr=0.000
+[20:01:13] serilog/C: q 18/30  elapsed 2.1m  avg 7.0s/q  eta 1.4m  mrr=0.111
+[20:01:20] serilog/C: q 19/30  elapsed 2.2m  avg 7.0s/q  eta 1.3m  mrr=0.000
+[20:01:27] serilog/C: q 20/30  elapsed 2.3m  avg 7.0s/q  eta 1.2m  mrr=0.333
+[20:01:34] serilog/C: q 21/30  elapsed 2.5m  avg 7.0s/q  eta 1.1m  mrr=0.000
+[20:01:41] serilog/C: q 22/30  elapsed 2.6m  avg 7.0s/q  eta 0.9m  mrr=1.000
+[20:01:48] serilog/C: q 23/30  elapsed 2.7m  avg 7.0s/q  eta 0.8m  mrr=0.500
+[20:01:55] serilog/C: q 24/30  elapsed 2.8m  avg 7.0s/q  eta 0.7m  mrr=1.000
+[20:02:02] serilog/C: q 25/30  elapsed 2.9m  avg 7.0s/q  eta 0.6m  mrr=0.500
+[20:02:09] serilog/C: q 26/30  elapsed 3.1m  avg 7.0s/q  eta 0.5m  mrr=1.000
+[20:02:16] serilog/C: q 27/30  elapsed 3.2m  avg 7.0s/q  eta 0.4m  mrr=0.333
+[20:02:24] serilog/C: q 28/30  elapsed 3.3m  avg 7.0s/q  eta 0.2m  mrr=1.000
+[20:02:31] serilog/C: q 29/30  elapsed 3.4m  avg 7.1s/q  eta 0.1m  mrr=0.500
+[20:02:37] serilog/C: q 30/30  elapsed 3.5m  avg 7.0s/q  eta 0.0m  mrr=1.000
+[20:02:37] serilog/C: done — 30 queries in 3.5m
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+
+══ spdlog (cpp) — 35 queries, arms B,C ══
+[20:02:37] spdlog/B: start — 35 queries (device=cuda)
+[20:02:38] spdlog/B: q 1/35  elapsed 0.0m  avg 0.9s/q  eta 0.5m  mrr=0.500
+[20:02:38] spdlog/B: q 2/35  elapsed 0.0m  avg 0.4s/q  eta 0.2m  mrr=0.000
+[20:02:38] spdlog/B: q 3/35  elapsed 0.0m  avg 0.3s/q  eta 0.2m  mrr=0.000
+[20:02:38] spdlog/B: q 4/35  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.167
+[20:02:38] spdlog/B: q 5/35  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=1.000
+[20:02:38] spdlog/B: q 6/35  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.000
+[20:02:38] spdlog/B: q 7/35  elapsed 0.0m  avg 0.2s/q  eta 0.1m  mrr=0.000
+[20:02:38] spdlog/B: q 8/35  elapsed 0.0m  avg 0.1s/q  eta 0.1m  mrr=1.000
+[20:02:38] spdlog/B: q 9/35  elapsed 0.0m  avg 0.1s/q  eta 0.1m  mrr=0.200
+[20:02:38] spdlog/B: q 10/35  elapsed 0.0m  avg 0.1s/q  eta 0.1m  mrr=0.000
+[20:02:39] spdlog/B: q 11/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[20:02:39] spdlog/B: q 12/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[20:02:39] spdlog/B: q 13/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[20:02:39] spdlog/B: q 14/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[20:02:39] spdlog/B: q 15/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[20:02:39] spdlog/B: q 16/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.200
+[20:02:39] spdlog/B: q 17/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[20:02:39] spdlog/B: q 18/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.250
+[20:02:39] spdlog/B: q 19/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[20:02:39] spdlog/B: q 20/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.125
+[20:02:39] spdlog/B: q 21/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[20:02:39] spdlog/B: q 22/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.333
+[20:02:39] spdlog/B: q 23/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[20:02:39] spdlog/B: q 24/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[20:02:39] spdlog/B: q 25/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[20:02:39] spdlog/B: q 26/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.200
+[20:02:39] spdlog/B: q 27/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[20:02:39] spdlog/B: q 28/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.250
+[20:02:39] spdlog/B: q 29/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[20:02:39] spdlog/B: q 30/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[20:02:39] spdlog/B: q 31/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[20:02:40] spdlog/B: q 32/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.000
+[20:02:40] spdlog/B: q 33/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.333
+[20:02:40] spdlog/B: q 34/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=0.500
+[20:02:40] spdlog/B: q 35/35  elapsed 0.0m  avg 0.1s/q  eta 0.0m  mrr=1.000
+[20:02:40] spdlog/B: done — 35 queries in 0.0m
+[20:02:40] spdlog/C: start — 35 queries (device=cuda)
+[20:02:47] spdlog/C: q 1/35  elapsed 0.1m  avg 7.3s/q  eta 4.2m  mrr=0.500
+[20:02:54] spdlog/C: q 2/35  elapsed 0.2m  avg 7.3s/q  eta 4.0m  mrr=0.000
+[20:03:02] spdlog/C: q 3/35  elapsed 0.4m  avg 7.3s/q  eta 3.9m  mrr=0.000
+[20:03:09] spdlog/C: q 4/35  elapsed 0.5m  avg 7.3s/q  eta 3.8m  mrr=0.333
+[20:03:16] spdlog/C: q 5/35  elapsed 0.6m  avg 7.3s/q  eta 3.6m  mrr=1.000
+[20:03:23] spdlog/C: q 6/35  elapsed 0.7m  avg 7.3s/q  eta 3.5m  mrr=0.000
+[20:03:31] spdlog/C: q 7/35  elapsed 0.8m  avg 7.3s/q  eta 3.4m  mrr=0.000
+[20:03:38] spdlog/C: q 8/35  elapsed 1.0m  avg 7.3s/q  eta 3.3m  mrr=0.250
+[20:03:45] spdlog/C: q 9/35  elapsed 1.1m  avg 7.3s/q  eta 3.1m  mrr=0.500
+[20:03:52] spdlog/C: q 10/35  elapsed 1.2m  avg 7.3s/q  eta 3.0m  mrr=0.000
+[20:04:00] spdlog/C: q 11/35  elapsed 1.3m  avg 7.3s/q  eta 2.9m  mrr=0.333
+[20:04:07] spdlog/C: q 12/35  elapsed 1.5m  avg 7.3s/q  eta 2.8m  mrr=1.000
+[20:04:14] spdlog/C: q 13/35  elapsed 1.6m  avg 7.3s/q  eta 2.7m  mrr=0.000
+[20:04:21] spdlog/C: q 14/35  elapsed 1.7m  avg 7.2s/q  eta 2.5m  mrr=0.167
+[20:04:28] spdlog/C: q 15/35  elapsed 1.8m  avg 7.2s/q  eta 2.4m  mrr=1.000
+[20:04:35] spdlog/C: q 16/35  elapsed 1.9m  avg 7.2s/q  eta 2.3m  mrr=1.000
+[20:04:43] spdlog/C: q 17/35  elapsed 2.0m  avg 7.2s/q  eta 2.2m  mrr=1.000
+[20:04:50] spdlog/C: q 18/35  elapsed 2.2m  avg 7.2s/q  eta 2.0m  mrr=1.000
+[20:04:57] spdlog/C: q 19/35  elapsed 2.3m  avg 7.2s/q  eta 1.9m  mrr=0.000
+[20:05:04] spdlog/C: q 20/35  elapsed 2.4m  avg 7.2s/q  eta 1.8m  mrr=0.333
+[20:05:12] spdlog/C: q 21/35  elapsed 2.5m  avg 7.2s/q  eta 1.7m  mrr=0.500
+[20:05:19] spdlog/C: q 22/35  elapsed 2.7m  avg 7.2s/q  eta 1.6m  mrr=1.000
+[20:05:26] spdlog/C: q 23/35  elapsed 2.8m  avg 7.2s/q  eta 1.4m  mrr=1.000
+[20:05:33] spdlog/C: q 24/35  elapsed 2.9m  avg 7.2s/q  eta 1.3m  mrr=0.000
+[20:05:41] spdlog/C: q 25/35  elapsed 3.0m  avg 7.2s/q  eta 1.2m  mrr=1.000
+[20:05:48] spdlog/C: q 26/35  elapsed 3.1m  avg 7.2s/q  eta 1.1m  mrr=0.250
+[20:05:55] spdlog/C: q 27/35  elapsed 3.3m  avg 7.2s/q  eta 1.0m  mrr=1.000
+[20:06:03] spdlog/C: q 28/35  elapsed 3.4m  avg 7.2s/q  eta 0.8m  mrr=0.250
+[20:06:10] spdlog/C: q 29/35  elapsed 3.5m  avg 7.2s/q  eta 0.7m  mrr=0.250
+[20:06:17] spdlog/C: q 30/35  elapsed 3.6m  avg 7.2s/q  eta 0.6m  mrr=0.000
+[20:06:24] spdlog/C: q 31/35  elapsed 3.7m  avg 7.2s/q  eta 0.5m  mrr=1.000
+[20:06:32] spdlog/C: q 32/35  elapsed 3.9m  avg 7.2s/q  eta 0.4m  mrr=0.000
+[20:06:39] spdlog/C: q 33/35  elapsed 4.0m  avg 7.2s/q  eta 0.2m  mrr=0.500
+[20:06:46] spdlog/C: q 34/35  elapsed 4.1m  avg 7.2s/q  eta 0.1m  mrr=1.000
+[20:06:53] spdlog/C: q 35/35  elapsed 4.2m  avg 7.2s/q  eta 0.0m  mrr=1.000
+[20:06:53] spdlog/C: done — 35 queries in 4.2m
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+fatal: not a git repository (or any of the parent directories): .git
+
+========================================================================
+REAL-REPO RETRIEVAL SCORECARD (real-repo retrieval, cpp, csharp, javascript, python, typescript)
+Contamination caveat: public repos may overlap model training data;
+the private slice (§6) is the contamination-free control. Not 'true accuracy'.
+========================================================================
+
+click (python)
+  arm       mrr@10      ndcg@10   success@5
+  B         0.4453       0.5054      0.6562
+  C         0.4780       0.5438      0.6562
+    lift reranker  (C-B, n=32): mrr@10 +0.0327 ±0.1424 | ndcg@10 +0.0385 ±0.1136
+
+zustand (typescript)
+  arm       mrr@10      ndcg@10   success@5
+  B         0.2725       0.4273      0.6296
+  C         0.6509       0.7319      0.8148
+    lift reranker  (C-B, n=27): mrr@10 +0.3784 ±0.1460 | ndcg@10 +0.3045 ±0.1119
+
+p-queue (javascript)
+  arm       mrr@10      ndcg@10   success@5
+  B         0.6056       0.6447      0.7500
+  C         0.6379       0.6652      0.7083
+    lift reranker  (C-B, n=24): mrr@10 +0.0323 ±0.1447 | ndcg@10 +0.0205 ±0.1280
+
+serilog (csharp)
+  arm       mrr@10      ndcg@10   success@5
+  B         0.3553       0.4466      0.6000
+  C         0.4937       0.5612      0.7333
+    lift reranker  (C-B, n=30): mrr@10 +0.1384 ±0.1173 | ndcg@10 +0.1146 ±0.0910
+
+spdlog (cpp)
+  arm       mrr@10      ndcg@10   success@5
+  B         0.3588       0.4317      0.6000
+  C         0.4905       0.5458      0.6857
+    lift reranker  (C-B, n=35): mrr@10 +0.1317 ±0.1372 | ndcg@10 +0.1141 ±0.1151
+
+========================================================================
+§5 DECISION VERDICTS (public eval — clause 3 needs the private slice)
+========================================================================
+
+[reranker].enabled  (lift reranker, C-B)  →  PASS (public)
+    mrr@10: +0.1405 ±0.0641  CI>0 ✓
+    ndcg@10: +0.1174 ±0.0520  CI>0 ✓
+    no-regression: ✓
+    clause 3 (private slice): PENDING — run --repos on the §6 slice
+
+[retrieval].fusion_mode: arms D-B not both run — no verdict
+
+Baseline updated: out/result.jsonl
+[startup] Mon Jul  6 20:06:55 UTC 2026 eval exit code: 0
+Copying file://out/result.jsonl to gs://prefabinventoryapp-code-eval/outputs/result.jsonl
+  
+..
+[startup] Mon Jul  6 20:07:01 UTC 2026 done — exiting (trap self-deletes the VM)
+[startup] Mon Jul  6 20:07:01 UTC 2026 cleanup: uploading logs + self-deleting
+Copying file:///var/log/eval-run.log to gs://prefabinventoryapp-code-eval/outputs/eval-run.log
+  

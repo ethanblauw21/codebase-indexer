@@ -132,10 +132,14 @@ they were sampling noise. So the reranker now **clears both public clauses that 
 is purely statistical power, not a code change. **It is still not enabled**, and deliberately so: §Validation
 clause 3 (private contamination-free slice) has **not** been run, and the bar requires all three. `[reranker].enabled`
 **stays `false`** pending that slice — which the rerun promotes from "moot" to **the single remaining gate**.
-Honesty notes carried from ADR-019: the pooled CI is *reconstructed* from per-repo aggregates (split run +
-a mid-run crash; exact under the normal-approx CI but not `verdict()`'s own output — a clean single-process
-full-run over all five repos, ~2–3 h, would reproduce it authoritatively); zustand (+0.378) is an outlier leaning the pooled magnitude, though the
-four other languages are all positive without it.
+**Authoritative confirmation (2026-07-06, GPU).** The clean single-process full-run was since executed on a
+spot T4 in GCP (all 148 queries through arm C on-GPU, one process). `verdict()`'s own printed scorecard:
+**mrr@10 +0.1405 ±0.0641 (CI>0 ✓), ndcg@10 +0.1174 ±0.0520 (CI>0 ✓) → PASS (public)** — *identical to the
+reconstructed values to 4 dp*, so the pooled-variance reconstruction is now confirmed exact, not merely
+"exact modulo rounding." Caveat (2) below is thereby **resolved**. Residual honesty notes: the authoritative
+run's `git_sha` is `unknown` (the cloud bundle isn't a git checkout, so the result file doesn't self-stamp its
+commit); and zustand (+0.378) is an outlier leaning the pooled magnitude, though the four other languages are
+all positive without it.
 
 ### §S2 — Late interaction (optional research phase)
 
