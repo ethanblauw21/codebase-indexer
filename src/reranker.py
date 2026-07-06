@@ -72,6 +72,13 @@ class Qwen3Reranker:
         """Score (query, doc) pairs in [0, 1] (P(yes)). Extra kwargs (e.g.
         ``convert_to_numpy`` passed by CrossEncoder call sites) are ignored."""
         torch = self.torch
+        # On GPU the full-vocab logits tensor [batch, seq, vocab] can exceed VRAM
+        # (batch=32 @ seq=512 ≈ 9 GB → OOMs a 16 GB T4, which then silently falls back
+        # to RRF). Cap the batch on CUDA. This is numerically transparent — verified
+        # bit-identical to batch=32 — because each pair is scored independently and the
+        # left-padding is attention-masked, so it bounds memory without changing scores.
+        if str(self.device).startswith("cuda"):
+            batch_size = min(batch_size, 8)
         # Budget for the (query, doc) body once the fixed prompt scaffolding is reserved.
         body_budget = self.max_length - len(self.prefix_ids) - len(self.suffix_ids)
         scores = []
