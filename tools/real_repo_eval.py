@@ -92,6 +92,31 @@ ARMS = {
     "C": dict(graph_enabled=True,  reranker_enabled=True,  fusion_mode="rrf"),
     "D": dict(graph_enabled=True,  reranker_enabled=False, fusion_mode="convex"),
 }
+
+
+def _auto_device():
+    """Pick the torch device the eval should run the reranker on.
+
+    Local dev has a CPU-only torch build → this resolves to ``cpu`` (unchanged
+    behavior). On a GPU box (e.g. the cloud eval) it resolves to ``cuda`` so the
+    reranker — the whole arm-C bottleneck — actually uses the accelerator instead of
+    silently staying on CPU. Production ``HybridRetriever`` is untouched: it still
+    defaults to ``cpu`` and only loads a reranker when ``[reranker].enabled``. Override
+    with ``EVAL_DEVICE=cpu|cuda`` for a forced comparison.
+    """
+    forced = os.environ.get("EVAL_DEVICE")
+    if forced:
+        return forced
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+_DEVICE = _auto_device()
 # (label, minuend arm, subtrahend arm) — the three §5 paired lifts.
 LIFTS = [("graph", "B", "A"), ("reranker", "C", "B"), ("sparse", "D", "B")]
 LIFT_METRICS = ("mrr@10", "ndcg@10")  # the §5 gate metrics
@@ -158,8 +183,8 @@ def run_arm(repo_name, arm, fixtures, verbose=False):
     rows = []
     n = len(fixtures)
     t0 = time.time()
-    _progress(f"{repo_name}/{arm}: start — {n} queries")
-    with HybridRetriever(index_dir=idx, db_path=db_path, **ARMS[arm]) as r:
+    _progress(f"{repo_name}/{arm}: start — {n} queries (device={_DEVICE})")
+    with HybridRetriever(index_dir=idx, db_path=db_path, device=_DEVICE, **ARMS[arm]) as r:
         for i, fx in enumerate(fixtures):
             qid = fx.get("id", f"{repo_name}:{i}")
             gold = fx["gold"]
