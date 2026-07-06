@@ -24,7 +24,7 @@ $VM      = "adr019-eval-$STAMP"
 # --- 1. bundle the exact files the eval needs -----------------------------------
 Write-Host "==> taring run bundle..." -ForegroundColor Cyan
 tar -czf bundle.tar.gz `
-    tools src pyproject.toml `
+    tools src pyproject.toml indexer.toml `
     benchmarks/real_repo/fixtures `
     benchmarks/real_repo/repos.toml `
     benchmarks/real_repo/index
