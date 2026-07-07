@@ -231,7 +231,7 @@ These are known, documented constraints — not bugs. They reflect the fundament
 <!-- CONFORMANCE:START -->
 | Language | Symbols P/R | Edges P/R | Call edges P/R | Fixtures |
 |----------|-------------|-----------|----------------|----------|
-| python | 1.00 / 1.00 | 1.00 / 0.93 | 1.00 / 1.00 | 6 |
+| python | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
 | typescript | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
 
 _Measured on hand-authored feature fixtures (Tier-A adapters), not an exhaustive corpus — a row is "precision/recall on the fixtures we wrote," never a language's true precision (ADR-008 §7). Regenerate with `python tools/conformance_eval.py --write-readme`._
