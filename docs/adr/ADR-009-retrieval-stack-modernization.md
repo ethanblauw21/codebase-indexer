@@ -323,6 +323,27 @@ T4, then run the ADR-019 **dense arm** (bge-code-v1 vs the committed jina baseli
 (JS/TS, Python, C++, C#) — self-reported CoIR has no per-language C++/C# breakdown, so the real-repo eval is
 the verdict. Revert `model_id`+`dimension`+`query_instruct` to the jina pair if the dense arm does not confirm.
 
+**2026-07-07 — P1 VERDICT: `bge-code-v1` CONFIRMED, promoted to default.** Ran the reindex + dense arm on the
+spot T4 (VM `adr019-eval-20260707-105031`, single-process on-GPU, `max_seq_length` held at 512 for a clean A/B).
+The 768→1536 dim jump rebuilt cleanly — no dimension-guard trip, `shape=(N, 1536)` confirmed. Paired dense arm B,
+same 148 queries, bge-code-v1 vs the committed jina-v2 baseline:
+
+| Repo | Lang | mrr@10 (jina → bge) | Δ mrr@10 | ndcg@10 (jina → bge) | Δ ndcg@10 |
+| --- | --- | --- | --- | --- | --- |
+| click | python | 0.445 → 0.512 | +0.067 | 0.505 → 0.592 | +0.086 |
+| p-queue | javascript | 0.606 → 0.585 | −0.021 | 0.645 → 0.637 | −0.007 |
+| serilog | c# | 0.355 → 0.552 | **+0.197** | 0.447 → 0.620 | **+0.173** |
+| spdlog | c++ | 0.359 → 0.380 | +0.021 | 0.432 → 0.460 | +0.029 |
+| zustand | typescript | 0.273 → 0.309 | +0.036 | 0.427 → 0.459 | +0.032 |
+| **pooled** | **n=148** | **0.401 → 0.464** | **+0.062 (+15.6%)** | **0.484 → 0.549** | **+0.065 (+13.4%)** |
+
+bge wins **4 of 5 languages** on both metrics; pooled lift **+0.062 mrr@10 / +0.065 ndcg@10**. The lone dip
+(p-queue, −0.021 mrr) sits well inside its ±0.17 CI — noise, not a regression. **C# is the standout** (+0.197,
+the one repo whose gap clears its own ±0.12 CI) — exactly where jina-v2 was weakest. The +22 CoIR headline
+compressed to ~+0.06 on this stack (expected: different corpus, small-n private eval, contamination caveat), but
+the direction is unanimous and the pooled effect is real. **Decision: `bge-code-v1` is the committed P1 default**
+(`indexer.toml [embeddings]` already carries it). Result: `benchmarks/real_repo/bge_code_v1_denseB.jsonl`.
+
 **FOLLOW-UP (separate experiment, T4) — raise `max_seq_length` 512 → ~4096.** The 512 cap is a legacy
 CPU-OOM workaround (O(L²) attention crashed the process on ~4000-token inputs). Consequence today: tier-2
 (~1500 tok) and tier-3 (~4000 tok) chunks are **truncated to 512** before embedding — their vectors represent

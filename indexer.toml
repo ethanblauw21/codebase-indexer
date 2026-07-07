@@ -30,11 +30,12 @@ index_dir = ".code-index"
 # schema change). core.py refuses to load an index whose dimension no longer matches.
 #
 # Prior proven Wave-0 baseline: jinaai/jina-embeddings-v2-base-code (768 dims).
-# ADR-009 §P1 candidate (staged 2026-07-07, deep-research pick): BAAI/bge-code-v1
-# ("CodeR", Qwen2.5-Coder-1.5B backbone) — CoIR 81.77 vs jina 59.56, Apache-2.0,
-# ~3GB fp16 (fits the T4). NOT yet validated: reindex + run the ADR-019 real-repo
-# dense arm vs the committed jina baseline before keeping it. Revert both values to
-# the jina pair above if the dense arm does not confirm the lift on our stack.
+# ADR-009 §P1 default (VALIDATED 2026-07-07): BAAI/bge-code-v1 ("CodeR",
+# Qwen2.5-Coder-1.5B backbone) — CoIR 81.77 vs jina 59.56, Apache-2.0, ~3GB fp16
+# (fits the T4). Confirmed on the real-repo dense arm (n=148, T4): pooled +0.062
+# mrr@10 / +0.065 ndcg@10 vs the jina baseline, winning 4/5 languages (C# +0.197
+# the standout). See ADR-009 §P1 for the full table. Revert both values to the jina
+# pair above only if a future run overturns this.
 model_id = "BAAI/bge-code-v1"
 
 # Maximum sequence length fed to the embedding model. Held at 512 for a clean A/B
