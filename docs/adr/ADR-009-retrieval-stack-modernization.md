@@ -220,7 +220,7 @@ harness would not catch it.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22); candidate reselected to `BAAI/bge-code-v1` + config staged (2026-07-07)** — see notes below. Remaining: T4 reindex + dense-arm validation vs the committed jina baseline (then a separate `max_seq_length`→4096 experiment).
+- [x] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22); `BAAI/bge-code-v1` VALIDATED + promoted to default (2026-07-07, T4 dense arm n=148: pooled +0.062 mrr@10 / +0.065 ndcg@10 vs jina, 4/5 languages).** Separate `max_seq_length`→4096 follow-up run (2026-07-07): no measurable change on this eval (grades tier-1; only tier-2/3 vectors move) — **stays 512**. See notes below.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
 - [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR AND on the ADR-019 real-repo eval (negative in all 5 languages, incl. the exact-identifier queries BM25 was meant to win), stays off (`rrf`).** See log below.
 - [x] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22); quality validation DONE (2026-07-01, ADR-019); power rerun DONE (2026-07-06, n=148); private slice / clause 3 DONE (2026-07-07) → FAIL.** **Decision SETTLED — `[reranker].enabled` stays `false`.** At n=148 the public C−B lift passed clauses 1 & 2 (mrr@10 +0.1405, CI excludes 0), but the private contamination-free slice (clause 3) FAILED — pooled C−B CI includes 0 (+0.0920 ±0.1070) and TypeScript regresses on clean code, so it *disagrees* with the public verdict. All-three-clauses bar → default off. Split is diagnostic: clean Python +0.187 (real), clean TS −0.033 (public win was a contamination artifact, zustand outlier). Follow-ups (non-blocking): grow the slice; per-language reranking = new ADR. See §P4 clause-3 note.
@@ -351,6 +351,22 @@ only the opening ~1/3 and ~1/8 of the chunk. The T4 makes full-length embedding 
 ceiling is **~4096** (fully embeds tier-3), not the model's 32k (no chunk is that long — dead headroom).
 Run this **after** the embedder A/B settles, as an independent variable, to measure whether fully-embedded
 large chunks lift tier-2/3 (component/architectural) retrieval. One dial at a time so lift stays attributable.
+
+**2026-07-07 — 4096 FOLLOW-UP RESULT: no measurable change on this eval; `max_seq_length` stays 512.**
+Ran the identical reindex + dense arm B on a fresh T4 (VM `adr019-eval-20260707-114515`) with only
+`max_seq_length` changed 512 → 4096 (bundle verified to carry 4096). The change **took effect** — reindex
+wall-clock rose **1.64×** (37.0 → 60.5 min on the same corpus and T4 spot type; a +64% compute jump is far
+outside spot noise, so the longer sequences were genuinely embedded). **Yet the scorecard is byte-identical to
+bge@512** (`cmp` clean; pooled mrr@10 0.464 / ndcg@10 0.549, unchanged to 4 dp on all 5 repos). The two facts
+reconcile structurally, not by luck: this eval grades **symbol-level (tier-1) retrieval** (gold = function/class
+FQNs), tier-1 chunks are already ≤512 tok so their vectors are identical at either cap, and the only vectors
+4096 alters — **tier-2/3** (component/architectural, positional labels, never gold-matchable) — never displaced
+a gold tier-1 chunk inside the shallow @1/@5/@10 cutoffs. **The metric is blind by construction to what 4096
+improves.** Decision: **keep `max_seq_length = 512`** (validated, and identical eval quality at 0.64× the index
+cost). 4096's real value — architectural/tier-2/3 retrieval — is unmeasurable until a fixture set whose *gold
+targets are tier-2/3 chunks* exists; that is a separate eval/ADR, not a config flip. Result:
+`benchmarks/real_repo/bge_code_v1_4096_denseB.jsonl` (identical to `bge_code_v1_denseB.jsonl`, kept as the
+provenance record of the run).
 
 **2026-07-01 — P3 full-sweep result: convex fusion REJECTED on CoIR (stays off).** Completed the `dense+sparse`
 sweep across all four measurable subtasks. The two large corpora (CSN-python/js) were CPU-bound on the pure-Python
