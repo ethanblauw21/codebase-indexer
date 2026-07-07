@@ -1,6 +1,6 @@
 # ADR-009: Retrieval Stack Modernization — Swap-In Engine Upgrades, Validated Against the Baseline
 
-**Status:** accepted (2026-07-02) — P1/P3/P4 implemented + merged, all flags off by default. §P3 convex fusion is settled (rejected — stays `rrf`). §P4 reranker is **provisionally cleared but not enabled**: the 2026-07-06 power rerun (ADR-019, n=148) shows C−B passes public clauses 1 & 2 (CI excludes 0, no per-language regression — the n=42 dip was noise), but clause 3 (private slice) is unrun and the bar needs all three, so `[reranker].enabled` stays `false` until the private slice confirms. The private slice is now the sole remaining gate.
+**Status:** accepted (2026-07-02) — P1/P3/P4 implemented + merged, all flags off by default. §P3 convex fusion is settled (rejected — stays `rrf`). §P4 reranker is **settled — NOT enabled**: the 2026-07-06 power rerun (ADR-019, n=148) showed C−B passes public clauses 1 & 2 (CI excludes 0, no per-language regression), but the 2026-07-07 private contamination-free slice (clause 3) **FAILED** — pooled C−B CI includes 0 and TypeScript regresses on clean code, so the private slice *disagrees* with the public verdict. Under the all-three-clauses bar (public-enable / private-disagree → default off), `[reranker].enabled` **stays `false` by settled verdict**. The public win was partly a contamination artifact concentrated in TS (zustand outlier); the Python lift is real. See §P4.
 **Date:** 2026-06-18
 **Branch:** `feature/adr-009-retrieval-stack-modernization`
 **Reviewer:** @ethanblauw21
@@ -141,6 +141,23 @@ run's `git_sha` is `unknown` (the cloud bundle isn't a git checkout, so the resu
 commit); and zustand (+0.378) is an outlier leaning the pooled magnitude, though the four other languages are
 all positive without it.
 
+**Clause 3 — private-slice verdict (2026-07-07, ADR-019 §6): FAIL. Reranker decision SETTLED — stays off.**
+The contamination-free control was authored (clean-room repos: `quanta` Python + `relay` TypeScript, post-cutoff
+by construction) and run through arms B/C (44 queries; git-ignored, numbers-only). `verdict()`'s own output:
+**`[reranker].enabled` → FAIL (§6 private)** — pooled C−B **mrr@10 +0.0920 ±0.1070 (CI includes 0 ✗),
+NDCG@10 +0.0760 ±0.0815 (CI includes 0 ✗), no-regression ✗ (typescript)** → **the private slice DISAGREES
+with the public verdict.** Per the §Validation rule (all three clauses required; public-enable / private-disagree
+→ **default off and investigate**), `[reranker].enabled` **stays `false`** — no longer "pending", now a *settled*
+verdict. The disagreement is language-split and diagnostic: **cleanroom-py C−B +0.1867 ±0.1335 (excludes 0 — a
+real Python lift) vs cleanroom-ts −0.0325 ±0.1622 (negative).** This retroactively indicts the public pooled
+pass, which leaned on the **zustand +0.378 TS outlier** whose fixtures target public types/interfaces
+(maximally contamination-exposed); on *clean* TypeScript the reranker lift goes negative. So the §Context
+contamination worry materialized — inverted: contamination **inflated** the public TS lift rather than
+compressing it. Net reading: the reranker genuinely helps Python but not clean TypeScript, and its headline
+public win was partly a memorization artifact. Two follow-ups are logged but **do not block** (the flag is off
+regardless): (a) grow the private slice (n=44 is thin, split 25/19) to de-noise the TS negative; (b) per-language
+reranking (on for Python, off for TS) — a new ADR, since `[reranker].enabled` is a single global flag today.
+
 ### §S2 — Late interaction (optional research phase)
 
 ColBERT-style late-interaction (token-level multi-vector matching) is listed as an **optional research
@@ -206,7 +223,7 @@ harness would not catch it.
 - [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22)** — see note below; default still jina-v2. Swap + reindex + dense validation is the deferred operator run.
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
 - [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR AND on the ADR-019 real-repo eval (negative in all 5 languages, incl. the exact-identifier queries BM25 was meant to win), stays off (`rrf`).** See log below.
-- [x] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22); quality validation DONE (2026-07-01, ADR-019); power rerun DONE (2026-07-06, n=148).** Still off by default: at n=148 the real-repo C−B lift **passes public clauses 1 & 2** (mrr@10 +0.1405 CI excludes 0; no per-language regression — the n=42 js dip was noise), but **clause 3 (private slice) is unrun** and the bar needs all three, so `[reranker].enabled` stays `false`. The private slice is now the sole remaining gate. See §P4 + power-rerun note.
+- [x] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22); quality validation DONE (2026-07-01, ADR-019); power rerun DONE (2026-07-06, n=148); private slice / clause 3 DONE (2026-07-07) → FAIL.** **Decision SETTLED — `[reranker].enabled` stays `false`.** At n=148 the public C−B lift passed clauses 1 & 2 (mrr@10 +0.1405, CI excludes 0), but the private contamination-free slice (clause 3) FAILED — pooled C−B CI includes 0 (+0.0920 ±0.1070) and TypeScript regresses on clean code, so it *disagrees* with the public verdict. All-three-clauses bar → default off. Split is diagnostic: clean Python +0.187 (real), clean TS −0.033 (public win was a contamination artifact, zustand outlier). Follow-ups (non-blocking): grow the slice; per-language reranking = new ADR. See §P4 clause-3 note.
 - [ ] Document the one-time reindex + FAISS dimension implications.
 - [ ] (Optional) S2 late-interaction research spike; ship only on a measured lift.
 - [ ] Resolve **Depended on by**: confirm the parameterized-fusion contract ADR-014 will learn over, before `accepted`.

@@ -45,6 +45,8 @@ _HERE = os.path.dirname(__file__)
 _ROOT = os.path.abspath(os.path.join(_HERE, ".."))
 _REAL = os.path.join(_ROOT, "benchmarks", "real_repo")
 _MANIFEST = os.path.join(_REAL, "repos.toml")
+# ADR-019 §6: git-ignored private-slice manifest, merged when present (see prepare tool).
+_PRIVATE_MANIFEST = os.path.join(_REAL, "repos.private.toml")
 _FIXTURES = os.path.join(_REAL, "fixtures")
 _INDEX = os.path.join(_REAL, "index")
 _BASELINE = os.path.join(_REAL, "real_repo_baseline.jsonl")
@@ -145,7 +147,12 @@ def _matches(scope, gold):
 def load_manifest(path=_MANIFEST):
     import tomllib
     with open(path, "rb") as f:
-        return tomllib.load(f).get("repos", [])
+        repos = tomllib.load(f).get("repos", [])
+    # Merge the git-ignored private slice (§6) if present — same harness, clean code.
+    if os.path.exists(_PRIVATE_MANIFEST):
+        with open(_PRIVATE_MANIFEST, "rb") as f:
+            repos = repos + tomllib.load(f).get("repos", [])
+    return repos
 
 
 def load_fixtures(repo_name, limit=0):
@@ -313,16 +320,22 @@ def print_scorecard(evals):
             print(f"    lift {lab:<9} ({rec['pair']}, n={rec.get('n', 0)}): {bits}")
 
 
-def verdict(evals):
+def verdict(evals, private=False):
     """Print the §5 PASS/FAIL for the two ADR-009 decisions, pooled across repos.
 
     Clause 1: mean lift > 0 on BOTH mrr@10 and ndcg@10 with 95%% CI excluding zero.
     Clause 2: no target-language regression (no language's mean lift < 0 on mrr@10).
     Clause 3 (private slice) is checked by re-running this on the §6 slice — reported
     separately; a public PASS is necessary, not sufficient.
+
+    ``private=True`` means the evaluated repos ARE the §6 contamination-free slice, so
+    this run's clause-1/2 result IS the clause-3 confirmation — relabel accordingly.
     """
     print("\n" + "=" * 72)
-    print("§5 DECISION VERDICTS (public eval — clause 3 needs the private slice)")
+    if private:
+        print("§5 DECISION VERDICTS (§6 PRIVATE slice — this run IS clause 3)")
+    else:
+        print("§5 DECISION VERDICTS (public eval — clause 3 needs the private slice)")
     print("=" * 72)
     decisions = [("reranker", "[reranker].enabled", "reranker"),
                  ("sparse", "[retrieval].fusion_mode", "sparse")]
@@ -361,11 +374,16 @@ def verdict(evals):
         clause2 = not regressions
 
         overall = "PASS" if (clause1 and clause2) else "FAIL"
-        print(f"\n{flag}  (lift {lift_label}, {pair})  →  {overall} (public)")
+        scope = "§6 private" if private else "public"
+        print(f"\n{flag}  (lift {lift_label}, {pair})  →  {overall} ({scope})")
         for ln in lines:
             print(ln)
         print(f"    no-regression: {'✓' if clause2 else '✗ ' + ','.join(regressions)}")
-        print("    clause 3 (private slice): PENDING — run --repos on the §6 slice")
+        if private:
+            print("    → this IS clause 3: private slice "
+                  f"{'AGREES with' if overall == 'PASS' else 'DISAGREES with'} the public verdict")
+        else:
+            print("    clause 3 (private slice): PENDING — run --repos on the §6 slice")
 
 
 def main():
@@ -386,6 +404,13 @@ def main():
     manifest = load_manifest()
     want = set(args.repos.split(",")) if args.repos else None
     repos = [r for r in manifest if (want is None or r["name"] in want)]
+    # A repo carrying `path` (not url+sha) is a §6 private-slice repo. If EVERY evaluated
+    # repo is private, this run is the clause-3 confirmation, not the public eval.
+    private_names = {r["name"] for r in manifest if r.get("path")}
+    # Safety: the §6 private slice is "numbers only, never committed". Refuse to append a
+    # private repo's records to the COMMITTED baseline even if --no-write was forgotten
+    # (an explicit --baseline to a git-ignored path is still honored).
+    writing_committed = os.path.abspath(args.baseline) == os.path.abspath(_BASELINE)
 
     evals = []
     for repo in repos:
@@ -395,15 +420,20 @@ def main():
         e = evaluate(repo, arms, limit=args.limit, verbose=args.verbose)
         if e:
             evals.append(e)
-            if not args.no_write:
+            repo_private = repo["name"] in private_names
+            if repo_private and writing_committed and not args.no_write:
+                print(f"  {repo['name']}: §6 private slice — NOT written to the committed "
+                      f"baseline (numbers-only; use --baseline <ignored-path> to persist).")
+            elif not args.no_write:
                 for rec in e["records"]:
                     _append_baseline(rec, args.baseline, key_fields=("repo", "arm"))
 
     if not evals:
         raise SystemExit("No repos evaluated — prepare indexes + author fixtures first.")
 
+    is_private = bool(evals) and all(e["name"] in private_names for e in evals)
     print_scorecard(evals)
-    verdict(evals)
+    verdict(evals, private=is_private)
     if not args.no_write:
         print(f"\nBaseline updated: {os.path.relpath(args.baseline, _ROOT)}")
 

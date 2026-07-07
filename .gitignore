@@ -63,6 +63,8 @@ graphify-out/*
 benchmarks/real_repo/corpus/
 benchmarks/real_repo/index/
 benchmarks/real_repo/private/
+benchmarks/real_repo/repos.private.toml
+benchmarks/real_repo/fixtures/cleanroom-*.jsonl
 benchmarks/real_repo/eval_progress.log
 
 # cloud eval: launcher-generated staging artifacts

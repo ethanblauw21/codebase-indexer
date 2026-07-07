@@ -33,6 +33,10 @@ _HERE = os.path.dirname(__file__)
 _ROOT = os.path.abspath(os.path.join(_HERE, ".."))
 _REAL = os.path.join(_ROOT, "benchmarks", "real_repo")
 _MANIFEST = os.path.join(_REAL, "repos.toml")
+# ADR-019 §6: a git-ignored private-slice manifest, merged in when present. Lets the
+# SAME harness grade the clean-room contamination-free slice without ever committing
+# it. Absent in the public tree / cloud bundle → zero effect on the published run.
+_PRIVATE_MANIFEST = os.path.join(_REAL, "repos.private.toml")
 _CORPUS = os.path.join(_REAL, "corpus")
 _INDEX = os.path.join(_REAL, "index")
 _PREPARED = os.path.join(_INDEX, "PREPARED.json")
@@ -68,6 +72,10 @@ def load_manifest(path=_MANIFEST):
     with open(path, "rb") as f:
         data = tomllib.load(f)
     repos = data.get("repos", [])
+    # Merge the git-ignored private slice (§6) if the author dropped one in.
+    if os.path.exists(_PRIVATE_MANIFEST):
+        with open(_PRIVATE_MANIFEST, "rb") as f:
+            repos = repos + tomllib.load(f).get("repos", [])
     if not repos:
         raise SystemExit(f"No [[repos]] entries in {path}")
     return repos
@@ -83,7 +91,21 @@ def _head_sha(repo_dir):
 
 
 def ensure_clone(repo, force=False):
-    """Clone ``repo`` at its pinned SHA into corpus/<name>; return (status, dir)."""
+    """Clone ``repo`` at its pinned SHA into corpus/<name>; return (status, dir).
+
+    ADR-019 §6 private slice: a repo may instead carry a local ``path`` (clean-room
+    source that lives on disk, never on GitHub) — there is nothing to clone, so we just
+    resolve + validate the path and index it in place.
+    """
+    if repo.get("path"):
+        local = repo["path"]
+        if not os.path.isabs(local):
+            local = os.path.join(_ROOT, local)
+        local = os.path.abspath(local)
+        if not os.path.isdir(local):
+            raise SystemExit(f"[{repo['name']}] local path not found: {local}")
+        return "local", local
+
     dest = os.path.join(_CORPUS, repo["name"])
     sha = repo["sha"]
 
@@ -208,7 +230,7 @@ def cmd_list(repos):
         p = prepared.get(r["name"])
         state = "yes" if p else "no"
         counts = (f"{p['symbols']}/{p['chunks']}/{p['edges']}" if p else "-")
-        print(f"{r['name']:<12} {r['language']:<12} {r['sha'][:12]:<12} "
+        print(f"{r['name']:<12} {r['language']:<12} {r.get('sha', 'local')[:12]:<12} "
               f"{state:<8} {counts}")
 
 
@@ -248,7 +270,7 @@ def main():
     prepared = _load_prepared()
     for repo in repos:
         name = repo["name"]
-        print(f"\n══ {name} ({repo['language']}) @ {repo['sha'][:12]} ══")
+        print(f"\n══ {name} ({repo['language']}) @ {repo.get('sha', 'local')[:12]} ══")
         clone_status, corpus_dir = ensure_clone(repo, force=args.force)
         print(f"  clone: {clone_status} -> {os.path.relpath(corpus_dir, _ROOT)}")
         stats, index_dir = build_index(repo, corpus_dir, force=args.force)
@@ -257,7 +279,7 @@ def main():
         prepared[name] = {
             "name": name,
             "language": repo["language"],
-            "sha": repo["sha"],
+            "sha": repo.get("sha", "local"),
             "corpus": os.path.relpath(corpus_dir, _ROOT).replace("\\", "/"),
             "index_dir": os.path.relpath(index_dir, _ROOT).replace("\\", "/"),
             "files": stats["files"],
