@@ -113,11 +113,19 @@ def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
     return np.ascontiguousarray(vectors, dtype=np.float32)
 
 def embed(text):
-    """Generates code-native embeddings via Jina."""
+    """Generates a query embedding for the configured code embedder.
+
+    This is the QUERY path (hybrid_retriever, MCPServer). Some embedders — e.g.
+    bge-code-v1 (ADR-009 §P1) — require a task instruction on the query side only;
+    documents get no prefix, so embed_batch() (the indexing path) is untouched. When
+    [embeddings].query_instruct is empty (the jina default) no wrapping is applied.
+    """
     if not text or not text.strip():
         return np.zeros(embed_dimension(), dtype="float32")
 
-    # Jina does NOT require "search_document:" prefixes
+    instruct = _emb_cfg().get("query_instruct", "")
+    if instruct:
+        text = f"<instruct>{instruct}\n<query>{text}"
     vector = _get_embed_model().encode(text, convert_to_numpy=True)
     return np.array(vector, dtype="float32")
 

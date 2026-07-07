@@ -9,8 +9,28 @@
   Prereqs: the one-time setup in cloud/README.md is done (gcloud installed + authed,
   APIs enabled, GPU quota granted, bucket + service account created).
 
-  Run from the repo root:   .\cloud\launch_eval.ps1
+  Run from the repo root:
+    # default authoritative reranker run (reuses bundled jina indexes):
+    .\cloud\launch_eval.ps1
+
+    # ADR-009 P1 embedder swap A/B (reindex ALL 5 public repos with the bundled
+    # indexer.toml embedder, then dense arm B). --force re-embeds every repo in the
+    # bundled manifest (the private slice's manifest is git-ignored, not bundled, so
+    # this is exactly the 5 public repos); eval with no --repos runs all prepared:
+    .\cloud\launch_eval.ps1 `
+      -PrepareArgs "--force" `
+      -EvalArgs    "--arms B"
+    # (no --no-write: startup writes arm-B records to the throwaway VM path
+    #  out/result.jsonl and uploads them; that is NEVER the committed baseline)
 #>
+param(
+  # When set, staged as inputs/prepare-args.txt → startup.sh reindexes BEFORE the eval
+  # (embedder swap). When empty, no reindex — the bundled indexes are used as-is.
+  [string]$PrepareArgs = "",
+  # When set, staged as inputs/eval-args.txt. When empty, startup.sh defaults to
+  # "--arms B,C" (the authoritative reranker run). Reindex the SAME repo set you eval.
+  [string]$EvalArgs = ""
+)
 $ErrorActionPreference = "Stop"
 
 # --- config (matches cloud/README.md) -------------------------------------------
@@ -34,6 +54,26 @@ if ($LASTEXITCODE -ne 0) { throw "tar failed" }
 Write-Host "==> uploading bundle to gs://$BUCKET/inputs/ ..." -ForegroundColor Cyan
 gcloud storage cp bundle.tar.gz "gs://$BUCKET/inputs/bundle.tar.gz" --project=$PROJECT
 if ($LASTEXITCODE -ne 0) { throw "upload failed" }
+
+# --- 2b. stage the arg files (always refresh: clear stale ones so a prior run's -----
+#         prepare/eval args never leak into this one) --------------------------------
+Write-Host "==> staging arg files..." -ForegroundColor Cyan
+if ($PrepareArgs) {
+  $PrepareArgs | Out-File -FilePath prepare-args.txt -Encoding ascii -NoNewline
+  gcloud storage cp prepare-args.txt "gs://$BUCKET/inputs/prepare-args.txt" --project=$PROJECT
+  Write-Host "    reindex: $PrepareArgs" -ForegroundColor DarkGray
+} else {
+  gcloud storage rm "gs://$BUCKET/inputs/prepare-args.txt" --project=$PROJECT 2>$null
+  Write-Host "    reindex: (none - reusing bundled indexes)" -ForegroundColor DarkGray
+}
+if ($EvalArgs) {
+  $EvalArgs | Out-File -FilePath eval-args.txt -Encoding ascii -NoNewline
+  gcloud storage cp eval-args.txt "gs://$BUCKET/inputs/eval-args.txt" --project=$PROJECT
+  Write-Host "    eval: $EvalArgs" -ForegroundColor DarkGray
+} else {
+  gcloud storage rm "gs://$BUCKET/inputs/eval-args.txt" --project=$PROJECT 2>$null
+  Write-Host "    eval: (none - startup default --arms B,C)" -ForegroundColor DarkGray
+}
 
 # --- 3. create the spot T4 VM ---------------------------------------------------
 # It runs cloud/startup.sh, which self-deletes on completion. --max-run-duration +
@@ -69,5 +109,11 @@ Write-Host "  gcloud compute instances get-serial-port-output $VM --zone=$ZONE -
 Write-Host "Confirm it's gone (should be empty when finished):" -ForegroundColor Yellow
 Write-Host "  gcloud compute instances list --project=$PROJECT"
 Write-Host "Fetch results once it's gone:" -ForegroundColor Yellow
-Write-Host "  gcloud storage cp gs://$BUCKET/outputs/result.jsonl .\benchmarks\real_repo\real_repo_authoritative.jsonl --project=$PROJECT"
+if ($PrepareArgs) {
+  # embedder-swap run — keep it OUT of the authoritative reranker baseline file
+  Write-Host "  gcloud storage cp gs://$BUCKET/outputs/result.jsonl .\benchmarks\real_repo\bge_code_v1_denseB.jsonl --project=$PROJECT"
+  Write-Host "  # then compare arm-B mrr@10/ndcg@10 vs the committed jina arm-B baseline (paired, same 148 queries)"
+} else {
+  Write-Host "  gcloud storage cp gs://$BUCKET/outputs/result.jsonl .\benchmarks\real_repo\real_repo_authoritative.jsonl --project=$PROJECT"
+}
 Write-Host "  gcloud storage cp gs://$BUCKET/outputs/eval-run.log . --project=$PROJECT   # contains the printed verdict()"

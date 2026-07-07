@@ -220,7 +220,7 @@ harness would not catch it.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22)** — see note below; default still jina-v2. Swap + reindex + dense validation is the deferred operator run.
+- [~] P1: config-driven embedder load in `src/core.py`; `[embeddings]` block; FAISS rebuild path + documented one-time reindex. **Plumbing + reindex guard DONE (2026-06-22); candidate reselected to `BAAI/bge-code-v1` + config staged (2026-07-07)** — see notes below. Remaining: T4 reindex + dense-arm validation vs the committed jina baseline (then a separate `max_seq_length`→4096 experiment).
 - [ ] P2: late-chunking path in `src/ast_chunker.py`; demote `src/summarizer.py` to optional. Validate.
 - [x] P3: BM25 retriever (`rank-bm25`) + score-normalized convex fusion in `src/hybrid_retriever.py`; `[retrieval]` block (fusion mode + weights). **Implemented + wired DONE (2026-06-22); validation DONE (2026-07-01) — convex REJECTED on CoIR AND on the ADR-019 real-repo eval (negative in all 5 languages, incl. the exact-identifier queries BM25 was meant to win), stays off (`rrf`).** See log below.
 - [x] P4: reranker option ([40]/Qwen3) via `[reranker]`. **Truthfulness slice DONE (2026-06-22); quality validation DONE (2026-07-01, ADR-019); power rerun DONE (2026-07-06, n=148); private slice / clause 3 DONE (2026-07-07) → FAIL.** **Decision SETTLED — `[reranker].enabled` stays `false`.** At n=148 the public C−B lift passed clauses 1 & 2 (mrr@10 +0.1405, CI excludes 0), but the private contamination-free slice (clause 3) FAILED — pooled C−B CI includes 0 (+0.0920 ±0.1070) and TypeScript regresses on clean code, so it *disagrees* with the public verdict. All-three-clauses bar → default off. Split is diagnostic: clean Python +0.187 (real), clean TS −0.033 (public win was a contamination artifact, zustand outlier). Follow-ups (non-blocking): grow the slice; per-language reranking = new ADR. See §P4 clause-3 note.
@@ -305,6 +305,31 @@ the harness still applies no task **instruction prompts**, so a CPU run would al
 a verdict. **Decision: defer the actual P1 swap/validation behind a GPU path — see [[ADR-020]]** (AMD RX
 6700 XT via DirectML / WSL2+ROCm). The P1 *plumbing* above stays committed and reversible; only the
 multi-day embed run waits on GPU. The 1.5b weights are already in the HF cache for when it resumes.
+
+**2026-07-07 — P1 candidate reselected (bge-code-v1) + config staged; GPU path is now the GCP spot T4.**
+A deep-research sweep of early-2026 code embedders (20 sources, 25 claims adversarially verified) moved the
+P1 default off `jina-code-embeddings-1.5b`. New pick: **`BAAI/bge-code-v1`** ("CodeR", Qwen2.5-Coder-1.5B
+backbone) — it tops CoIR at **81.77** NDCG@10 vs jina-code-1.5b's 79.04 and the jina-v2 baseline's 59.56,
+*and* it is **Apache-2.0** (jina-code is CC-BY-NC) and loads via plain SentenceTransformer. Notably open-weight
+now beats the API ceiling (Voyage-code-3 78.53), so self-hosting costs no accuracy. The GPU path also changes:
+the **GCP spot NVIDIA T4** (proven by the ADR-019 n=148 reranker run, `cloud/`) supersedes the AMD RX 6700 XT /
+DirectML plan noted 2026-06-23 — a T4 at fp16 (~3 GB weights) collapses the ~5.5-day CPU embed to hours.
+Config **staged (not yet validated)** on this branch: `indexer.toml [embeddings]` → `model_id = BAAI/bge-code-v1`,
+`dimension = 1536`, `max_seq_length = 512` (held for a clean A/B — swap only the embedder), and a new
+`query_instruct` field. `src/core.py:embed()` now wraps QUERIES as `<instruct>{query_instruct}\n<query>{text}`
+(bge-code-v1 needs a query-side instruction); DOCUMENTS get no prefix, so `embed_batch()` (the indexing path)
+is untouched — the reindex stays a config swap. **Pending operator run:** reindex the real_repo corpora on the
+T4, then run the ADR-019 **dense arm** (bge-code-v1 vs the committed jina baseline) on our five languages
+(JS/TS, Python, C++, C#) — self-reported CoIR has no per-language C++/C# breakdown, so the real-repo eval is
+the verdict. Revert `model_id`+`dimension`+`query_instruct` to the jina pair if the dense arm does not confirm.
+
+**FOLLOW-UP (separate experiment, T4) — raise `max_seq_length` 512 → ~4096.** The 512 cap is a legacy
+CPU-OOM workaround (O(L²) attention crashed the process on ~4000-token inputs). Consequence today: tier-2
+(~1500 tok) and tier-3 (~4000 tok) chunks are **truncated to 512** before embedding — their vectors represent
+only the opening ~1/3 and ~1/8 of the chunk. The T4 makes full-length embedding feasible. The meaningful
+ceiling is **~4096** (fully embeds tier-3), not the model's 32k (no chunk is that long — dead headroom).
+Run this **after** the embedder A/B settles, as an independent variable, to measure whether fully-embedded
+large chunks lift tier-2/3 (component/architectural) retrieval. One dial at a time so lift stays attributable.
 
 **2026-07-01 — P3 full-sweep result: convex fusion REJECTED on CoIR (stays off).** Completed the `dense+sparse`
 sweep across all four measurable subtasks. The two large corpora (CSN-python/js) were CPU-bound on the pure-Python

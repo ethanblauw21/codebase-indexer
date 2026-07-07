@@ -29,18 +29,31 @@ index_dir = ".code-index"
 # stable_ids are model-independent, so the rebuild is recompute-vectors-only (no
 # schema change). core.py refuses to load an index whose dimension no longer matches.
 #
-# Default (proven Wave-0 baseline): jinaai/jina-embeddings-v2-base-code (768 dims).
-# ADR-009 §P1 candidate: jina-code-embeddings-1.5b (set model_id + dimension, then
-# reindex, then validate dense vs the committed baseline before keeping it).
-model_id = "jinaai/jina-embeddings-v2-base-code"
+# Prior proven Wave-0 baseline: jinaai/jina-embeddings-v2-base-code (768 dims).
+# ADR-009 §P1 candidate (staged 2026-07-07, deep-research pick): BAAI/bge-code-v1
+# ("CodeR", Qwen2.5-Coder-1.5B backbone) — CoIR 81.77 vs jina 59.56, Apache-2.0,
+# ~3GB fp16 (fits the T4). NOT yet validated: reindex + run the ADR-019 real-repo
+# dense arm vs the committed jina baseline before keeping it. Revert both values to
+# the jina pair above if the dense arm does not confirm the lift on our stack.
+model_id = "BAAI/bge-code-v1"
 
-# Maximum sequence length fed to the embedding model.
-# Reduce if you hit OOM on GPUs with less than 8 GB VRAM.
+# Maximum sequence length fed to the embedding model. Held at 512 for a clean A/B
+# vs the jina baseline (swap only the embedder, not the chunk length). bge-code-v1
+# supports 32k, but the largest chunk we emit is tier-3 (~4000 tok), so the only
+# meaningful raise is to ~4096 (fully embeds tier-2/3 instead of truncating them) —
+# a SEPARATE follow-up experiment on the T4, logged in ADR-009 §P1. Reduce if you
+# hit OOM on GPUs with less than 8 GB VRAM.
 max_seq_length = 512
 
 # Output embedding dimension. MUST match the model AND the built FAISS indexes;
-# change it together with model_id and reindex (see above).
-dimension = 768
+# change it together with model_id and reindex (see above). bge-code-v1 hidden_size.
+dimension = 1536
+
+# Query-side instruction prefix (ADR-009 §P1). bge-code-v1 wraps QUERIES as
+# "<instruct>{query_instruct}\n<query>{text}"; DOCUMENTS get no prefix, so only the
+# query path (core.embed) is affected — bulk indexing (embed_batch) is untouched.
+# Empty string = no wrapping (the jina behavior). Read by src/core.py.
+query_instruct = "Given a code search query, retrieve relevant code that answers it"
 
 [reranker]
 # Reranker for cross-encoder rescoring of dense candidates (optional).

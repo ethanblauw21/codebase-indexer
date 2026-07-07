@@ -87,6 +87,25 @@ python -c 'import torch; print("[startup] torch", torch.__version__, "cuda?", to
 export EVAL_PROGRESS_LOG=/var/log/eval_progress.log
 export HF_HOME=/opt/hf
 mkdir -p out
+
+# --- optional reindex (embedder swap / ADR-009 §P1) -----------------------------
+# If a prepare-args.txt is staged, rebuild the FAISS indexes from the BUNDLED
+# indexer.toml [embeddings] BEFORE the eval. Required when swapping the embedder: the
+# bundled indexes were built with a different model/dimension, so eval over them would
+# (correctly) trip the dimension guard. Absent for the default reranker run, which
+# reuses the bundled indexes untouched. real_repo_prepare clones the pinned repos +
+# re-embeds on the GPU (HF_HOME already set); summarization is off for eval builds.
+# NOTE: reindex the SAME repo set the eval runs, or a mixed-embedder index dir will
+# fail the dimension guard mid-run.
+if gcloud storage cp "gs://$BUCKET/inputs/prepare-args.txt" ./prepare-args.txt 2>/dev/null; then
+  PREP_ARGS="$(cat prepare-args.txt)"
+  echo "[startup] $(date -u) reindexing (embedder swap): real_repo_prepare.py $PREP_ARGS"
+  python -u tools/real_repo_prepare.py $PREP_ARGS || fatal "prepare/reindex failed"
+  echo "[startup] $(date -u) reindex done"
+else
+  echo "[startup] no prepare-args.txt — skipping reindex (reusing bundled indexes)"
+fi
+
 if gcloud storage cp "gs://$BUCKET/inputs/eval-args.txt" ./eval-args.txt 2>/dev/null; then
   EVAL_ARGS="$(cat eval-args.txt)"
 else
