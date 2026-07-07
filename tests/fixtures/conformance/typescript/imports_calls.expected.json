@@ -1,0 +1,14 @@
+{
+  "feature": "typescript/imports",
+  "language": "typescript",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "loadConfig", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "imports_calls.ts", "target": "fs", "kind": "import"},
+    {"source": "imports_calls.ts", "target": "path", "kind": "import"},
+    {"source": "loadConfig", "target": "join", "kind": "call"},
+    {"source": "loadConfig", "target": "readFile", "kind": "call"}
+  ]
+}

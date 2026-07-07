@@ -1,0 +1,20 @@
+{
+  "feature": "python/decorators",
+  "language": "python",
+  "tier": "A",
+  "note": "Decoration (@property, @staticmethod, custom @trace) must not drop the decorated symbol. Closure-internal `wrapper` is intentionally not required as a top-level symbol.",
+  "symbols": [
+    {"fqn": "trace", "kind": "function"},
+    {"fqn": "Service", "kind": "class"},
+    {"fqn": "Service.name", "kind": "method"},
+    {"fqn": "Service.version", "kind": "method"},
+    {"fqn": "compute", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "decorators.py", "target": "functools", "kind": "import"},
+    {"source": "trace", "target": "wraps", "kind": "call"},
+    {"source": "trace", "target": "fn", "kind": "call"},
+    {"source": "Service", "target": "Service.name", "kind": "owns"},
+    {"source": "Service", "target": "Service.version", "kind": "owns"}
+  ]
+}

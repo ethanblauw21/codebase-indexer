@@ -1,0 +1,17 @@
+{
+  "feature": "python/functions",
+  "language": "python",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "greet", "kind": "function"},
+    {"fqn": "format_name", "kind": "function"},
+    {"fqn": "main", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "greet", "target": "format_name", "kind": "call"},
+    {"source": "format_name", "target": "strip", "kind": "call"},
+    {"source": "format_name", "target": "title", "kind": "call"},
+    {"source": "main", "target": "greet", "kind": "call"},
+    {"source": "main", "target": "format_name", "kind": "call"}
+  ]
+}

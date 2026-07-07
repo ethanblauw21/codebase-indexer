@@ -1,0 +1,18 @@
+{
+  "feature": "python/async",
+  "language": "python",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "fetch", "kind": "function"},
+    {"fqn": "counter", "kind": "function"},
+    {"fqn": "main", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "async_gen.py", "target": "asyncio", "kind": "import"},
+    {"source": "fetch", "target": "sleep", "kind": "call"},
+    {"source": "counter", "target": "range", "kind": "call"},
+    {"source": "main", "target": "fetch", "kind": "call"},
+    {"source": "main", "target": "list", "kind": "call"},
+    {"source": "main", "target": "counter", "kind": "call"}
+  ]
+}

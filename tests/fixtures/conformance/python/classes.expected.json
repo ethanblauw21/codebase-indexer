@@ -1,0 +1,16 @@
+{
+  "feature": "python/classes",
+  "language": "python",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "Counter", "kind": "class"},
+    {"fqn": "Counter.__init__", "kind": "method"},
+    {"fqn": "Counter.increment", "kind": "method"},
+    {"fqn": "Counter.reset", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "Counter", "target": "Counter.__init__", "kind": "owns"},
+    {"source": "Counter", "target": "Counter.increment", "kind": "owns"},
+    {"source": "Counter", "target": "Counter.reset", "kind": "owns"}
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "feature": "typescript/inheritance",
+  "language": "typescript",
+  "tier": "A",
+  "note": "TS adapter emits both `extends` (Dog->Animal) and `implements` (Dog->Speaker) — the relationship edges Python currently lacks. Interface method signatures are not required as owned symbols.",
+  "symbols": [
+    {"fqn": "Speaker", "kind": "interface"},
+    {"fqn": "Animal", "kind": "class"},
+    {"fqn": "Animal.speak", "kind": "method"},
+    {"fqn": "Dog", "kind": "class"},
+    {"fqn": "Dog.speak", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "Animal", "target": "Animal.speak", "kind": "owns"},
+    {"source": "Dog", "target": "Animal", "kind": "extends"},
+    {"source": "Dog", "target": "Speaker", "kind": "implements"},
+    {"source": "Dog", "target": "Dog.speak", "kind": "owns"}
+  ]
+}

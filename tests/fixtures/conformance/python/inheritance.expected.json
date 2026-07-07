@@ -1,0 +1,17 @@
+{
+  "feature": "python/inheritance",
+  "language": "python",
+  "tier": "A",
+  "note": "The `extends` edge (Dog -> Animal) is ground truth a correct extractor should emit; the Python adapter does not yet, so this fixture measures a real recall gap.",
+  "symbols": [
+    {"fqn": "Animal", "kind": "class"},
+    {"fqn": "Animal.speak", "kind": "method"},
+    {"fqn": "Dog", "kind": "class"},
+    {"fqn": "Dog.speak", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "Animal", "target": "Animal.speak", "kind": "owns"},
+    {"source": "Dog", "target": "Dog.speak", "kind": "owns"},
+    {"source": "Dog", "target": "Animal", "kind": "extends"}
+  ]
+}
