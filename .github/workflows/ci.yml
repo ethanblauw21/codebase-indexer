@@ -87,3 +87,24 @@ jobs:
       # collapsed below the floor. Fast regression guard, not a publishable number.
       - name: Run real-repo retrieval tripwire
         run: python tools/real_repo_tripwire.py
+
+  conformance-scorecard:
+    name: Extraction conformance (ADR-008 §1)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: pip install -e .
+
+      # Pure tree-sitter parse — no embedder, no HF download, runs in seconds.
+      # Prints the per-language precision/recall table, then fails the build if any
+      # metric dropped below the committed benchmarks/conformance/baseline.json.
+      - name: Run extraction conformance scorecard
+        run: python tools/conformance_eval.py --check-baseline
