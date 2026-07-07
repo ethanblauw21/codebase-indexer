@@ -1,0 +1,16 @@
+{
+  "feature": "typescript/classes",
+  "language": "typescript",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "Counter", "kind": "class"},
+    {"fqn": "Counter.constructor", "kind": "method"},
+    {"fqn": "Counter.increment", "kind": "method"},
+    {"fqn": "Counter.reset", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "Counter", "target": "Counter.constructor", "kind": "owns"},
+    {"source": "Counter", "target": "Counter.increment", "kind": "owns"},
+    {"source": "Counter", "target": "Counter.reset", "kind": "owns"}
+  ]
+}

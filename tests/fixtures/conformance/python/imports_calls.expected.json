@@ -1,0 +1,17 @@
+{
+  "feature": "python/imports",
+  "language": "python",
+  "tier": "A",
+  "note": "The `json` import is ground truth (`import json as j` imports module json); the adapter drops aliased imports, so this fixture measures a real import-recall gap.",
+  "symbols": [
+    {"fqn": "build", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "imports_calls.py", "target": "os", "kind": "import"},
+    {"source": "imports_calls.py", "target": "collections", "kind": "import"},
+    {"source": "imports_calls.py", "target": "json", "kind": "import"},
+    {"source": "build", "target": "getcwd", "kind": "call"},
+    {"source": "build", "target": "OrderedDict", "kind": "call"},
+    {"source": "build", "target": "dumps", "kind": "call"}
+  ]
+}

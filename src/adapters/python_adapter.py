@@ -15,6 +15,7 @@ _GRAMMAR = Language(tspython.language())
 
 _IMPORT_QUERY = """
 (import_statement name: (dotted_name) @path)
+(import_statement name: (aliased_import name: (dotted_name) @path))
 (import_from_statement module_name: (dotted_name) @path)
 """
 
@@ -110,6 +111,23 @@ class PythonAdapter:
                         text          = skeletonize(node, src, {"function_definition"}),
                     )
                     symbols.append(sym)
+                    # Inheritance: `class Dog(Animal, base.Mixin):` -> extends edges.
+                    # The superclass list is an `argument_list` child; each positional
+                    # base is an identifier (Animal) or attribute (base.Mixin -> Mixin,
+                    # matching the call convention of the final identifier). Keyword args
+                    # (metaclass=...) are not base classes and are skipped.
+                    supers = next((c for c in node.children if c.type == "argument_list"), None)
+                    if supers:
+                        for base in supers.children:
+                            if base.type == "identifier":
+                                base_name = node_text(base, src)
+                            elif base.type == "attribute":
+                                attr = base.child_by_field_name("attribute")
+                                base_name = node_text(attr, src) if attr else None
+                            else:
+                                base_name = None
+                            if base_name:
+                                edges.append(Edge(source_fqn=fqn, target=base_name, kind="extends"))
                     body = next((c for c in node.children if c.type == "block"), None)
                     if body:
                         for child in body.children:

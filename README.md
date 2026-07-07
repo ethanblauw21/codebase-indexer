@@ -225,3 +225,14 @@ These are known, documented constraints — not bugs. They reflect the fundament
 - **Function pointers and virtual dispatch:** call edges resolve to the declared type only, not the runtime type.
 - **Operator overloads:** indexed as symbols but rarely earn call edges (call sites use operator syntax, not a function name).
 - **Header/impl unification:** relies on FQN identity across files. If a declaration and definition use different parameter spellings (e.g. `const string&` vs `const std::string&`) they will produce different FQNs and not unify. Normalize includes in your codebase to prevent this.
+
+## Extraction Accuracy (ADR-008)
+
+<!-- CONFORMANCE:START -->
+| Language | Symbols P/R | Edges P/R | Call edges P/R | Fixtures |
+|----------|-------------|-----------|----------------|----------|
+| python | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
+| typescript | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
+
+_Measured on hand-authored feature fixtures (Tier-A adapters), not an exhaustive corpus — a row is "precision/recall on the fixtures we wrote," never a language's true precision (ADR-008 §7). Regenerate with `python tools/conformance_eval.py --write-readme`._
+<!-- CONFORMANCE:END -->

@@ -1,0 +1,15 @@
+{
+  "feature": "typescript/arrow_functions",
+  "language": "typescript",
+  "tier": "A",
+  "note": "log->log is a real call edge by convention: the body calls console.log, whose final identifier is `log`, from inside the `log` arrow function.",
+  "symbols": [
+    {"fqn": "double", "kind": "arrow_function"},
+    {"fqn": "quadruple", "kind": "arrow_function"},
+    {"fqn": "log", "kind": "arrow_function"}
+  ],
+  "edges": [
+    {"source": "quadruple", "target": "double", "kind": "call"},
+    {"source": "log", "target": "log", "kind": "call"}
+  ]
+}

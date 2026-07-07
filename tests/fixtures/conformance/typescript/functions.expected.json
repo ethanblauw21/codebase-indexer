@@ -1,0 +1,16 @@
+{
+  "feature": "typescript/functions",
+  "language": "typescript",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "greet", "kind": "function"},
+    {"fqn": "formatName", "kind": "function"},
+    {"fqn": "main", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "greet", "target": "formatName", "kind": "call"},
+    {"source": "formatName", "target": "trim", "kind": "call"},
+    {"source": "main", "target": "greet", "kind": "call"},
+    {"source": "main", "target": "formatName", "kind": "call"}
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "feature": "typescript/interfaces_types",
+  "language": "typescript",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "User", "kind": "interface"},
+    {"fqn": "UserId", "kind": "type_alias"},
+    {"fqn": "Handler", "kind": "type_alias"},
+    {"fqn": "register", "kind": "function"}
+  ],
+  "edges": []
+}
