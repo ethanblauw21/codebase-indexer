@@ -1,0 +1,19 @@
+{
+  "feature": "csharp/nested_types",
+  "language": "csharp",
+  "tier": "A",
+  "note": "Nested type FQN uses the '+' separator (Outer+Inner, CLR convention). Methods are owned by their immediate enclosing type; the outer type is NOT recorded as owning the nested type (type-owns-type is not in the edge model). `new Inner()` is object creation, not a call; Compute -> Seed is the only call edge.",
+  "symbols": [
+    {"fqn": "Widgets.Outer", "kind": "class"},
+    {"fqn": "Widgets.Outer+Inner", "kind": "class"},
+    {"fqn": "Widgets.Outer+Inner.Compute/0", "kind": "method"},
+    {"fqn": "Widgets.Outer+Inner.Seed/0", "kind": "method"},
+    {"fqn": "Widgets.Outer.Make/0", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "Widgets.Outer+Inner", "target": "Widgets.Outer+Inner.Compute/0", "kind": "owns"},
+    {"source": "Widgets.Outer+Inner", "target": "Widgets.Outer+Inner.Seed/0", "kind": "owns"},
+    {"source": "Widgets.Outer", "target": "Widgets.Outer.Make/0", "kind": "owns"},
+    {"source": "Widgets.Outer+Inner.Compute/0", "target": "Seed", "kind": "call"}
+  ]
+}

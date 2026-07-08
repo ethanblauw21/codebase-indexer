@@ -1,4 +1,18 @@
 {
+  "csharp": {
+    "edges_all": {
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "edges_call": {
+      "precision": 1.0,
+      "recall": 1.0
+    },
+    "symbols": {
+      "precision": 1.0,
+      "recall": 1.0
+    }
+  },
   "python": {
     "edges_all": {
       "precision": 1.0,
