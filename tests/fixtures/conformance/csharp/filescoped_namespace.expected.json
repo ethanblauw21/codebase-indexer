@@ -2,11 +2,7 @@
   "feature": "csharp/filescoped_namespace",
   "language": "csharp",
   "tier": "A",
-  "known_gap": {
-    "reason": "Under a file-scoped namespace (`namespace Ledger;`, the .NET 6+ default), the correct FQN is Ledger.Account. The adapter only propagates the namespace for block-form declarations; file-scoped type declarations are siblings of the namespace node in the grammar and are walked with no namespace, so every symbol comes out unqualified (Account). Because the FQN is the symbol's identity, symbols/owns/call keys all mismatch and this fixture scores far below 1.0.",
-    "ref": "docs/conformance-fixture-conventions.md#known-gaps"
-  },
-  "note": "Undocumented adapter gap surfaced by the C# conformance batch (root cause: _walk handles file_scoped_namespace_declaration as if members were its children; the tree-sitter grammar makes them siblings). Adapter fix is a separate Major/ADR change (touches src/); tracked as a finding, encoded here as correct ground truth.",
+  "note": "File-scoped namespace (`namespace Ledger;`, the .NET 6+ default): every type is qualified Ledger.Account (ADR-003 D3). Formerly a known-gap (issue #14: _walk treated file_scoped_namespace_declaration as a container, but the tree-sitter grammar makes the type declarations its SIBLINGS, so they were walked with ns=None → unqualified FQNs). Fixed by applying a file-scoped namespace to its subsequent siblings in _walk. Ground truth is unchanged — it always encoded the correct qualified semantics.",
   "symbols": [
     {"fqn": "Ledger.Account", "kind": "class"},
     {"fqn": "Ledger.Account.Account/1", "kind": "constructor"},

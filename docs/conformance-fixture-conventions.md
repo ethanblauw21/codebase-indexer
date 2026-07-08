@@ -113,33 +113,23 @@ clean-set regression, and on any key collision.
 
 ### Current known gaps (C#)
 
-- **`filescoped_namespace`** — under a file-scoped namespace (`namespace X;`, the .NET 6+
-  default), types should be namespace-qualified (`Ledger.Account`). The adapter only
-  propagates the namespace for **block-form** declarations; under a file-scoped namespace the
-  type declarations are *siblings* of the `file_scoped_namespace_declaration` node in the
-  tree-sitter grammar and are walked with no namespace, so every symbol comes out unqualified.
-  Because the FQN is the symbol's identity, this zeroes out symbol/edge matching. **Undocumented
-  adapter bug surfaced by this batch; adapter fix is a separate Major/ADR change (touches
-  `src/`).**
 - **`interface_impl_gap`** — a class implementing two interfaces with no base class: both are
   correctly `implements`, but the adapter's base-list heuristic (first entry → `extends`, rest
   → `implements`) mislabels the first as `extends`. **Documented limit** in
   `src/adapters/csharp_adapter.py` ("Base-list extends/implements … cannot distinguish base
   class vs interface without type resolution").
 
-### Current known gaps (C++)
+### Closed gaps (fixed; fixtures now in the clean set)
 
-- **`templates`** — a call at an **explicit-template-argument** site (`maxOf<int>(box.get(), 10)`)
-  should emit an ordinary call edge (`util::useTemplates() -> maxOf`); the callee is a real,
-  already-indexed function. The adapter drops it: tree-sitter-cpp wraps the call target in a
-  `template_function` node, which `_CALL_QUERY` does not match. This is **not** the docstring's
-  "template instantiations are invisible" blind spot (that concerns instantiation-as-symbol-
-  generation, e.g. `Box<int>` producing no monomorphized symbol — correctly *not* a gap here).
-  The bug is broader than the bare form: the **qualified** case (`std::make_shared<int>(...)`,
-  `ns::factory<T>(...)`) is also missed, via `qualified_identifier name: template_function`.
-  Recall-only — no FQN/identity corruption. **Undocumented adapter bug surfaced by this batch;
-  fix is a separate Major/ADR change** (add two `_CALL_QUERY` alternatives in
-  `src/adapters/cpp_adapter.py`, which also removes this marker). Tracked in issue #16.
+- **`filescoped_namespace`** (C#, issue #14) — under a file-scoped namespace (`namespace X;`)
+  the type declarations are *siblings* of the `file_scoped_namespace_declaration` node, so
+  `_walk` (which treated it as a container) namespaced nothing → unqualified FQNs. **Fixed**:
+  `_walk` now applies a file-scoped namespace to its subsequent siblings. The fixture is a clean
+  1.00.
+- **`templates`** (C++, issue #16) — a call at an explicit-template-argument site
+  (`maxOf<int>(...)`, `std::make_shared<int>(...)`) was dropped because `_CALL_QUERY` didn't
+  match the `template_function` call-target node. **Fixed**: added the bare and qualified
+  `template_function` alternatives to `_CALL_QUERY`. The fixture is a clean 1.00.
 
 ## Adding a language
 
