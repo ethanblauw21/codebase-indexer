@@ -47,6 +47,10 @@ class Edge:
     kind: str                     # "import" | "call" | "owns" | "extends" | "implements"
     # | "provides_context" | "consumes_context"
     resolved_target: Optional[str] = None  # canonical repo-relative path (IMPORTS only)
+    candidate: bool = False       # True = name-based / unresolved edge, not verified
+    # (ADR-017 §3: Tier-B edges, C++ overload sets). Firewalled from positive
+    # verdicts by the safe-direction rule (ADR-017 §7); ADR-008 §4 later grades
+    # this into Edge.confidence: float | None.
 
 
 @dataclass
