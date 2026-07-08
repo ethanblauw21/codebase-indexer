@@ -82,44 +82,26 @@ def semantic_code_search(query: str) -> str:
     This queries a local AI Vector Database that understands semantic concepts,
     React lifecycles, and cross-file dependencies far better than string matching.
     Prefer investigate_architecture when you need a complete picture of how a concept
-    flows through the system — it adds call-graph expansion and cross-encoder reranking
-    on top of this tool's FAISS-only search. Use this tool for quick targeted lookups
+    flows through the system — it wraps this same retrieval pipeline in a multi-round
+    agentic loop with query enrichment. Use this tool for quick, single-pass lookups
     where that overhead is not needed.
     """
     print(f"\n[MCP] Tool invoked by LLM for query: '{query}'")
     _ensure_indexes()
-    query_vector = embed(query).reshape(1, -1)
 
-    # 1. Query all three tiers
-    _, t1_ids = t1_index.search(query_vector, 10)
-    _, t2_ids = t2_index.search(query_vector, 10)
-    _, t3_ids = t3_index.search(query_vector, 10)
+    # Candidate generation via the shared RTR surface (ADR-023 §1): multi-tier RRF
+    # plus resolved call-graph neighbours + import-corroboration, not FAISS-only.
+    chunks = _search(query, top_n=15)
 
-    # 2. Reciprocal Rank Fusion (The Consensus Algorithm)
-    fused_scores = {}
-    k = 60
-    for rank_list in [t1_ids[0], t2_ids[0], t3_ids[0]]:
-        for rank, doc_id in enumerate(rank_list):
-            if doc_id == -1: continue
-            if doc_id not in fused_scores:
-                fused_scores[doc_id] = 0.0
-            fused_scores[doc_id] += 1.0 / (k + rank)
-
-    # Sort by highest consensus
-    best_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
-
-    # 3. Context Packing (Protecting your 8GB Local Model's VRAM)
+    # Context Packing (Protecting your 8GB Local Model's VRAM)
     # 8B models easily crash if you feed them more than 8k tokens.
     # We cap the returned context strictly at 4000 tokens to be safe.
     context = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
     current_tokens = 0
     MAX_TOKENS = 4000
 
-    for doc_id in best_ids:
-        doc = doc_store.get(doc_id)
-        if not doc: continue
-
-        chunk_text = f"--- FILE: {doc['file']} | SCOPE: {doc['scope']} ---\n{doc['text']}\n\n"
+    for c in chunks:
+        chunk_text = f"--- FILE: {c.file} | SCOPE: {c.scope} ---\n{c.text}\n\n"
         tokens = jina_tokenizer.count_tokens(chunk_text)
 
         if current_tokens + tokens < MAX_TOKENS:
@@ -139,8 +121,9 @@ def find_similar_code(code_snippet: str) -> str:
     """
     print("\n[MCP] Searching for duplicates/callers of provided snippet...")
     _ensure_indexes()
-    query_vector = embed(code_snippet).reshape(1, -1)
-    scores, t1_ids = t1_index.search(query_vector, 15)
+    # Shared RTR surface (ADR-023 §1) instead of raw tier-1 FAISS; brings in
+    # call-graph neighbours (real callers) the pure-similarity search missed.
+    chunks = _search(code_snippet, top_n=15)
 
     seen_scopes = set()
     origin_data = []
@@ -180,19 +163,17 @@ def find_similar_code(code_snippet: str) -> str:
     snippet_keywords = get_domain_keywords(code_snippet)
     anchor_writes, anchor_reads = get_op_profile(code_snippet)
 
-    top_score = float(scores[0][0])
+    top_score = chunks[0].score if chunks else 1.0
 
-    for score, doc_id in zip(scores[0], t1_ids[0]):
-        if doc_id == -1: continue
-        doc = doc_store.get(doc_id)
-        clean_scope = get_clean_scope(doc)
-        if not doc: continue
+    for c in chunks:
+        score = c.score
+        clean_scope = get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})
 
-        unique_key = doc['file']
+        unique_key = c.file
         if unique_key in seen_scopes: continue
         seen_scopes.add(unique_key)
 
-        doc_text = doc['text']
+        doc_text = c.text
         norm_doc = re.sub(r'\s+', '', doc_text)
 
         is_origin = (norm_snippet in norm_doc) or (norm_doc in norm_snippet) or (score >= top_score * 0.99)
@@ -226,7 +207,7 @@ def find_similar_code(code_snippet: str) -> str:
             evidence_str = "API/Structural similarity only"
 
         snippet_preview = doc_text[:120].replace('\n', ' ').strip() + "..."
-        entry = f"- {doc['file']} ({clean_scope})\n  [Score]: {score:.3f}\n  [Evidence]: {evidence_str}\n  [Snippet]: {snippet_preview}\n\n"
+        entry = f"- {c.file} ({clean_scope})\n  [Score]: {score:.3f}\n  [Evidence]: {evidence_str}\n  [Snippet]: {snippet_preview}\n\n"
 
         # --- 3. COMPOSITE SCORING (The Fix) ---
         # Calculate a fluid ratio instead of hard cut-offs
@@ -717,6 +698,20 @@ def _get_hybrid_retriever() -> HybridRetriever:
     if _hybrid_retriever is None:
         _hybrid_retriever = HybridRetriever()
     return _hybrid_retriever
+
+
+def _search(query: str, top_n: int = 10) -> list[RetrievedChunk]:
+    """Shared retrieval surface (ADR-023 §1).
+
+    Every retrieval-backed MCP tool routes candidate generation through the
+    Retrieve-Traverse-Rerank pipeline instead of raw multi-tier FAISS search, so
+    the resolved call graph + import-corroboration (ADR-021) and the honest
+    Wave-0 ranking (ADR-007) reach every tool — not just investigate_architecture.
+    Returns RTR ``RetrievedChunk``s (``.file/.scope/.tier/.text/.source/.corroborated``);
+    tools keep their own formatting and post-filters. ``top_n`` widens the pool for
+    scan-style tools that need breadth.
+    """
+    return _get_hybrid_retriever().retrieve(query, top_n=top_n)
 
 
 def _get_iterative_retriever() -> IterativeRetriever:
