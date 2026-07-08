@@ -278,19 +278,10 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
             anchor_text += doc['text'] + "\n"
 
     query_text = f"Implementation, definition, or usage of {target_symbol}"
-    query_vector = embed(query_text).reshape(1, -1)
-
-    # Cast a net for top 30 semantic matches across t1 + t2, merged via RRF.
-    # t1 gives surgical FQN-level hits; t2 adds component-level context for files
-    # that are related at the module boundary but not at the function level.
-    _, _t1_blast = t1_index.search(query_vector, 30)
-    _, _t2_blast = t2_index.search(query_vector, 30)
-    _fused_blast: dict[int, float] = {}
-    for _rank, _did in enumerate(_t1_blast[0]):
-        if _did != -1: _fused_blast[_did] = _fused_blast.get(_did, 0.0) + 1.0 / (60 + _rank)
-    for _rank, _did in enumerate(_t2_blast[0]):
-        if _did != -1: _fused_blast[_did] = _fused_blast.get(_did, 0.0) + 1.0 / (60 + _rank)
-    _blast_candidates = sorted(_fused_blast, key=lambda x: _fused_blast[x], reverse=True)
+    # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
+    # call-graph neighbours of the anchor join the candidate pool, so dependents
+    # reachable only through the graph (not FAISS similarity) enter the radius.
+    _blast_chunks = _search(query_text, top_n=30)
 
     seen_files = set()
     anchor_data = []
@@ -298,9 +289,8 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     dependents_data = []
     parallel_data = []
 
-    for doc_id in _blast_candidates:
-        doc = doc_store.get(doc_id)
-        if not doc: continue
+    for c in _blast_chunks:
+        doc = {'file': c.file, 'scope': c.scope, 'text': c.text}
 
         file_path = doc['file']
         if file_path in seen_files: continue
@@ -389,6 +379,17 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     context += "4. UNDERLYING PRIMITIVES (Directionally Validated):\n"
     context += "".join(primitives_data) if primitives_data else "  [No anchor-imported primitives detected]\n"
 
+    # --- ADR-017 §7 edge-aware radius (safe direction: candidate neighbours EXPAND
+    # the radius into a separate UNVERIFIED bucket, never merged into the verified
+    # dependents count). ---
+    verified_deps, candidate_deps = _caller_evidence(target_symbol, anchor_file)
+    context += "\n5. CALL-GRAPH DEPENDENTS (resolved edges — verified):\n"
+    context += ("".join(f"- {n.fqn}\n  [File]: {n.file_path}\n" for n in verified_deps)
+                if verified_deps else "  [None detected]\n")
+    if candidate_deps:
+        context += "\n6. UNVERIFIED NEIGHBOURS (candidate edges — expand radius, review separately):\n"
+        context += "".join(f"- {n.fqn}\n  [File]: {n.file_path}\n" for n in candidate_deps)
+
     context += """
     INSTRUCTIONS FOR AI AGENT:
     Review the categories and [Evidence] tags.
@@ -409,21 +410,17 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
     print(f"\n[MCP] Scanning for violations missing '{enforced_symbols_csv}'...")
     _ensure_indexes()
     enforced_symbols = [s.strip() for s in enforced_symbols_csv.split(',') if s.strip()]
-    query_vector = embed(canonical_snippet).reshape(1, -1)
+    # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: structural
+    # neighbours + import-corroboration enter the pattern-scan pool. Each candidate
+    # keeps its RTR ranking score for the relative relevance gate below.
+    _pv_chunks = _search(canonical_snippet, top_n=60)
+    _pv_items: dict[str, dict] = {}
+    for _c in _pv_chunks:
+        _key = f"{_c.file}::{_c.scope}"
+        if _key not in _pv_items:
+            _pv_items[_key] = {'file': _c.file, 'scope': _c.scope, 'text': _c.text, 'score': _c.score}
 
-    # RRF fusion across t1 + t2 — mirrors trace_data_flow and find_unabstracted_collection_reads.
-    # t1 gives precise function-level matches; t2 catches stylistically different files that
-    # score below t1's top-40 threshold but carry the same pattern at the module boundary.
-    _, _t1_pv = t1_index.search(query_vector, 60)
-    _, _t2_pv = t2_index.search(query_vector, 30)
-    _fused_pv: dict[int, float] = {}
-    for _rank, _did in enumerate(_t1_pv[0]):
-        if _did != -1: _fused_pv[_did] = _fused_pv.get(_did, 0.0) + 1.0 / (60 + _rank)
-    for _rank, _did in enumerate(_t2_pv[0]):
-        if _did != -1: _fused_pv[_did] = _fused_pv.get(_did, 0.0) + 1.0 / (60 + _rank)
-    _pv_candidates = sorted(_fused_pv, key=lambda x: _fused_pv[x], reverse=True)
-
-    violations_data, compliant_data, exempt_data = [], [], []
+    violations_data, possible_violations_data, compliant_data, exempt_data = [], [], [], []
     seen_scopes = set()
     seen_violation_files = set()
     compliant_files: set[str] = set()
@@ -449,27 +446,37 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
     words = set(re.findall(r'[a-zA-Z_]\w{3,}', canonical_snippet))
     strong_keywords = [w for w in words if (w not in stopwords) and (re.search(r'[A-Z]', w) or '_' in w)]
 
-    top_score = max(_fused_pv.values()) if _fused_pv else 1.0
+    top_score = max((d['score'] for d in _pv_items.values()), default=1.0)
 
-    # --- KEYWORD SWEEP: Secondary retrieval for files missed by FAISS ---
+    # --- KEYWORD SWEEP: Secondary retrieval for files missed by the RTR pool ---
     # Files may be semantically distant from the canonical snippet (low cosine score)
     # but still use the same Firestore collection or domain objects. Sweep every indexed
     # document for any that share 2+ domain-specific terms with the snippet and weren't
     # surfaced by cosine similarity. Floor score keeps them below the 0.65 threshold so
     # they only pass the existing len(shared_strong) >= 2 relevance gate.
     if strong_keywords:
-        for _kw_id, _kw_doc in doc_store.docs.items():
-            if _kw_id in _fused_pv:
+        for _kw_doc in doc_store.docs.values():
+            _kw_key = f"{_kw_doc['file']}::{_kw_doc['scope']}"
+            if _kw_key in _pv_items:
                 continue
             _kw_words = set(re.findall(r'[a-zA-Z_]\w{3,}', _kw_doc['text']))
             if sum(1 for w in strong_keywords if w in _kw_words) >= 2:
-                _fused_pv[_kw_id] = top_score * 0.45
-        _pv_candidates = sorted(_fused_pv, key=lambda x: _fused_pv[x], reverse=True)
+                _pv_items[_kw_key] = {'file': _kw_doc['file'], 'scope': _kw_doc['scope'],
+                                      'text': _kw_doc['text'], 'score': top_score * 0.45}
+    _pv_sorted = sorted(_pv_items.values(), key=lambda d: d['score'], reverse=True)
 
-    for doc_id in _pv_candidates:
-        score = _fused_pv[doc_id]
-        doc = doc_store.get(doc_id)
-        if not doc: continue
+    # ADR-017 §7 safe direction: a file reaching an enforced symbol only through a
+    # candidate (unresolved) edge might actually comply — soften its accusation to
+    # "possible violation" rather than assert a hard finding.
+    _soft_files: set[str] = set()
+    for _sym in enforced_symbols:
+        _, _cand = _caller_evidence(_sym)
+        for _n in _cand:
+            if _n.file_path:
+                _soft_files.add(_n.file_path.replace('\\', '/'))
+
+    for doc in _pv_sorted:
+        score = doc['score']
 
         unique_key = f"{doc['file']}::{doc['scope']}"
         if unique_key in seen_scopes: continue
@@ -520,16 +527,26 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
             if file_path not in seen_violation_files:
                 seen_violation_files.add(file_path)
                 evidence = f"Shares context ({', '.join(shared_strong)}) but lacks compliant symbols."
-                violations_data.append(f"- {file_path} ({clean_scope})\n  [Reason]: {evidence}\n  [Snippet]: {snippet_preview}\n\n")
+                entry = f"- {file_path} ({clean_scope})\n  [Reason]: {evidence}\n  [Snippet]: {snippet_preview}\n\n"
+                if file_path.replace('\\', '/') in _soft_files:
+                    possible_violations_data.append(entry)
+                else:
+                    violations_data.append(entry)
 
     # --- PRE-OUTPUT: Remove violations for files that are also compliant in another chunk ---
     violations_data = [v for v in violations_data if not any(cp in v for cp in compliant_files)]
+    possible_violations_data = [v for v in possible_violations_data if not any(cp in v for cp in compliant_files)]
 
     # --- OUTPUT ---
     context = "--- PATTERN VIOLATION ANALYSIS ---\n\n"
     context += f"RULES: Must use [{enforced_symbols_csv}]\n"
     context += f"IGNORE REGEX: {ignore_regex if ignore_regex else 'None'}\n\n"
     context += "1. DETECTED VIOLATIONS:\n" + ("".join(violations_data) if violations_data else "  [None!]\n") + "\n"
+    if possible_violations_data:
+        # ADR-017 §7: softened — reached via candidate (unresolved) edges, so
+        # compliance can't be ruled out. Review, don't treat as a hard finding.
+        context += ("1b. POSSIBLE VIOLATIONS (unverified — candidate edges, review):\n"
+                    + "".join(possible_violations_data) + "\n")
     context += "2. COMPLIANT FILES:\n" + ("".join(compliant_data) if compliant_data else "  [None]\n") + "\n"
     if exempt_data:
         context += "3. EXEMPTED (Regex):\n" + "".join(exempt_data) + "\n"
@@ -703,6 +720,56 @@ def _search(query: str, top_n: int = 10) -> list[RetrievedChunk]:
     scan-style tools that need breadth.
     """
     return _get_hybrid_retriever().retrieve(query, top_n=top_n)
+
+
+# ---------------------------------------------------------------------------
+# ADR-023 §3 — edge-aware verdict support (ADR-017 §7 three-state rule)
+# ---------------------------------------------------------------------------
+
+def _db():
+    """The shared ``CodeDB`` behind the RTR pipeline — the verdict tools' direct
+    edge-graph read for the candidate/resolved split (ADR-017 §7)."""
+    return _get_hybrid_retriever()._db
+
+
+def _resolve_symbol_fqns(symbol: str, anchor_file: str = "") -> list[str]:
+    """Resolve a bare symbol name to FQN(s), optionally scoped to a file basename.
+
+    FQNs are ``path::symbol`` (see ``db.search_symbols``). When ``anchor_file`` is
+    given we keep only FQNs defined in a file with that basename, so callers of a
+    same-named symbol in a *different* file don't leak into the verdict.
+    """
+    matches = [s.fqn for s in _db().search_symbols(symbol) if s.name == symbol]
+    if anchor_file:
+        base = anchor_file.lower().replace("\\", "/").split("/")[-1]
+        scoped = [
+            f for f in matches
+            if f.split("::", 1)[0].lower().replace("\\", "/").split("/")[-1] == base
+        ]
+        if scoped:
+            return scoped
+    return matches
+
+
+def _caller_evidence(symbol: str, anchor_file: str = "") -> tuple[list, list]:
+    """Return ``(verified, candidate)`` caller ``CallGraphNode``s for ``symbol``.
+
+    Callers reaching the symbol only through name-based / unresolved (candidate)
+    edges are firewalled into the second list — the safe-direction rule (ADR-017
+    §7) keys on this split. Deduped by caller FQN; a caller verified through any
+    resolved edge is never also counted as candidate. ``CallGraphNode.candidate``
+    is already ``MIN`` over reaching edges (ADR-017 P1), so it is per-node honest.
+    """
+    db = _db()
+    verified: dict[str, object] = {}
+    candidate: dict[str, object] = {}
+    for fqn in _resolve_symbol_fqns(symbol, anchor_file):
+        for node in db.get_callers(fqn):
+            (candidate if node.candidate else verified)[node.fqn] = node
+    for f in list(candidate):        # a resolved sighting wins over a candidate one
+        if f in verified:
+            del candidate[f]
+    return list(verified.values()), list(candidate.values())
 
 
 def _get_iterative_retriever() -> IterativeRetriever:
@@ -1250,28 +1317,18 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
         if norm_anchor in _d['file'].lower() and _d['tier'] == 'tier2_component':
             anchor_text += _d['text'] + "\n"
 
-    query_vector = embed(f"Usage and consumption of {symbol}").reshape(1, -1)
-
-    # t1 + t2 RRF
-    _, _t1_dc = t1_index.search(query_vector, 30)
-    _, _t2_dc = t2_index.search(query_vector, 30)
-    _fused_dc: dict[int, float] = {}
-    for _rank, _did in enumerate(_t1_dc[0]):
-        if _did != -1: _fused_dc[_did] = _fused_dc.get(_did, 0.0) + 1.0 / (60 + _rank)
-    for _rank, _did in enumerate(_t2_dc[0]):
-        if _did != -1: _fused_dc[_did] = _fused_dc.get(_did, 0.0) + 1.0 / (60 + _rank)
-    _dc_candidates = sorted(_fused_dc, key=lambda x: _fused_dc[x], reverse=True)
+    # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
+    # call-graph callers now reach the dead-code scan, so references visible only
+    # through the graph are no longer mistaken for absence of a reference.
+    _dc_chunks = _search(f"Usage and consumption of {symbol}", top_n=30)
 
     seen_files: set[str] = set()
     callers: list[str] = []      # imports anchor + references symbol
     consumers: list[str] = []    # references symbol without direct import
     parallels: list[str] = []    # imports anchor but doesn't reference symbol
 
-    for doc_id in _dc_candidates:
-        doc = doc_store.get(doc_id)
-        if not doc: continue
-
-        file_path = doc['file']
+    for c in _dc_chunks:
+        file_path = c.file
         if file_path in seen_files: continue
         seen_files.add(file_path)
 
@@ -1286,8 +1343,8 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
         ))
         has_symbol = symbol in file_full
 
-        snippet = doc['text'][:120].replace('\n', ' ').strip() + "..."
-        entry = f"- {file_path} ({get_clean_scope(doc)})\n  [Snippet]: {snippet}\n\n"
+        snippet = c.text[:120].replace('\n', ' ').strip() + "..."
+        entry = f"- {file_path} ({get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})})\n  [Snippet]: {snippet}\n\n"
 
         if imports_anchor and has_symbol:
             callers.append(entry)
@@ -1313,19 +1370,33 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
         else:
             parallels.append(entry)
 
-    is_dead = not callers and not consumers
+    # --- ADR-017 §7 edge-aware three-state verdict ---
+    # Safe direction: deletion is the one verdict whose wrong answer destroys data,
+    # so ANY candidate (unresolved) reference BLOCKS "dead" — it downgrades to
+    # INSUFFICIENT ("not provably dead"), never a green light.
+    verified_callers, candidate_callers = _caller_evidence(symbol, anchor_file)
+    text_alive = bool(callers or consumers)
+    edge_alive = bool(verified_callers)
 
     context = f"--- DEAD CODE ANALYSIS ---\n\nSYMBOL: {symbol} | ANCHOR: {anchor_file}\n\n"
 
-    if is_dead:
-        context += "🔴 VERDICT: DEAD CODE CANDIDATE\n"
-        context += f"  No callers or consumers of `{symbol}` were found outside `{anchor_file}`.\n"
+    if text_alive or edge_alive:
+        context += "✅ VERDICT: SYMBOL IS REFERENCED [VERIFIED]\n"
+        context += (f"  `{symbol}` has {len(callers)} textual caller(s), "
+                    f"{len(consumers)} consumer(s), and {len(verified_callers)} "
+                    f"resolved call-graph reference(s).\n\n")
+    elif candidate_callers:
+        context += "🟡 VERDICT: NOT PROVABLY DEAD [INSUFFICIENT]\n"
+        context += (f"  No resolved reference to `{symbol}` was found, but "
+                    f"{len(candidate_callers)} unverified (candidate) reference(s) "
+                    f"exist — deletion is unsafe until they are checked. Run "
+                    f"verify_candidate_edges('{symbol}', '{anchor_file}').\n\n")
+    else:
+        context += "🔴 VERDICT: DEAD CODE CANDIDATE [VERIFIED]\n"
+        context += f"  No callers, consumers, or call-graph references of `{symbol}` were found outside `{anchor_file}`.\n"
         if parallels:
             context += f"  ({len(parallels)} file(s) import the anchor but do not reference `{symbol}`.)\n"
         context += "\n"
-    else:
-        context += "✅ VERDICT: SYMBOL IS REFERENCED\n"
-        context += f"  `{symbol}` has {len(callers)} caller(s) and {len(consumers)} consumer(s).\n\n"
 
     context += f"1. CALLERS (import anchor + reference `{symbol}`):\n"
     context += "".join(callers) if callers else "  [None found]\n\n"
@@ -1335,6 +1406,60 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
 
     context += "3. PARALLEL (import anchor, no symbol reference):\n"
     context += "".join(parallels) if parallels else "  [None found]\n\n"
+
+    context += "4. RESOLVED CALL-GRAPH REFERENCES (verified edges):\n"
+    if verified_callers:
+        context += "".join(f"- {n.fqn}\n  [File]: {n.file_path}\n" for n in verified_callers) + "\n"
+    else:
+        context += "  [None found]\n\n"
+
+    if candidate_callers:
+        context += "5. UNVERIFIED REFERENCES (candidate edges — block deletion):\n"
+        context += "".join(f"- {n.fqn}\n  [File]: {n.file_path}\n" for n in candidate_callers) + "\n"
+
+    return context
+
+
+@mcp.tool()
+def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
+    """
+    The second pass behind an ADVISORY / INSUFFICIENT verdict (ADR-017 §7.1).
+
+    When analyze_blast_radius or find_dead_code reports *unverified (candidate)*
+    references — name-based edges the resolver could not confirm — call this to get
+    the actual code behind each one, so YOU can confirm or dismiss it before any
+    irreversible action (e.g. deleting a symbol find_dead_code could not clear).
+
+    This tool does ZERO resolution of its own: it fetches each candidate caller's
+    source snippet and hands it to you, the verifier. Advisory evidence is enough
+    for estimation; this is the opt-in confirmation step.
+
+    Inputs:
+      symbol      — the symbol whose candidate references you want to inspect
+      anchor_file — (optional) the defining file, to disambiguate same-named symbols
+
+    Output: one entry per candidate edge — (caller FQN, file:line) + code snippet.
+    """
+    print(f"\n[MCP] verify_candidate_edges: symbol='{symbol}' anchor='{anchor_file}'")
+    _ensure_indexes()
+    db = _db()
+    verified_callers, candidate_callers = _caller_evidence(symbol, anchor_file)
+
+    context = f"--- CANDIDATE EDGE VERIFICATION: {symbol} ---\n\n"
+    if not candidate_callers:
+        context += ("✅ No candidate (unresolved) references to verify — "
+                    f"`{symbol}` has {len(verified_callers)} resolved reference(s).\n")
+        return context
+
+    context += (f"{len(candidate_callers)} unverified reference(s). Inspect each snippet "
+                f"and decide whether it is a real use of `{symbol}`:\n\n")
+    for node in candidate_callers:
+        sym = db.get_symbol(node.fqn)
+        snippet = (sym.text if sym and sym.text else "").strip()
+        if len(snippet) > 400:
+            snippet = snippet[:400] + " …"
+        loc = f"{node.file_path}:{node.start_line}" if node.start_line else str(node.file_path)
+        context += f"- {node.fqn}\n  [Location]: {loc}\n  [Snippet]:\n{snippet or '  <source unavailable>'}\n\n"
 
     return context
 

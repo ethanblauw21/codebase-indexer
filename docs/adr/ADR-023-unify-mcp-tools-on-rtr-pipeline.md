@@ -163,12 +163,35 @@ existing reranker may pre-sort the checklist by plausibility when enabled.
   Full unit suite 171 passed. **Follow-up:** a durable fixture-index regression harness (ADR-023
   testing table) is still owed; today's golden-diff was a one-shot local check, not a committed test.
 
-**Phase 2 — Edge-aware three-state verdicts (ADR-017 §7)**
-- [ ] `analyze_blast_radius`, `find_dead_code`, `detect_pattern_violations`: consume
-      `get_callers`/`get_callees` candidate flags; implement VERIFIED/ADVISORY/INSUFFICIENT +
-      safe-direction rule
-- [ ] `verify_candidate_edges` snippet tool over `DocumentStore` (§7.1); optional reranker pre-sort
-- [ ] Update ADR-017 §7 impl-log (verdict machinery lands here); resolve ADR-008 reciprocal note
+**Phase 2 — Edge-aware three-state verdicts (ADR-017 §7) — DONE 2026-07-08**
+- [x] Shared verdict helpers in `MCPServer.py`: `_db()` (the RTR pipeline's `CodeDB`),
+      `_resolve_symbol_fqns()` (bare name → `path::symbol`, anchor-scoped), and
+      `_caller_evidence()` (splits `get_callers` into verified vs candidate by
+      `CallGraphNode.candidate`, deduped so a resolved sighting wins).
+- [x] All three verdict tools routed through `_search()` and made edge-aware with the
+      **safe-direction rule**:
+      - `find_dead_code` — three states: **VERIFIED referenced** (any textual or resolved
+        caller) / **INSUFFICIENT** "not provably dead" (only candidate callers — blocks the
+        destructive verdict, points at `verify_candidate_edges`) / **VERIFIED dead** (no
+        reference of any kind). New §4 resolved-refs + §5 candidate-refs sections.
+      - `analyze_blast_radius` — candidate neighbours **expand** the radius into a separate
+        §6 UNVERIFIED bucket; verified call-graph dependents surface in §5, never merged
+        into the count.
+      - `detect_pattern_violations` — a flagged file reachable to an enforced symbol only
+        by a candidate edge is **softened** to a "1b. POSSIBLE VIOLATIONS (review)" bucket,
+        never a hard finding. Candidate pool restructured to score-carrying dicts so the
+        relative relevance gate (`score >= top_score*0.65`) and keyword-sweep floor survive
+        the FAISS→RTR swap.
+- [x] `verify_candidate_edges(symbol, anchor_file="")` snippet tool: fetches each candidate
+      caller's source via `db.get_symbol(fqn).text` (§7.1), **zero resolution logic** — the
+      host agent is the verifier. Reranker pre-sort left as an opt-in follow-up (candidate
+      sets are small; RTR order is already sane).
+- **Verification (live `.code-index` golden-diff + full unit suite):** all three tools change
+  as intended (edge-aware verdicts + RTR pool), no crashes; `verify_candidate_edges` runs.
+  **Note:** no `candidate=True` producer exists until Tier-B (PR-E), so the ADVISORY /
+  INSUFFICIENT / softened branches are correct-by-construction but not yet exercised by the
+  live index — they fire on synthetic candidate edges (unit tests owed alongside the durable
+  fixture-index harness still owed from Phase 1).
 
 **Notes:**
 <!-- 2026-07-08: Split from the "unify MCP tools on hybrid_retriever" roadmap item (the biggest
