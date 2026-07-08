@@ -146,11 +146,22 @@ existing reranker may pre-sort the checklist by plausibility when enabled.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-**Phase 1 — Shared surface + Search/Discovery/Tracing tools**
-- [ ] Shared `search()` helper + retriever singleton in `MCPServer.py`
-- [ ] Route `semantic_code_search`, `find_similar_code`, `find_test_coverage`,
-      `find_unabstracted_collection_reads`, `trace_data_flow` through it; keep tool-specific
-      post-filters/formatting; pin regression output
+**Phase 1 — Shared surface + Search/Discovery/Tracing tools — DONE 2026-07-08**
+- [x] Shared `_search()` helper + retriever singleton in `MCPServer.py`; added a `top_n` param to
+      `HybridRetriever.retrieve()` (widens the semantic pool + structural cap so wide-k scan tools
+      get real results, not padding; default `top_n=10` calls are byte-identical).
+- [x] Routed `semantic_code_search`, `find_similar_code`, `find_test_coverage`,
+      `find_unabstracted_collection_reads`, `trace_data_flow` through it; kept every tool-specific
+      post-filter and full-file scan (producer detection, test-file naming, canonical-abstraction
+      checks) — only *candidate generation* is unified.
+- **Verification (no fixture-index test harness exists yet, so verified against the live `.code-index`
+  + full unit suite):** captured each tool's output pre-refactor as a golden baseline, reconverted,
+  re-ran. Server imports clean; no tool crashes. `semantic_code_search` + `find_test_coverage`
+  byte-identical (RTR default = old RRF top-of-list; graph neighbours rank below the token-cap fill /
+  the no-test branch short-circuits). `find_similar_code` (1741→1925), `trace_data_flow` (3771→3276),
+  `find_unabstracted` (1055→1033) shifted to the RTR pool as intended — real callers now surface.
+  Full unit suite 171 passed. **Follow-up:** a durable fixture-index regression harness (ADR-023
+  testing table) is still owed; today's golden-diff was a one-shot local check, not a committed test.
 
 **Phase 2 — Edge-aware three-state verdicts (ADR-017 §7)**
 - [ ] `analyze_blast_radius`, `find_dead_code`, `detect_pattern_violations`: consume
