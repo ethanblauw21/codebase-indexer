@@ -18,6 +18,7 @@
 - ADR-011 *(planned)* — High-Precision Call Resolution targets the Tier-A promotion path.
 - ADR-013 *(planned)* — DSL/industrial adapters register as tiers and reuse the conformance machinery.
 - ADR-018 *(planned)* — syntactic clone matching's structural coefficient is available exactly for the tree-sitter-parsed tiers (A/B) defined here.
+- ADR-023 — consumes the `Edge.candidate` field (§3) and **implements §7's three-state verdict + safe-direction rule** in the MCP verdict tools (deferred out of the ADR-017 P1 data-model slice because it requires making those tools edge-aware, which is ADR-023's unification refactor).
 
 > Pressure-tested via `/grill-plan` on 2026-06-18. The grill resolved: `tags.scm`
 > sourcing and a runtime capability probe (§2.2–2.3), B1/B2 capability classes

@@ -8,6 +8,7 @@
 - ADR-007 — needs the **harness pattern** (fixture → run → metric → committed baseline) so the extraction precision/recall arm is a sibling of the retrieval arm, not a parallel invention.
 - ADR-003 — introduces the **`Edge.candidate: bool` field** (§2.3, for C++ overload sets); this ADR **evolves** that boolean into a graded `confidence: float`.
 - ADR-017 — needs the **language-tier model** (Tier-A fitting adapter vs Tier-B generic fallback) so precision/recall can be reported per tier; ADR-017 §3 is the `candidate` field's second consumer (Tier-B edges).
+- ADR-023 — installs the **boolean three-state verdict + safe-direction rule** (ADR-017 §7) in the verdict tools. §4 here *reparameterizes that rule from the boolean to a confidence floor* (`instead of the boolean`), so **ADR-023 must land first**; this ADR then swaps the gating key.
 **Depended on by:**
 - ADR-011 *(planned — docs/adr-backlog.md)* — High-Precision Call Resolution emits **graded-confidence edges using the `Edge.confidence` field defined here** (shared field, A3), and its correctness is *measured by this ADR's* precision/recall harness. **Pairs with** this ADR.
 - ADR-012 *(planned)* — Cross-Repository/Cross-Service Graph marks cross-service edges with the **`Edge.confidence`** introduced here.
