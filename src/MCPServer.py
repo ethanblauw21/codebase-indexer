@@ -544,18 +544,10 @@ def trace_data_flow(target_symbol: str) -> str:
     print(f"\n[MCP] Running v11.0 trace for '{target_symbol}'...")
     _ensure_indexes()
     query_text = f"Definition, usage, and fetching of {target_symbol} get{target_symbol} fetch{target_symbol}"
-    query_vector = embed(query_text).reshape(1, -1)
-
-    # t1 + t2 merged via RRF: t1 gives precise FQN-level scopes; t2 surfaces files
-    # related at the module/component boundary that t1's surgical chunks may miss.
-    _, _t1_trace = t1_index.search(query_vector, 80)
-    _, _t2_trace = t2_index.search(query_vector, 40)
-    _fused_trace: dict[int, float] = {}
-    for _rank, _did in enumerate(_t1_trace[0]):
-        if _did != -1: _fused_trace[_did] = _fused_trace.get(_did, 0.0) + 1.0 / (60 + _rank)
-    for _rank, _did in enumerate(_t2_trace[0]):
-        if _did != -1: _fused_trace[_did] = _fused_trace.get(_did, 0.0) + 1.0 / (60 + _rank)
-    _trace_candidates = sorted(_fused_trace, key=lambda x: _fused_trace[x], reverse=True)
+    # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
+    # call-graph neighbours join the trace pool, so producers/consumers reached
+    # only through the call graph are no longer invisible to the trace.
+    _trace_chunks = _search(query_text, top_n=80)
 
     # PascalCase variant for type/interface definition matching (e.g. aggregatedInventory → AggregatedInventory)
     pascal_symbol = target_symbol[0].upper() + target_symbol[1:] if target_symbol else target_symbol
@@ -593,24 +585,23 @@ def trace_data_flow(target_symbol: str) -> str:
     seen_files_any_bucket: set[str] = set()
     buckets = {"DEFINITIONS": [], "PRODUCERS": [], "TRANSFORMERS": [], "CONSUMERS": []}
 
-    for doc_id in _trace_candidates:
-        doc = doc_store.get(doc_id)
-        if not doc or not (target_symbol in doc['text'] or f"get{target_symbol}" in doc['text']):
+    for c in _trace_chunks:
+        if not (target_symbol in c.text or f"get{target_symbol}" in c.text):
             continue
 
-        file_path = doc['file'].replace('\\', '/')
+        file_path = c.file.replace('\\', '/')
 
         # Tier-2/3 chunks provide component-level context; skip them for files that
         # tier-1 already covered so we don't add redundant "Full File" scope entries.
-        if doc.get('tier', 'tier1_surgical') != 'tier1_surgical':
+        if c.tier != 'tier1_surgical':
             if file_path in seen_files_any_bucket:
                 continue
 
-        unique_key = f"{file_path}::{doc['scope']}"
+        unique_key = f"{file_path}::{c.scope}"
         if unique_key in seen_scopes: continue
         seen_scopes.add(unique_key)
 
-        doc_text = doc['text']
+        doc_text = c.text
 
         # --- LAYER DETECTION ---
         is_client = "'use client'" in doc_text or ".tsx" in file_path.lower()
@@ -644,7 +635,7 @@ def trace_data_flow(target_symbol: str) -> str:
             violation_tag = "  [⚠️ ARCHITECTURAL VIOLATION]: Client-side Firestore write detected.\n"
 
         # FIX 1 applied here (Scope Cleanup)
-        clean_scope = get_clean_scope(doc)
+        clean_scope = get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})
         snippet = doc_text[:140].replace('\n', ' ').strip() + "..."
         entry = f"- [{layer}] {file_path}\n  [Scope]: {clean_scope}\n{violation_tag}  [Snippet]: {snippet}\n\n"
 
@@ -1075,35 +1066,23 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
                 f"- {doc['file']} ({get_clean_scope(doc)})\n  [Snippet]: {snippet}\n\n"
             )
 
-    # --- Tier 2: Semantic match via RRF across all three tiers ---
+    # --- Tier 2: Semantic match via the shared RTR surface (ADR-023 §1) ---
     query = f"tests for {source_file} {target_symbol}".strip()
-    query_vector = embed(query).reshape(1, -1)
-
-    _, _s1 = t1_index.search(query_vector, 20)
-    _, _s2 = t2_index.search(query_vector, 20)
-    _, _s3 = t3_index.search(query_vector, 10)
-    _fused_tc: dict[int, float] = {}
-    for _rl in [_s1[0], _s2[0], _s3[0]]:
-        for _rank, _did in enumerate(_rl):
-            if _did != -1:
-                _fused_tc[_did] = _fused_tc.get(_did, 0.0) + 1.0 / (60 + _rank)
 
     semantic_data: list[str] = []
     seen_semantic: set[str] = set()
 
-    for did in sorted(_fused_tc, key=lambda x: _fused_tc[x], reverse=True):
-        doc = doc_store.get(did)
-        if not doc: continue
-        fp = doc['file'].replace('\\', '/').lower()
+    for c in _search(query, top_n=30):
+        fp = c.file.replace('\\', '/').lower()
         if not is_test_file(fp): continue
         if fp in seen_semantic or fp in direct_fps: continue
         seen_semantic.add(fp)
 
-        symbol_hit = bool(target_symbol and target_symbol in doc['text'])
+        symbol_hit = bool(target_symbol and target_symbol in c.text)
         evidence = "Semantic match" + (f" + mentions `{target_symbol}`" if symbol_hit else "")
-        snippet = doc['text'][:120].replace('\n', ' ').strip() + "..."
+        snippet = c.text[:120].replace('\n', ' ').strip() + "..."
         semantic_data.append(
-            f"- {doc['file']} ({get_clean_scope(doc)})\n"
+            f"- {c.file} ({get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})})\n"
             f"  [Evidence]: {evidence}\n"
             f"  [Snippet]: {snippet}\n\n"
         )
@@ -1420,29 +1399,20 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
         re.IGNORECASE,
     )
 
-    query_vector = embed(f"reading from {collection_name} collection Firestore query get").reshape(1, -1)
-
-    # RRF across t1 + t2
-    _, _t1_ur = t1_index.search(query_vector, 40)
-    _, _t2_ur = t2_index.search(query_vector, 30)
-    _fused_ur: dict[int, float] = {}
-    for _rank, _did in enumerate(_t1_ur[0]):
-        if _did != -1: _fused_ur[_did] = _fused_ur.get(_did, 0.0) + 1.0 / (60 + _rank)
-    for _rank, _did in enumerate(_t2_ur[0]):
-        if _did != -1: _fused_ur[_did] = _fused_ur.get(_did, 0.0) + 1.0 / (60 + _rank)
-    _ur_candidates = sorted(_fused_ur, key=lambda x: _fused_ur[x], reverse=True)
+    # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS.
+    _ur_chunks = _search(
+        f"reading from {collection_name} collection Firestore query get", top_n=40
+    )
 
     seen_files: set[str] = set()
     compliant_data: list[str] = []
     violation_data: list[str] = []
     ambiguous_data: list[str] = []
 
-    for doc_id in _ur_candidates:
-        doc = doc_store.get(doc_id)
-        if not doc: continue
-        if collection_name not in doc['text']: continue
+    for c in _ur_chunks:
+        if collection_name not in c.text: continue
 
-        file_path = doc['file']
+        file_path = c.file
         if file_path in seen_files: continue
         seen_files.add(file_path)
 
@@ -1460,8 +1430,8 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
         if is_write_only:
             continue
 
-        snippet = doc['text'][:120].replace('\n', ' ').strip() + "..."
-        clean_scope = get_clean_scope(doc)
+        snippet = c.text[:120].replace('\n', ' ').strip() + "..."
+        clean_scope = get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})
 
         if has_canonical and not has_direct_read:
             compliant_data.append(
