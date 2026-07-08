@@ -1,0 +1,21 @@
+{
+  "feature": "cpp/inheritance",
+  "language": "cpp",
+  "tier": "A",
+  "note": "class Circle : public Shape produces one extends edge, target spelled exactly as written at the base-list site (\"Shape\", unqualified) — the adapter does not type-resolve base names to their full FQN. Unlike C#, C++ has no separate interface keyword/edge kind: every base-list entry, interface-like or not, is correctly emitted as extends, so there is no interface_impl_gap analog here. The virtual destructor ~Shape() is a member symbol like any constructor/method; area() being `override` and `const` does not change its FQN (trailing qualifiers/virt-specifiers are stripped by definition, since the FQN is built from only the function name + parameter types).",
+  "symbols": [
+    {"fqn": "shapes::Shape", "kind": "class"},
+    {"fqn": "shapes::Shape::area()", "kind": "method"},
+    {"fqn": "shapes::Shape::~Shape()", "kind": "destructor"},
+    {"fqn": "shapes::Circle", "kind": "class"},
+    {"fqn": "shapes::Circle::Circle(double)", "kind": "constructor"},
+    {"fqn": "shapes::Circle::area()", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "shapes::Shape", "target": "shapes::Shape::area()", "kind": "owns"},
+    {"source": "shapes::Shape", "target": "shapes::Shape::~Shape()", "kind": "owns"},
+    {"source": "shapes::Circle", "target": "Shape", "kind": "extends"},
+    {"source": "shapes::Circle", "target": "shapes::Circle::Circle(double)", "kind": "owns"},
+    {"source": "shapes::Circle", "target": "shapes::Circle::area()", "kind": "owns"}
+  ]
+}

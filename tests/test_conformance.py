@@ -95,6 +95,24 @@ def test_normalize_fqn_paths_and_bare_identifiers_unchanged():
     assert ce.normalize_fqn("System.Collections.Generic") == "System.Collections.Generic"
 
 
+def test_normalize_fqn_cpp_namespace_preserved():
+    """C++ uses `::` as its namespace separator and carries no path prefix. The `::`
+    path-stripping must NOT fire on a bare-identifier left side, or every C++ namespace
+    would be stripped, collapsing distinct symbols and masking recall misses (the C++
+    analog of the C# /arity collapse)."""
+    order = ce.normalize_fqn("shop::Order")
+    method = ce.normalize_fqn("shop::Order::compute(int)")
+    inner = ce.normalize_fqn("a::b::Inner")
+    assert order == "shop::Order"                       # namespace qualifier kept
+    assert method == "shop::Order::compute(int)"        # ns + params intact
+    assert inner == "a::b::Inner"                       # nested namespace kept
+    assert order != method and method != inner
+    # A genuine path prefix on a C++ FQN (separator or source ext on the left side) is
+    # still stripped down to the namespaced symbol — first `::` only.
+    assert ce.normalize_fqn(r"pkg\shop.cpp::shop::Order") == "shop::Order"
+    assert ce.normalize_fqn("compute(int)") == "compute(int)"   # global-scope free fn
+
+
 # ---------------------------------------------------------------------------
 # Known-gap semantics — validation, honest reporting, and the unexpected-pass alert.
 # ---------------------------------------------------------------------------

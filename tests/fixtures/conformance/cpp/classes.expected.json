@@ -1,0 +1,20 @@
+{
+  "feature": "cpp/classes",
+  "language": "cpp",
+  "tier": "A",
+  "note": "C++ type/member FQNs use the :: namespace separator and full parameter types in parens (ns::Class::method(type1, type2)), never a C#-style /arity suffix. Symbol model = types + constructors + methods; the data member id_ is NOT a symbol (consistent with the Python/TS/C# batches). Trailing cv-qualifiers (Id() const) are not part of the FQN, per the adapter's pinned normalization rules.",
+  "symbols": [
+    {"fqn": "shop::Order", "kind": "class"},
+    {"fqn": "shop::Order::Order(int)", "kind": "constructor"},
+    {"fqn": "shop::Order::Id()", "kind": "method"},
+    {"fqn": "shop::Order::Total()", "kind": "method"},
+    {"fqn": "shop::Order::computeTotal()", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "shop::Order", "target": "shop::Order::Order(int)", "kind": "owns"},
+    {"source": "shop::Order", "target": "shop::Order::Id()", "kind": "owns"},
+    {"source": "shop::Order", "target": "shop::Order::Total()", "kind": "owns"},
+    {"source": "shop::Order", "target": "shop::Order::computeTotal()", "kind": "owns"},
+    {"source": "shop::Order::Total()", "target": "computeTotal", "kind": "call"}
+  ]
+}

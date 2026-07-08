@@ -79,9 +79,20 @@ def normalize_fqn(s: str) -> str:
     not a path separator. (A naive `os.path.basename` splits on `/` and would collapse
     every C# method to its arity digit, silently merging distinct methods and masking
     real recall misses. C# is the first `/arity` language, so this only surfaces here.)
+
+    C++ uses `::` as its *namespace* separator (`shop::Order`, `shop::Order::compute(int)`),
+    NOT a path separator — and its symbols carry no path prefix. So `::` is only treated as
+    the path-prefix delimiter when its left side actually looks like a filesystem path
+    (has a separator or a source-file extension). A bare identifier left side (`shop`) is a
+    C++ namespace and is preserved. Without this guard, `normalize_fqn` would strip the
+    namespace off every C++ FQN, collapsing distinct symbols and masking recall misses —
+    the exact failure mode the C# `/arity` fix above guards against.
     """
     if "::" in s:
-        return s.split("::", 1)[1]
+        prefix = s.split("::", 1)[0]
+        if ("/" in prefix or "\\" in prefix) or os.path.splitext(prefix)[1]:
+            return s.split("::", 1)[1]
+        return s
     # Only basename strings that are genuinely filesystem paths: a path separator AND a
     # file extension on the final component. A C# FQN has a '/' before the arity, but its
     # final component is a bare integer with no extension, so it passes through untouched.

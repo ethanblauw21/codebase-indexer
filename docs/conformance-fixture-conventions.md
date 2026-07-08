@@ -127,6 +127,20 @@ clean-set regression, and on any key collision.
   `src/adapters/csharp_adapter.py` ("Base-list extends/implements … cannot distinguish base
   class vs interface without type resolution").
 
+### Current known gaps (C++)
+
+- **`templates`** — a call at an **explicit-template-argument** site (`maxOf<int>(box.get(), 10)`)
+  should emit an ordinary call edge (`util::useTemplates() -> maxOf`); the callee is a real,
+  already-indexed function. The adapter drops it: tree-sitter-cpp wraps the call target in a
+  `template_function` node, which `_CALL_QUERY` does not match. This is **not** the docstring's
+  "template instantiations are invisible" blind spot (that concerns instantiation-as-symbol-
+  generation, e.g. `Box<int>` producing no monomorphized symbol — correctly *not* a gap here).
+  The bug is broader than the bare form: the **qualified** case (`std::make_shared<int>(...)`,
+  `ns::factory<T>(...)`) is also missed, via `qualified_identifier name: template_function`.
+  Recall-only — no FQN/identity corruption. **Undocumented adapter bug surfaced by this batch;
+  fix is a separate Major/ADR change** (add two `_CALL_QUERY` alternatives in
+  `src/adapters/cpp_adapter.py`, which also removes this marker). Tracked in issue #16.
+
 ## Adding a language
 
 1. Confirm the adapter + its extension are registered (`src/adapters/__init__.py`) and the
