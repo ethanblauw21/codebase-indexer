@@ -49,6 +49,7 @@ from core import DocumentStore, MultiIndexManager, embed
 from db import CodeDB
 from category_tagger import classify_query
 from config import load_indexer_config
+from device import resolve_device
 from fusion import tokenize, convex_fuse
 from reranker import load_reranker
 from stable_id import stable_id
@@ -143,7 +144,9 @@ class HybridRetriever:
         construction. Off by default until it beats the Wave-0 baseline.
     device :
         Torch device string passed to the reranker: ``"cpu"``, ``"cuda"``, ``"mps"``.
-        Default: ``"cpu"``.
+        Default: auto-detected via ``device.resolve_device()`` (ADR-024) — ``"cuda"``
+        if available, else ``"cpu"``. Override with the ``CODE_INDEXER_DEVICE`` env
+        var, or pass an explicit value here.
 
     Usage
     -----
@@ -161,7 +164,7 @@ class HybridRetriever:
         reranker_enabled: Optional[bool] = None,
         fusion_mode: Optional[str] = None,
         graph_enabled: bool = True,
-        device: str = "cpu",
+        device: Optional[str] = None,
     ) -> None:
         self._index_manager = MultiIndexManager(base_dir=index_dir)
         self._tier1: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER1_NAME)
@@ -182,7 +185,7 @@ class HybridRetriever:
         self._reranker_model_id: str = (
             reranker_model or rer_cfg.get("model_id", "Qwen/Qwen3-Reranker-0.6B")
         )
-        self._device = device
+        self._device = device if device is not None else resolve_device()
 
         # Step-2 structural expansion toggle. Production leaves this on; the ADR-019
         # eval flips it off for arm A (semantic-only) to measure the graph lift B−A.
