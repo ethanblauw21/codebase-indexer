@@ -7,10 +7,10 @@
 #  the full reranker run can be sized firmly before committing.
 #  HF_HUB_OFFLINE=0 so the reranker downloads if not yet cached
 #  (~1.2 GB, one time); reused offline by the long run after.
-#  Run:  bash run_reranker_calibrate.sh
+#  Run:  bash scripts/run_reranker_calibrate.sh
 # ============================================================
 set -u
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 
 export HF_HUB_OFFLINE=0
 export TOKENIZERS_PARALLELISM=false

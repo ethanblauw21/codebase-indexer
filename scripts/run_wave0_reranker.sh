@@ -10,10 +10,10 @@
 #  reranker lift is measured paired. Progress prints every 25 q.
 #  Faster: [eval].rerank_depth = 50. Full precision: set
 #  [eval].rerank_sample_queries = 0 (multi-day).
-#  Run:  bash run_wave0_reranker.sh   (best over a weekend)
+#  Run:  bash scripts/run_wave0_reranker.sh   (best over a weekend)
 # ============================================================
 set -u
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 
 export HF_HUB_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false
