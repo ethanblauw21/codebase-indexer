@@ -19,21 +19,31 @@ table into a provable unique target (or, failing that, leaves the edge unresolve
 type hint could only ever *fail to match* a real symbol; it can never manufacture a wrong
 edge, because the resolver still requires a unique in-repo owner-type match.
 
-Stage 1 (this pass) implements C# only, and only the **exact** strategies — the receiver is a
-simple identifier (or ``this``) whose declared type is read directly off a declaration:
+Both passes implement only the **exact** strategies — the receiver is a simple identifier (or
+``this``) whose declared type is read directly off a declaration:
 
-    * parameter type            void M(Foo x) { x.Bar(); }        →  Foo
-    * explicit local type       Foo x = Make(); x.Bar();          →  Foo
-    * `var` + object creation    var x = new Foo(); x.Bar();       →  Foo
-    * field type                private Foo _x;  … _x.Bar();       →  Foo   (enclosing class)
-    * `this`                     this.Bar();                       →  <enclosing type>
+    C# (Stage 1)                                                    →  inferred type
+    * parameter type            void M(Foo x) { x.Bar(); }          →  Foo
+    * explicit local type       Foo x = Make(); x.Bar();            →  Foo
+    * `var` + object creation    var x = new Foo(); x.Bar();         →  Foo
+    * field type                private Foo _x;  … _x.Bar();         →  Foo   (enclosing class)
+    * `this`                     this.Bar();                         →  <enclosing type>
 
-Heuristic member-chain inference (``a.b().c()``), `var` from a method return type, and C++
-(``obj->fn()``) are deliberately out of scope here — they resolve to ``None`` (unknown) and
-are the graded, lower-confidence strategies a follow-up adds (ADR-011 §3, Stage 2).
+    C++ (Stage 2), receiver via `->` or `.`                         →  inferred type
+    * parameter type            void m(Repo* r) { r->Save(); }      →  Repo
+    * local declaration         Repo x; x.Save();                   →  Repo
+    * field type                Repo* repo_;  … repo_->Save();      →  Repo   (enclosing class)
+    * `this`                     this->Save();                       →  <enclosing type>
+
+Heuristic member-chain inference (``a.b().c()``), `var`/`auto` from a method return type, and
+C++ overload sets (a known type but several arity/signature matches) are deliberately out of
+scope — they resolve to ``None`` (unknown), or, for an in-repo type whose method name is
+overloaded, land as a non-unique match that ``call_resolver`` leaves unresolved. Those are the
+graded, lower-confidence strategies a follow-up adds (ADR-011 §3).
 """
 from __future__ import annotations
 
+import re
 from typing import NamedTuple, Optional
 
 from adapters._treesitter import node_text
@@ -263,3 +273,227 @@ def csharp_field_types(type_node: "Node", src: bytes) -> dict[str, str]:
                 if fname:
                     out[fname] = type_name
     return out
+
+
+# =========================================================================== #
+# C++ (Stage 2)
+# =========================================================================== #
+
+_IDENT_RE = re.compile(r"^[A-Za-z_]\w*$")
+
+# Declarator wrappers a variable/parameter/field name can hide behind in C++.
+_CPP_DECLARATOR_WRAPPERS = frozenset({
+    "pointer_declarator", "reference_declarator", "rvalue_reference_declarator",
+    "init_declarator", "array_declarator", "parenthesized_declarator",
+})
+
+
+def _as_plain_ident(name: Optional[str]) -> Optional[str]:
+    """Return ``name`` iff it is a single plain identifier (no ``<>``, ``::``, ``*``); else None.
+
+    Keeps a generic (``List<int>``), a still-qualified fragment, or any decorated type off the
+    hint channel — the prefer-unknown guard for C++ type names.
+    """
+    return name if name and _IDENT_RE.match(name) else None
+
+
+def _cpp_type_name_of(decl_node: "Node", src: bytes) -> Optional[str]:
+    """The simple type name of a C++ parameter/field/local declaration, or None.
+
+    Reads the first type child (``const Repo& r`` → ``Repo``; ``app::Repo x`` → ``Repo``).
+    ``auto``, primitive types, templates, and function pointers → None (unknown).
+    """
+    for c in decl_node.children:
+        if c.type == "type_identifier":
+            return _as_plain_ident(node_text(c, src))
+        if c.type == "qualified_identifier":
+            return _as_plain_ident(node_text(c, src).rsplit("::", 1)[-1])
+    return None
+
+
+def _cpp_inner_id(node: "Node", src: bytes) -> Optional[str]:
+    """Innermost declared name behind pointer/reference/init/array declarator wrappers.
+
+    ``* r`` → ``r``; ``x = get()`` → ``x`` (the initializer is never descended into for a
+    name, since the wanted identifier always precedes it).
+    """
+    t = node.type
+    if t in ("identifier", "field_identifier"):
+        return node_text(node, src)
+    if t in _CPP_DECLARATOR_WRAPPERS:
+        for c in node.children:
+            r = _cpp_inner_id(c, src)
+            if r:
+                return r
+    return None
+
+
+def _cpp_decl_names(decl_node: "Node", src: bytes) -> list[str]:
+    """Declared variable/field names of a C++ declaration (skipping the type child)."""
+    names: list[str] = []
+    for c in decl_node.children:
+        nm = _cpp_inner_id(c, src)   # type_identifier/qualifiers return None here
+        if nm:
+            names.append(nm)
+    return names
+
+
+def _cpp_has_function_declarator(field_decl: "Node") -> bool:
+    """True if a field_declaration is actually a method declaration (`void Save();`)."""
+    for c in field_decl.children:
+        if c.type == "function_declarator":
+            return True
+        if c.type in _CPP_DECLARATOR_WRAPPERS:
+            if any(g.type == "function_declarator" for g in c.children):
+                return True
+    return False
+
+
+def cpp_field_types(type_node: "Node", src: bytes) -> dict[str, str]:
+    """Map field name → declared type name for the data members of a C++ class/struct.
+
+    Method declarations inside the class body are skipped — only real fields seed the
+    receiver scope (so ``repo_->Save()`` resolves to ``repo_``'s type).
+    """
+    out: dict[str, str] = {}
+    body = next(
+        (c for c in type_node.children if c.type == "field_declaration_list"), None
+    )
+    if body is None:
+        return out
+    for member in body.children:
+        if member.type != "field_declaration" or _cpp_has_function_declarator(member):
+            continue
+        type_name = _cpp_type_name_of(member, src)
+        if type_name is None:
+            continue
+        for name in _cpp_decl_names(member, src):
+            out[name] = type_name
+    return out
+
+
+def _build_cpp_scope(
+    method_node: "Node",
+    src: bytes,
+    field_types: dict[str, str],
+    enclosing_type_name: Optional[str],
+) -> dict[str, str]:
+    """Map every in-method receiver identifier to its inferred type name (C++).
+
+    Same precedence and conflict rule as the C# scope: fields seed it, parameters and locals
+    override, and a name that resolves to two different types is dropped to unknown.
+    """
+    scope: dict[str, str] = dict(field_types)
+    conflicted: set[str] = set()
+
+    def _set(name: Optional[str], type_name: Optional[str]) -> None:
+        if not name or not type_name:
+            return
+        if name in scope and scope[name] != type_name:
+            conflicted.add(name)
+        scope[name] = type_name
+
+    # Parameters: void m(Repo* r) → r : Repo
+    fn_decl = next(
+        (c for c in method_node.children if c.type == "function_declarator"), None
+    )
+    if fn_decl is not None:
+        plist = next(
+            (c for c in fn_decl.children if c.type == "parameter_list"), None
+        )
+        if plist is not None:
+            for p in plist.children:
+                if p.type != "parameter_declaration":
+                    continue
+                type_name = _cpp_type_name_of(p, src)
+                for name in _cpp_decl_names(p, src):
+                    _set(name, type_name)
+
+    # Local declarations anywhere in the body: Repo x;  Repo* p = get();
+    def walk(n: "Node") -> None:
+        if n.type == "declaration":
+            type_name = _cpp_type_name_of(n, src)
+            if type_name is not None:
+                for name in _cpp_decl_names(n, src):
+                    _set(name, type_name)
+        for c in n.children:
+            walk(c)
+
+    body = next(
+        (c for c in method_node.children if c.type == "compound_statement"), None
+    )
+    if body is not None:
+        walk(body)
+
+    for name in conflicted:
+        scope.pop(name, None)
+
+    if enclosing_type_name:
+        scope["this"] = enclosing_type_name
+    return scope
+
+
+def infer_cpp_call_targets(
+    method_node: "Node",
+    src: bytes,
+    field_types: dict[str, str],
+    enclosing_type_name: Optional[str],
+) -> list[CallTarget]:
+    """Return every call target in a C++ function/method body, receiver type where known.
+
+    Reproduces exactly the bare-name call edges the adapter emitted before (callee = the
+    final identifier / field_identifier) and adds ``receiver_type`` for the exact strategies.
+    ``a->b()->c()`` chains, indexers, and casts stay ``None``.
+    """
+    scope = _build_cpp_scope(method_node, src, field_types, enclosing_type_name)
+    targets: list[CallTarget] = []
+
+    def walk(n: "Node") -> None:
+        if n.type == "call_expression":
+            fn = n.child_by_field_name("function")
+            if fn is not None:
+                if fn.type in ("identifier", "qualified_identifier", "template_function"):
+                    name = _cpp_callee_name(fn, src)
+                    if name:
+                        targets.append(CallTarget(name, None))     # bare foo(), ns::foo()
+                elif fn.type == "field_expression":
+                    field = fn.child_by_field_name("field")
+                    recv = fn.child_by_field_name("argument")
+                    name = node_text(field, src) if field is not None else ""
+                    if name and len(name) > 1:
+                        targets.append(CallTarget(name, _cpp_receiver_type(recv, scope, src)))
+        for c in n.children:
+            walk(c)
+
+    walk(method_node)
+    return targets
+
+
+def _cpp_callee_name(fn: "Node", src: bytes) -> Optional[str]:
+    """Bare callee identifier for a non-receiver C++ call (matches the old _CALL_QUERY).
+
+    Unwraps ``ns::foo`` and the explicit-template forms ``foo<T>()`` / ``ns::foo<T>()`` /
+    ``std::make_shared<T>()`` to the final bare identifier, exactly as the query did.
+    """
+    if fn.type == "identifier":
+        return node_text(fn, src) or None
+    if fn.type == "qualified_identifier":
+        return _cpp_callee_name(fn.child_by_field_name("name"), src) \
+            if fn.child_by_field_name("name") is not None else None
+    if fn.type == "template_function":
+        name = fn.child_by_field_name("name")
+        return _cpp_callee_name(name, src) if name is not None else None
+    return None
+
+
+def _cpp_receiver_type(
+    recv_node: "Optional[Node]", scope: dict[str, str], src: bytes
+) -> Optional[str]:
+    """Infer a C++ receiver's type name from an exact strategy, else None (unknown)."""
+    if recv_node is None:
+        return None
+    if recv_node.type == "this":
+        return scope.get("this")
+    if recv_node.type == "identifier":
+        return scope.get(node_text(recv_node, src))
+    return None   # call_expression, nested field_expression, subscript: stay unknown

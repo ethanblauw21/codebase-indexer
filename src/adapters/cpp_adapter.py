@@ -42,6 +42,7 @@ import tree_sitter_cpp as tscpp
 from adapters.base import Edge, ParseResult, Reference, Symbol, TestConventions
 from adapters._treesitter import node_text, run_query
 from category_tagger import tag_symbol
+from type_resolver import infer_cpp_call_targets, cpp_field_types
 
 _GRAMMAR = Language(tscpp.language())
 
@@ -520,10 +521,14 @@ class CppAdapter:
         if fdl is None:
             return
 
+        # ADR-011: field name → declared type, seeded into each method's receiver scope so
+        # `field_->Method()` / `field_.Method()` resolves. Computed once per type.
+        field_types = cpp_field_types(node, src)
+
         new_class = class_parts + [name]
         for member in fdl.children:
             self._handle_class_member(member, src, path, ns_parts, new_class, fqn,
-                                      symbols, edges)
+                                      field_types, symbols, edges)
 
     def _handle_class_member(
         self,
@@ -533,6 +538,7 @@ class CppAdapter:
         ns_parts: list[str],
         class_parts: list[str],
         owner_fqn: str,
+        field_types: dict[str, str],
         symbols: list[Symbol],
         edges: list[Edge],
     ) -> None:
@@ -559,19 +565,19 @@ class CppAdapter:
                                       template_node=node)
                 else:
                     self._handle_method_node(inner, src, ns_parts, class_parts, owner_fqn,
-                                             symbols, edges)
+                                             field_types, symbols, edges)
             return
 
         if t == 'function_definition':
             self._handle_method_node(node, src, ns_parts, class_parts, owner_fqn,
-                                     symbols, edges)
+                                     field_types, symbols, edges)
             return
 
         if t in ('field_declaration', 'declaration'):
             fn_decl = _get_fn_declarator(node)
             if fn_decl is not None:
                 self._handle_method_node(node, src, ns_parts, class_parts, owner_fqn,
-                                         symbols, edges)
+                                         field_types, symbols, edges)
 
     # ------------------------------------------------------------------
     # Internal — method declarations and definitions within a class body
@@ -584,6 +590,7 @@ class CppAdapter:
         ns_parts: list[str],
         class_parts: list[str],
         owner_fqn: str,
+        field_types: dict[str, str],
         symbols: list[Symbol],
         edges: list[Edge],
     ) -> None:
@@ -618,12 +625,11 @@ class CppAdapter:
         ))
         edges.append(Edge(source_fqn=owner_fqn, target=fqn, kind='owns'))
 
-        body = next((c for c in node.children if c.type == 'compound_statement'), None)
-        if body:
-            for call_node, _ in run_query(_GRAMMAR, _CALL_QUERY, body):
-                call_name = node_text(call_node, src)
-                if call_name and len(call_name) > 1:
-                    edges.append(Edge(source_fqn=fqn, target=call_name, kind='call'))
+        # ADR-011: enclosing type name for `this->` and field receivers.
+        type_name = class_parts[-1] if class_parts else None
+        for ct in infer_cpp_call_targets(node, src, field_types, type_name):
+            edges.append(Edge(source_fqn=fqn, target=ct.name,
+                              kind='call', receiver_type=ct.receiver_type))
 
     # ------------------------------------------------------------------
     # Internal — free functions and out-of-class method definitions
@@ -680,12 +686,13 @@ class CppAdapter:
             shared        = True,
         ))
 
-        body = next((c for c in node.children if c.type == 'compound_statement'), None)
-        if body:
-            for call_node, _ in run_query(_GRAMMAR, _CALL_QUERY, body):
-                call_name = node_text(call_node, src)
-                if call_name and len(call_name) > 1:
-                    edges.append(Edge(source_fqn=fqn, target=call_name, kind='call'))
+        # ADR-011: for an out-of-class definition (`void Repo::Save() { … }`) `this` resolves
+        # to the qualifier's type; a free function has no `this`. Fields are not in this node's
+        # subtree (the class body lives elsewhere), so field receivers stay unknown here.
+        enclosing_type_name = qualifier.split('::')[-1] if qualifier else None
+        for ct in infer_cpp_call_targets(node, src, {}, enclosing_type_name):
+            edges.append(Edge(source_fqn=fqn, target=ct.name,
+                              kind='call', receiver_type=ct.receiver_type))
 
     # ------------------------------------------------------------------
     # Internal — enums, typedefs, using aliases
