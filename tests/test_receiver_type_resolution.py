@@ -116,6 +116,90 @@ def test_behaviour_preserved_bare_targets_unchanged(cs_edges):
 
 
 # --------------------------------------------------------------------------- #
+# Inference — C++ (Stage 2), via parse_file
+# --------------------------------------------------------------------------- #
+
+_CPP = """
+namespace app {
+class Repo {
+public:
+    void Save();
+};
+class Svc {
+    Repo* repo_;
+    Repo  repoVal_;
+public:
+    void doPtr(Repo* r)   { r->Save(); }
+    void doRef(Repo& r)   { r.Save(); }
+    void doLocal()        { Repo x; x.Save(); }
+    void doLocalInit()    { Repo y = make(); y.Save(); }
+    void doFieldPtr()     { repo_->Save(); }
+    void doFieldVal()     { repoVal_.Save(); }
+    void doThis()         { this->helper(); }
+    void doChain()        { get()->Save(); }
+    void doBare()         { helper(); }
+    Repo  make();
+    void  helper();
+    Repo* get();
+};
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def cpp_edges():
+    return [e for e in parse_file("demo.cpp", _CPP).edges if e.kind == "call"]
+
+
+def _crecv(edges, method: str, target: str):
+    for e in edges:
+        if f"::{method}(" in e.source_fqn and e.target == target:
+            return e.receiver_type
+    raise AssertionError(f"no call edge {method} → {target}")
+
+
+def test_cpp_pointer_param_inferred(cpp_edges):
+    assert _crecv(cpp_edges, "doPtr", "Save") == "Repo"     # r->Save(), Repo* r
+
+
+def test_cpp_reference_param_inferred(cpp_edges):
+    assert _crecv(cpp_edges, "doRef", "Save") == "Repo"     # r.Save(), Repo& r
+
+
+def test_cpp_local_decl_inferred(cpp_edges):
+    assert _crecv(cpp_edges, "doLocal", "Save") == "Repo"   # Repo x; x.Save()
+
+
+def test_cpp_local_init_decl_inferred(cpp_edges):
+    assert _crecv(cpp_edges, "doLocalInit", "Save") == "Repo"  # Repo y = make(); y.Save()
+
+
+def test_cpp_field_ptr_inferred(cpp_edges):
+    assert _crecv(cpp_edges, "doFieldPtr", "Save") == "Repo"   # repo_->Save()
+
+
+def test_cpp_field_val_inferred(cpp_edges):
+    assert _crecv(cpp_edges, "doFieldVal", "Save") == "Repo"   # repoVal_.Save()
+
+
+def test_cpp_this_resolves_to_enclosing_type(cpp_edges):
+    assert _crecv(cpp_edges, "doThis", "helper") == "Svc"      # this->helper()
+
+
+def test_cpp_chained_receiver_is_unknown(cpp_edges):
+    assert _crecv(cpp_edges, "doChain", "Save") is None        # get()->Save()
+
+
+def test_cpp_bare_call_has_no_receiver_type(cpp_edges):
+    assert _crecv(cpp_edges, "doBare", "helper") is None       # helper()
+
+
+def test_cpp_bare_targets_unchanged_regression(cpp_edges):
+    names = {e.target for e in cpp_edges}
+    assert {"Save", "helper", "make", "get"} <= names
+
+
+# --------------------------------------------------------------------------- #
 # Resolution (seeded CodeDB, via resolve_call_edges)
 # --------------------------------------------------------------------------- #
 
@@ -244,3 +328,24 @@ def test_bare_path_unchanged_regression(db):
     assert stats["resolved"] == 1
     resolved, _ = _row(db, "a.cs::caller", "onlyOne")
     assert resolved == "b.cs::onlyOne"
+
+
+def test_cpp_overload_set_stays_unresolved(db):
+    """ADR-011 §5: a receiver whose type IS known but whose method name is overloaded on
+    that same type is a non-unique match — resolved to unknown, never one arbitrary overload.
+    (C++ FQNs carry the signature, so both overloads share name 'Save' and owner 'app::Repo'.)"""
+    f = _file(db, "svc.cpp")
+    _sym(db, "app::Repo", "Repo", f, kind="class")
+    _sym(db, "app::Repo::Save(int)", "Save", f)
+    _sym(db, "app::Repo::Save(std::string)", "Save", f)
+    _sym(db, "app::Svc::run()", "run", f)
+    _edge(db, "app::Repo", "app::Repo::Save(int)", kind="OWNS")
+    _edge(db, "app::Repo", "app::Repo::Save(std::string)", kind="OWNS")
+    _edge(db, "app::Svc::run()", "Save", receiver_type="Repo")
+
+    stats = resolve_call_edges(db)
+    assert stats["typed"] == 0
+    assert stats["ambiguous"] == 1
+    resolved, conf = _row(db, "app::Svc::run()", "Save")
+    assert resolved is None      # never picks one overload arbitrarily
+    assert conf is None
