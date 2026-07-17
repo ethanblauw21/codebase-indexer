@@ -79,7 +79,21 @@ CREATE TABLE IF NOT EXISTS files (
     id           INTEGER PRIMARY KEY,
     path         TEXT    UNIQUE NOT NULL,
     content_hash TEXT    NOT NULL,
-    indexed_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    indexed_at   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    -- ADR-025 §1: additive, nullable. `indexed_at` keeps its meaning ("when the
+    -- indexer last wrote this row"); these describe the file's CONTENT instead.
+    content_changed_at TEXT,   -- when content last changed (git committer time / now / NULL)
+    authored_at        TEXT    -- when content was authored (git author time); diagnostic only
+);
+
+-- -------------------------------------------------------------------------
+-- index_meta — ADR-025 §4: run-level key/value facts a read-only consumer
+-- (segmem's codemap connector) can query offline. Same shape the sibling rust
+-- indexer already exposes, so the connector reads it with existing code.
+-- -------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS index_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT
 );
 
 -- -------------------------------------------------------------------------
@@ -326,6 +340,8 @@ class CodeDB:
         self._migrate_edges()
         self._migrate_edge_candidate()
         self._migrate_symbol_locations()
+        self._migrate_files_freshness()
+        self._seed_index_meta()
 
     def _migrate_edge_candidate(self) -> None:
         """
@@ -342,6 +358,49 @@ class CodeDB:
             self._conn.execute(
                 "ALTER TABLE edges ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0"
             )
+
+    def _migrate_files_freshness(self) -> None:
+        """
+        ADR-025 §1: additive, nullable content-timestamp columns on `files` for
+        DBs that predate them. Plain ADD COLUMN (nullable, no default) — no table
+        swap needed. No-ops once the columns exist. Existing rows get NULL and are
+        backfilled from git on the next run (§2's one-time backfill).
+        """
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(files)").fetchall()
+        }
+        if "content_changed_at" not in cols:
+            self._conn.execute("ALTER TABLE files ADD COLUMN content_changed_at TEXT")
+        if "authored_at" not in cols:
+            self._conn.execute("ALTER TABLE files ADD COLUMN authored_at TEXT")
+
+    def _seed_index_meta(self) -> None:
+        """ADR-025 §4: ensure schema_version is present so a reader can detect
+        drift rather than silently serving a stale shape. INSERT OR IGNORE, so it
+        never clobbers an existing value."""
+        self._conn.execute(
+            "INSERT OR IGNORE INTO index_meta(key, value) VALUES('schema_version', '1')"
+        )
+
+    # ------------------------------------------------------------------
+    # index_meta accessors (ADR-025 §4)
+    # ------------------------------------------------------------------
+
+    def meta_get(self, key: str) -> Optional[str]:
+        """Read a run-level fact from index_meta. Returns None if absent."""
+        row = self._conn.execute(
+            "SELECT value FROM index_meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def meta_set(self, key: str, value: str) -> None:
+        """Upsert a run-level fact into index_meta."""
+        self._conn.execute(
+            "INSERT INTO index_meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value)),
+        )
 
     def _migrate_edges(self) -> None:
         """
@@ -461,6 +520,8 @@ class CodeDB:
         chunks_by_tier: Optional[dict[int, list[Chunk]]] = None,
         references: Optional[list[Reference]] = None,
         symbol_types: Optional[list[SymbolType]] = None,
+        content_changed_at: Optional[str] = None,
+        authored_at: Optional[str] = None,
     ) -> bool:
         """
         Atomically replace all data for `path`.
@@ -485,15 +546,24 @@ class CodeDB:
         symbol_types = symbol_types or []
 
         with self._tx() as cur:
+            # ADR-025 §1/§2: on a first index (no existing row) content_changed_at
+            # is the caller-supplied value — git committer time back-dated, or now(),
+            # or NULL, per §2's rules. On a conflict (row already exists and the hash
+            # changed — file_is_unchanged already returned early otherwise) the content
+            # just changed, so it is stamped now(). Incremental runs pre-delete modified
+            # files, so they take the INSERT path with the caller's now() value; the
+            # conflict branch is the safety net for callers that do not pre-delete.
             cur.execute(
                 """
-                INSERT INTO files(path, content_hash)
-                VALUES(?, ?)
+                INSERT INTO files(path, content_hash, content_changed_at, authored_at)
+                VALUES(?, ?, ?, ?)
                 ON CONFLICT(path) DO UPDATE SET
-                    content_hash = excluded.content_hash,
-                    indexed_at   = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+                    content_hash       = excluded.content_hash,
+                    indexed_at         = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                    content_changed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                    authored_at        = excluded.authored_at
                 """,
-                (path, content_hash),
+                (path, content_hash, content_changed_at, authored_at),
             )
             file_id: int = cur.execute(
                 "SELECT id FROM files WHERE path = ?", (path,)

@@ -1199,6 +1199,7 @@ def reindex(changed_files_only: bool = False) -> str:
     import sys
     import io
     import os
+    import sqlite3
     import subprocess
     from incremental_indexer import run_incremental, INDEX_DIR, TIER_CONFIGS
     from db import CodeDB
@@ -1208,41 +1209,62 @@ def reindex(changed_files_only: bool = False) -> str:
 
     print(f"\n[MCP] reindex: changed_files_only={changed_files_only}")
 
-    # Git-aware staleness report for incremental mode.
-    # Compares the commit hash stored at last full/incremental reindex against HEAD.
-    # Reports which files diverged so the developer can decide whether a full rebuild
-    # is warranted before trusting the query tools.
+    # Git-aware staleness report for incremental mode (ADR-025 §5).
+    # The last-indexed commit is now read from the index_meta table in graph.db —
+    # not the retired last_indexed_commit.txt, which segmem's DB-only connector could
+    # never see. Exceptions are handled narrowly: "git absent" (FileNotFoundError) is
+    # distinguished from "git ran and failed" (CalledProcessError), instead of a blanket
+    # swallow that hid non-git-repo, no-commits, and git-missing alike.
     _stale_warning = ""
-    _commit_file = os.path.join(INDEX_DIR, "last_indexed_commit.txt")
-    if changed_files_only and os.path.exists(_commit_file):
-        try:
-            with open(_commit_file) as _cf:
-                _last_hash = _cf.read().strip()
-            _curr_hash = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
-            ).strip()
-            if _last_hash != _curr_hash:
-                _changed = subprocess.check_output(
-                    ["git", "diff", "--name-only", _last_hash, "HEAD"],
-                    text=True, stderr=subprocess.DEVNULL
+    db_path = os.path.join(INDEX_DIR, "graph.db")
+    if changed_files_only:
+        _last_hash = None
+        if os.path.exists(db_path):
+            try:
+                with CodeDB(db_path) as _meta_db:
+                    _last_hash = _meta_db.meta_get("last_indexed_commit")
+            except sqlite3.Error:
+                _last_hash = None
+        if _last_hash:
+            try:
+                _curr_hash = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
                 ).strip()
-                if _changed:
-                    _stale_warning = (
-                        f"⚠️  INDEX STALENESS DETECTED\n"
-                        f"   Last indexed at commit: {_last_hash[:8]}\n"
-                        f"   Current HEAD:           {_curr_hash[:8]}\n"
-                        f"   Files changed since the index was built:\n"
-                        + "\n".join(f"     - {f}" for f in _changed.splitlines() if f)
-                        + "\n   Consider reindex(changed_files_only=False) for a clean rebuild.\n\n"
-                    )
-        except Exception:
-            pass
+                if _last_hash != _curr_hash:
+                    _changed = subprocess.check_output(
+                        ["git", "diff", "--name-only", _last_hash, "HEAD"],
+                        text=True, stderr=subprocess.DEVNULL
+                    ).strip()
+                    if _changed:
+                        _stale_warning = (
+                            f"⚠️  INDEX STALENESS DETECTED\n"
+                            f"   Last indexed at commit: {_last_hash[:8]}\n"
+                            f"   Current HEAD:           {_curr_hash[:8]}\n"
+                            f"   Files changed since the index was built:\n"
+                            + "\n".join(f"     - {f}" for f in _changed.splitlines() if f)
+                            + "\n   Consider reindex(changed_files_only=False) for a clean rebuild.\n\n"
+                        )
+            except FileNotFoundError:
+                pass   # git binary not installed — no staleness signal available
+            except subprocess.CalledProcessError:
+                pass   # not a git repo, or HEAD/ref invalid — nothing to compare
 
+    _preserved: dict[str, tuple] = {}
     if not changed_files_only:
         # Wipe all index state so run_incremental treats everything as new
-        db_path = os.path.join(INDEX_DIR, "graph.db")
         if os.path.exists(db_path):
             with CodeDB(db_path) as _db:
+                # ADR-025 §3: capture content stamps BEFORE the wipe. A full rebuild
+                # makes every file look "new", so §2 back-dating alone would reset
+                # dirty and history-less files to now()/NULL. Restored by hash match
+                # after re-ingest (below), leaving genuinely-changed files re-stamped.
+                try:
+                    for _row in _db._conn.execute(
+                        "SELECT path, content_hash, content_changed_at, authored_at FROM files"
+                    ).fetchall():
+                        _preserved[_row[0]] = (_row[1], _row[2], _row[3])
+                except sqlite3.Error:
+                    _preserved = {}
                 with _db._tx() as _cur:
                     _cur.execute("DELETE FROM edges")
                     _cur.execute("DELETE FROM files")   # CASCADE removes symbols + chunks
@@ -1269,15 +1291,23 @@ def reindex(changed_files_only: bool = False) -> str:
     t3_index = index_manager.load_or_create("tier3_architectural")
     _hybrid_retriever = None   # Reset lazy singleton; reloads on next investigate_architecture call
 
-    # Record the current HEAD so future incremental runs can detect staleness
-    try:
-        _curr_hash = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-        with open(_commit_file, "w") as _cf:
-            _cf.write(_curr_hash)
-    except Exception:
-        pass
+    # ADR-025 §3: restore preserved stamps for files whose content survived the full
+    # rebuild unchanged (hash match). Genuinely-changed files keep the git-backdated
+    # stamp run_incremental just wrote. HEAD itself is recorded into index_meta by
+    # run_incremental() from the shared chokepoint — the last_indexed_commit.txt write
+    # is retired, which is what makes the CLI and MCP entry points finally agree.
+    if not changed_files_only and _preserved:
+        try:
+            with CodeDB(db_path) as _db:
+                with _db._tx() as _cur:
+                    for _p, (_h, _cc, _au) in _preserved.items():
+                        _cur.execute(
+                            "UPDATE files SET content_changed_at = ?, authored_at = ? "
+                            "WHERE path = ? AND content_hash = ?",
+                            (_cc, _au, _p, _h),
+                        )
+        except sqlite3.Error:
+            pass
 
     mode = "Incremental" if changed_files_only else "Full"
     output = _captured.getvalue().strip()
@@ -1287,6 +1317,105 @@ def reindex(changed_files_only: bool = False) -> str:
         f"{output}\n\n"
         "In-memory indexes reloaded. All MCP tools now reflect the updated index."
     )
+
+
+@mcp.tool()
+def index_status(since: str = "1d") -> str:
+    """Report index freshness and which files changed recently (ADR-025 §6).
+
+    Use this to answer "what changed in this codebase lately?" and "is the index
+    current with the code?" — e.g. before trusting the other tools on recently
+    edited files, or to feed a downstream multi-project context hub. Output is
+    agent-parseable: absolute ISO-8601 UTC timestamps and full repo-relative
+    paths, never prose you have to re-parse.
+
+    `since` accepts a relative window ("1d", "12h", "30m", "7d") or an absolute
+    ISO-8601 timestamp ("2026-07-15T00:00:00Z"). Files whose CONTENT changed after
+    that point are listed — content_changed_at, not index-write time — so a file
+    re-indexed today but unchanged in a week does not show up. Files with no git
+    history (untracked / vendored) carry a NULL stamp and are correctly excluded.
+
+    Reports: last_verified_at, last_indexed_commit vs current HEAD (with the list
+    of diverged files when stale), files_total, and the recent-change list.
+    """
+    import os
+    import subprocess
+    from datetime import datetime, timedelta, timezone
+    from incremental_indexer import INDEX_DIR
+    from db import CodeDB
+
+    db_path = os.path.join(INDEX_DIR, "graph.db")
+    if not os.path.exists(db_path):
+        return "No index found — run reindex first."
+
+    def _parse_since(s: str) -> str:
+        """Relative window → absolute ISO cutoff; pass an ISO string through as-is."""
+        s = (s or "").strip()
+        m = re.fullmatch(r"(\d+)\s*([dhm])", s)
+        if m:
+            n, unit = int(m.group(1)), m.group(2)
+            delta = {
+                "d": timedelta(days=n),
+                "h": timedelta(hours=n),
+                "m": timedelta(minutes=n),
+            }[unit]
+            return (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return s
+
+    cutoff = _parse_since(since)
+
+    with CodeDB(db_path) as db:
+        last_verified = db.meta_get("last_verified_at") or "(never recorded)"
+        last_commit   = db.meta_get("last_indexed_commit")
+        files_total   = db.meta_get("files_total") or "?"
+        rows = db._conn.execute(
+            "SELECT path, content_changed_at FROM files "
+            "WHERE content_changed_at IS NOT NULL AND content_changed_at > ? "
+            "ORDER BY content_changed_at DESC",
+            (cutoff,),
+        ).fetchall()
+
+    lines = [
+        "--- INDEX STATUS ---",
+        f"last_verified_at:    {last_verified}",
+        f"files_total:         {files_total}",
+    ]
+
+    if last_commit:
+        try:
+            curr = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            if curr == last_commit:
+                lines.append(f"last_indexed_commit: {last_commit[:8]} (== HEAD; index current)")
+            else:
+                lines.append(
+                    f"last_indexed_commit: {last_commit[:8]}  HEAD: {curr[:8]}  ⚠️ STALE"
+                )
+                try:
+                    diverged = subprocess.check_output(
+                        ["git", "diff", "--name-only", last_commit, "HEAD"],
+                        text=True, stderr=subprocess.DEVNULL,
+                    ).strip()
+                    for f in diverged.splitlines():
+                        if f:
+                            lines.append(f"    diverged: {f}")
+                except subprocess.CalledProcessError:
+                    pass
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            lines.append(
+                f"last_indexed_commit: {last_commit[:8]} (HEAD comparison unavailable — no git)"
+            )
+    else:
+        lines.append("last_indexed_commit: (none recorded)")
+
+    lines.append(f"\nfiles with content changed since {cutoff}  ({len(rows)}):")
+    if rows:
+        lines.extend(f"    {ts}  {path}" for path, ts in rows)
+    else:
+        lines.append("    (none)")
+
+    return "\n".join(lines)
 
 
 @mcp.tool()

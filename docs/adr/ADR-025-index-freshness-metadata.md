@@ -258,26 +258,27 @@ the `codemap` connector can implement `changes_since(folder, ts)` — the named 
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] **§1** Add `content_changed_at` / `authored_at` (nullable) to the `files` DDL in `src/db.py:74-79`; add an idempotent `ALTER TABLE ... ADD COLUMN` migration for existing `graph.db` files.
-- [ ] **§4** Add the `index_meta` DDL + `meta_get`/`meta_set` accessors in `src/db.py`; seed `schema_version = "1"`.
-- [ ] **§2** Add a `git_change_times(repo_path) -> dict[str, tuple[str, str]]` helper (one `git log --format='%cI|%aI' --name-only --no-merges` pass) in `src/incremental_indexer.py`; return `{}` on any git failure — never raise.
-- [ ] **§2** Add a dirty-path check (`git diff --name-only HEAD`) so rule 2 can fire; treat "git absent" as "everything dirty" → falls through to NULL, not `now()`.
-- [ ] **§2** Wire back-dating into the first-index path only; verify `upsert_file` (`src/db.py:461-470`) leaves `content_changed_at` alone when the hash is unchanged.
-- [ ] **§3** Capture `{path → (hash, content_changed_at, authored_at)}` before the `DELETE FROM files` wipe (`src/MCPServer.py:1200-1207`); restore on hash match after re-ingest.
-- [ ] **§3** Re-verify the crash-safety ordering documented at `src/incremental_indexer.py:474-485` still holds with capture/restore inserted.
-- [ ] **§4/§5** Write `last_indexed_commit`, `last_verified_at`, `files_total` from `run_incremental()` (`src/incremental_indexer.py:472`) on every completed run **including the no-op early return at 513-516**.
-- [ ] **§5** Delete the `.txt` read/write blocks (`src/MCPServer.py:1175-1198`, `1231-1239`); re-source the staleness report from `index_meta`; replace the blanket `except Exception: pass` with narrow handling that distinguishes "not a git repo" from "git failed".
-- [ ] **§1** One-time backfill: existing rows get `content_changed_at` from the §2 git pass on the next run rather than staying NULL forever.
-- [ ] **§6** Add the `index_status` MCP tool in `src/MCPServer.py`. No `src/tui/tools.py` entry (agent-facing).
-- [ ] **§7** Document the `files` columns + `index_meta` keys as the read-only contract for segmem's `codemap` connector; note the ISO-vs-epoch divergence from the rust indexer.
-- [ ] Tests: full-rebuild timestamp neutrality; dirty-file → `now()`; untracked-file → NULL; non-git tree does not raise; no-op run still writes `last_verified_at`; `MAX(indexed_at)` still answers (segmem's existing query must not regress).
-- [ ] Verify against the real consumer: run segmem's `codemap` connector against the rebuilt `graph.db` and confirm it still produces a rollup (it fails **silently** — absence of an error is not a pass).
-- [ ] Acceptance (#20): a file's stamp advances **iff** content changed; `WHERE content_changed_at > ?` returns only genuinely-changed files after **both** full and incremental runs; documented for `changes_since(folder, ts)`.
-- [ ] Manually verify the MCP server starts cleanly and `reindex` runs without error (CONTRIBUTING §5).
+- [x] **§1** Add `content_changed_at` / `authored_at` (nullable) to the `files` DDL in `src/db.py`; idempotent `ALTER TABLE ... ADD COLUMN` migration (`_migrate_files_freshness`) for existing `graph.db` files.
+- [x] **§4** Add the `index_meta` DDL + `meta_get`/`meta_set` accessors in `src/db.py`; seed `schema_version = "1"` via INSERT OR IGNORE (`_seed_index_meta`).
+- [x] **§2** Add `git_change_times(repo_path) -> dict[str, tuple[str, str]]` (one `git log` pass, sentinel-prefixed `--format`) in `src/incremental_indexer.py`; returns `{}` on any git failure, never raises.
+- [x] **§2** Add `git_dirty_paths()` (`git diff --name-only HEAD`) so rule 2 can fire; git failure → empty set → files fall through to NULL, not `now()`.
+- [x] **§2** Wire back-dating via `_content_stamp()` in `run_incremental`'s loop; `upsert_file` leaves `content_changed_at` untouched when the hash is unchanged (early return) — covered by `test_unchanged_leaves_stamp`.
+- [x] **§3** Capture `{path → (hash, content_changed_at, authored_at)}` before the `DELETE FROM files` wipe in `src/MCPServer.py reindex()`; restore on hash match after re-ingest.
+- [x] **§3** Crash-safety ordering re-verified: capture is a read before the existing wipe transaction; restore is a separate post-reindex transaction. A crash mid-run leaves files absent → re-indexed as `new` next run (unchanged from the documented ordering).
+- [x] **§4/§5** Write `last_indexed_commit`, `last_verified_at`, `files_total` from `run_incremental()` via `_write_index_meta`, on every completed run **including the no-op early return**.
+- [x] **§5** Retire `last_indexed_commit.txt` (both read + write blocks removed); staleness report now reads `index_meta`; blanket `except Exception: pass` replaced with narrow `FileNotFoundError` (git absent) vs `subprocess.CalledProcessError` (not a repo / bad ref).
+- [x] **§1** One-time backfill (`_backfill_null_stamps`) fills legacy NULL rows from the git pass, runs before the no-op check so a quiet repo still backfills; idempotent.
+- [x] **§6** Add the `index_status` MCP tool in `src/MCPServer.py`. No `src/tui/tools.py` entry (agent-facing).
+- [x] **§7** Documented in `docs/index-schema-contract.md` (the `files` columns + `index_meta` keys + the delta query); notes the ISO-vs-epoch divergence from the rust indexer.
+- [x] Tests: `tests/test_index_freshness.py`, 17 tests — full-rebuild neutrality (restore-on-hash-match), dirty→`now()`, untracked→NULL, non-git tree doesn't raise, migration preserves legacy rows, `MAX(indexed_at)` still answers, the `WHERE content_changed_at > ?` delta query, backfill idempotency. All pass; whole 196-test suite green. Pure SQLite + git, no model load.
+- [x] Manually verify the MCP server starts cleanly (CONTRIBUTING §5): `import MCPServer` clean with `CUDA_VISIBLE_DEVICES=""`, `index_status` + `reindex` registered, `upsert_file`/git helpers wired. Migration proven on a populated old-schema DB (legacy row survives with NULL stamps).
+- [ ] **BLOCKED (GPU):** end-to-end `reindex` run — a real full/incremental reindex embeds files and would pin the GPU (kernel-crash risk on this machine; see `[[feedback-no-gpu-workloads]]`). The DB + git layers are fully unit-verified; the embed path is unchanged by this ADR. Run this once the GPU is usable, or on a CPU-forced box, to confirm timestamps end-to-end.
+- [ ] Verify against the real consumer: run segmem's `codemap` connector against a rebuilt `graph.db` and confirm it still produces a rollup (fails **silently** — absence of an error is not a pass). Deferred with the reindex above (needs a populated post-ADR index).
 - [ ] Resolve every downstream obligation listed in **Depended on by** (none) before setting status to `accepted`.
 
 **Notes:**
 <!-- 2026-07-16: Requester initially asked for timestamps on the vectors themselves. Not possible — FAISS IndexIDMap(IndexFlatIP) holds vectors + int64 IDs, no payload (src/core.py:138-159). Per-file is informationally equivalent since a file's chunks are purged and reinserted as a set. -->
+<!-- 2026-07-17: Implemented §1-§7 in code + tests. Two deviations worth recording: (a) modified files (already in the index, hash changed) stamp now() rather than back-dating, matching the ADR's "back-date on first index, stamp-on-change thereafter" — this means the same file's stamp can differ by run type (full rebuild back-dates it from git; incremental stamps now()), but both land in the same "changed since T" window, satisfying #20. (b) The §1 backfill gives legacy dirty files committer time rather than now() — a one-time historical reconciliation; their next real change restamps correctly. (c) End-to-end reindex verification is GPU-blocked and deferred; every layer this ADR actually changes (schema, migration, git helpers, meta, capture/restore SQL) is unit-verified without a model load. -->
 <!-- 2026-07-16: Assumed early on that MD5 change detection already made indexed_at content-accurate. Wrong — true for incremental runs, false for the full-rebuild path (DELETE FROM files, src/MCPServer.py:1200-1207), which is exactly what #20 documents. -->
 <!-- 2026-07-16: Discovered mid-design that segmem's codemap connector already exists and already queries MAX(indexed_at). The integration is live, not hypothetical, and the DB — not an MCP tool — is the contract. -->
 <!-- 2026-07-16: Registry "drift" between MCPServer.py and tui/tools.py was investigated and dismissed — tui/tools.py is a presentational menu, not a second source of truth. -->
