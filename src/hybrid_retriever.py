@@ -255,20 +255,24 @@ class HybridRetriever:
     # Public API
     # ------------------------------------------------------------------
 
-    def retrieve(self, query: str) -> list[RetrievedChunk]:
+    def retrieve(self, query: str, top_n: int = _RERANK_TOP_N) -> list[RetrievedChunk]:
         """Run the full Retrieve-Traverse-Rerank pipeline.
 
-        Returns up to ``_RERANK_TOP_N`` (10) chunks ordered by relevance,
-        highest score first.
+        Returns up to ``top_n`` chunks ordered by relevance, highest score first.
+        ``top_n`` defaults to ``_RERANK_TOP_N`` (10) — the measured Wave-0 shape.
+        Callers that need a wider candidate set (e.g. the MCP scan tools routed
+        onto this surface by ADR-023) pass a larger ``top_n``; the semantic pool
+        and the structural cap widen to match so the extra results are real, not
+        padding. Default calls are byte-for-byte unchanged (ADR-023 §1).
         """
         self._import_cache.clear()
-        semantic_hits = self._semantic_search(query, k=_SEMANTIC_K)
+        semantic_hits = self._semantic_search(query, k=max(_SEMANTIC_K, top_n))
         pool = (
-            self._expand_structurally_budgeted(semantic_hits)
+            self._expand_structurally_budgeted(semantic_hits, top_n=top_n)
             if self._graph_enabled
             else semantic_hits
         )
-        return self._rerank(query, pool)
+        return self._rerank(query, pool, top_n=top_n)
 
     # ------------------------------------------------------------------
     # Step 1 — Semantic retrieval (multi-tier RRF)
@@ -370,6 +374,7 @@ class HybridRetriever:
     def _expand_structurally_budgeted(
         self,
         semantic_hits: list[RetrievedChunk],
+        top_n: int = _RERANK_TOP_N,
     ) -> list[RetrievedChunk]:
         """Beam-search graph expansion with budget control and corroboration labels.
 
@@ -458,7 +463,9 @@ class HybridRetriever:
 
             frontier.sort(key=lambda x: x[1], reverse=True)
 
-        return list(pool.values())[:_MAX_POOL_SIZE]
+        # Cap the pool, but never below the caller's requested top_n (a wide-k scan
+        # tool must not be silently truncated to 35). ADR-022 revisits this budgeting.
+        return list(pool.values())[:max(_MAX_POOL_SIZE, top_n)]
 
     # ------------------------------------------------------------------
     # Step 3 — Reranking
@@ -497,11 +504,12 @@ class HybridRetriever:
             )
             return None
 
-    def _rerank(self, query: str, pool: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    def _rerank(self, query: str, pool: list[RetrievedChunk],
+                top_n: int = _RERANK_TOP_N) -> list[RetrievedChunk]:
         """Score every candidate in `pool` against `query` via the cross-encoder.
 
         Falls back to RRF score ordering if the cross-encoder is unavailable.
-        Returns at most _RERANK_TOP_N chunks, highest score first.
+        Returns at most ``top_n`` chunks, highest score first.
         """
         if not pool:
             return []
@@ -516,7 +524,7 @@ class HybridRetriever:
                     if query_categories & set(chunk.tags):
                         chunk.score += _CATEGORY_BOOST
             pool.sort(key=lambda c: c.score, reverse=True)
-            return pool[:_RERANK_TOP_N]
+            return pool[:top_n]
 
         pairs = [(query, c.text) for c in pool]
 
@@ -535,7 +543,7 @@ class HybridRetriever:
                 exc,
             )
             pool.sort(key=lambda c: c.score, reverse=True)
-            return pool[:_RERANK_TOP_N]
+            return pool[:top_n]
 
         # Composite scoring
         name_mentions: dict[str, int] = {}
@@ -564,4 +572,4 @@ class HybridRetriever:
             chunk.score     = ce_score + density_bonus + locality_bonus + category_bonus
 
         pool.sort(key=lambda c: c.score, reverse=True)
-        return pool[:_RERANK_TOP_N]
+        return pool[:top_n]
