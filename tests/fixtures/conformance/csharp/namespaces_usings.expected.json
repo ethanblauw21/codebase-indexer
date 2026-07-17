@@ -1,0 +1,19 @@
+{
+  "feature": "csharp/namespaces_usings",
+  "language": "csharp",
+  "tier": "A",
+  "note": "Each using directive is an import edge sourced at the file. Block-form namespace qualifies symbols (App.Util.Slugify). `new StringBuilder()` is object creation, not an invocation, so it is not a call edge; only Run -> Normalize is.",
+  "symbols": [
+    {"fqn": "App.Util.Slugify", "kind": "class"},
+    {"fqn": "App.Util.Slugify.Run/1", "kind": "method"},
+    {"fqn": "App.Util.Slugify.Normalize/2", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "namespaces_usings.cs", "target": "System", "kind": "import"},
+    {"source": "namespaces_usings.cs", "target": "System.Text", "kind": "import"},
+    {"source": "namespaces_usings.cs", "target": "System.Collections.Generic", "kind": "import"},
+    {"source": "App.Util.Slugify", "target": "App.Util.Slugify.Run/1", "kind": "owns"},
+    {"source": "App.Util.Slugify", "target": "App.Util.Slugify.Normalize/2", "kind": "owns"},
+    {"source": "App.Util.Slugify.Run/1", "target": "Normalize", "kind": "call"}
+  ]
+}

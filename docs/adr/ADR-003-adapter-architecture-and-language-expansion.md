@@ -4,6 +4,8 @@
 **Date:** 2026-06-11
 **Branch:** `feature/adapter-architecture-language-expansion`
 **Reviewer:** @ethanblauw21
+**Depended on by:**
+- ADR-008 — reuses the **C# FQN convention (D3: `Namespace.Type`, members `…/arity`, nested `Outer+Inner`, no file-path prefix)** as the notation its C# conformance fixtures are authored against, and measures the adapter architecture's extraction against hand-authored ground truth. The planned `Edge.candidate: bool` (§2.3) is the field ADR-008 §4 evolves into graded `Edge.confidence` (still unbuilt).
 
 ## Context
 

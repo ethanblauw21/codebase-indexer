@@ -1,0 +1,25 @@
+{
+  "feature": "csharp/inheritance",
+  "language": "csharp",
+  "tier": "A",
+  "note": "Base-list disambiguation: first entry -> extends (class), remaining -> implements (interfaces). Correct here because Animal really is the base class and IBark an interface. Abstract and interface method declarations (no body) are still symbols; the override's call into Bark() is a call edge.",
+  "symbols": [
+    {"fqn": "Zoo.IBark", "kind": "interface"},
+    {"fqn": "Zoo.IBark.Bark/0", "kind": "method"},
+    {"fqn": "Zoo.Animal", "kind": "class"},
+    {"fqn": "Zoo.Animal.Speak/0", "kind": "method"},
+    {"fqn": "Zoo.Dog", "kind": "class"},
+    {"fqn": "Zoo.Dog.Speak/0", "kind": "method"},
+    {"fqn": "Zoo.Dog.Bark/0", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "inheritance.cs", "target": "System", "kind": "import"},
+    {"source": "Zoo.IBark", "target": "Zoo.IBark.Bark/0", "kind": "owns"},
+    {"source": "Zoo.Animal", "target": "Zoo.Animal.Speak/0", "kind": "owns"},
+    {"source": "Zoo.Dog", "target": "Zoo.Dog.Speak/0", "kind": "owns"},
+    {"source": "Zoo.Dog", "target": "Zoo.Dog.Bark/0", "kind": "owns"},
+    {"source": "Zoo.Dog", "target": "Animal", "kind": "extends"},
+    {"source": "Zoo.Dog", "target": "IBark", "kind": "implements"},
+    {"source": "Zoo.Dog.Speak/0", "target": "Bark", "kind": "call"}
+  ]
+}

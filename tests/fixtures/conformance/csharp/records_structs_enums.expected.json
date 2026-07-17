@@ -1,0 +1,24 @@
+{
+  "feature": "csharp/records_structs_enums",
+  "language": "csharp",
+  "tier": "A",
+  "note": "enum/struct/record each carry their own symbol kind. Enum members (X/Y/Z) are values, not part of the symbol model, so they are not symbols. Struct properties and a private static helper method are owned by Point; Magnitude -> Dot is the call edge.",
+  "symbols": [
+    {"fqn": "Geo.Axis", "kind": "enum"},
+    {"fqn": "Geo.Point", "kind": "struct"},
+    {"fqn": "Geo.Point.X", "kind": "property"},
+    {"fqn": "Geo.Point.Y", "kind": "property"},
+    {"fqn": "Geo.Point.Magnitude/0", "kind": "method"},
+    {"fqn": "Geo.Point.Dot/1", "kind": "method"},
+    {"fqn": "Geo.Label", "kind": "record"},
+    {"fqn": "Geo.Label.Text", "kind": "property"}
+  ],
+  "edges": [
+    {"source": "Geo.Point", "target": "Geo.Point.X", "kind": "owns"},
+    {"source": "Geo.Point", "target": "Geo.Point.Y", "kind": "owns"},
+    {"source": "Geo.Point", "target": "Geo.Point.Magnitude/0", "kind": "owns"},
+    {"source": "Geo.Point", "target": "Geo.Point.Dot/1", "kind": "owns"},
+    {"source": "Geo.Label", "target": "Geo.Label.Text", "kind": "owns"},
+    {"source": "Geo.Point.Magnitude/0", "target": "Dot", "kind": "call"}
+  ]
+}
