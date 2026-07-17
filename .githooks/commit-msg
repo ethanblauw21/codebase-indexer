@@ -18,7 +18,9 @@ if [[ -z "$ADR_NUM" ]]; then
   exit 0
 fi
 
-ADR_TAG=$(printf "%03d" "$ADR_NUM")
+# Force base-10: a grep'd number like 017 is otherwise read as octal by printf
+# (017 -> 15 -> "015"; 008/009 -> invalid-octal error). 10# strips that.
+ADR_TAG=$(printf "%03d" "$((10#$ADR_NUM))")
 
 # Collect staged src/ file paths
 SRC_FILES=$(git diff --cached --name-only 2>/dev/null | grep '^src/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')

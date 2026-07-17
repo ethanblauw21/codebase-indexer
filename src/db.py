@@ -51,6 +51,10 @@ class CallGraphNode:
     file_path: Optional[str]
     start_line: Optional[int]
     end_line: Optional[int]
+    candidate: bool = False   # True when every edge reaching this node is
+    # candidate (name-based / unresolved). MIN over reaching edges, so a node
+    # with any resolved edge in this direction is verified. Drives the
+    # safe-direction verdict rule (ADR-017 §7).
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +153,7 @@ CREATE TABLE IF NOT EXISTS edges (
     target          TEXT    NOT NULL,
     kind            TEXT    NOT NULL,
     resolved_target TEXT,
+    candidate       INTEGER NOT NULL DEFAULT 0,
     UNIQUE(source_fqn, target, kind)
 );
 
@@ -208,13 +213,14 @@ CREATE INDEX IF NOT EXISTS idx_chunks_file_tier    ON chunks(file_id, tier);
 
 _CALL_GRAPH_SQL = """\
 WITH RECURSIVE
-call_graph(fqn, depth, direction, visited) AS (
+call_graph(fqn, depth, direction, visited, candidate) AS (
 
     SELECT
         :fqn                                AS fqn,
         0                                   AS depth,
         'root'                              AS direction,
-        char(31) || :fqn || char(31)        AS visited
+        char(31) || :fqn || char(31)        AS visited,
+        0                                   AS candidate
 
     UNION ALL
 
@@ -222,7 +228,8 @@ call_graph(fqn, depth, direction, visited) AS (
         COALESCE(e.resolved_target, e.target),
         cg.depth + 1,
         'calls',
-        cg.visited || COALESCE(e.resolved_target, e.target) || char(31)
+        cg.visited || COALESCE(e.resolved_target, e.target) || char(31),
+        e.candidate
     FROM   edges      e
     JOIN   call_graph cg  ON cg.fqn = e.source_fqn
     WHERE  e.kind         = 'CALLS'
@@ -235,7 +242,8 @@ call_graph(fqn, depth, direction, visited) AS (
         e.source_fqn,
         cg.depth + 1,
         'called_by',
-        cg.visited || e.source_fqn || char(31)
+        cg.visited || e.source_fqn || char(31),
+        e.candidate
     FROM   edges      e
     JOIN   call_graph cg  ON cg.fqn = COALESCE(e.resolved_target, e.target)
     WHERE  e.kind         = 'CALLS'
@@ -249,7 +257,8 @@ SELECT
     s.kind          AS symbol_kind,
     f.path          AS file_path,
     s.start_line,
-    s.end_line
+    s.end_line,
+    MIN(cg.candidate) AS candidate
 FROM   call_graph  cg
 LEFT   JOIN symbols s  ON s.fqn = cg.fqn
 LEFT   JOIN files   f  ON f.id  = s.file_id
@@ -315,7 +324,24 @@ class CodeDB:
         self._conn.executescript(_PRAGMA_SQL)
         self._conn.executescript(_DDL_SQL)
         self._migrate_edges()
+        self._migrate_edge_candidate()
         self._migrate_symbol_locations()
+
+    def _migrate_edge_candidate(self) -> None:
+        """
+        Idempotent additive migration: add the `candidate` column to edges on
+        DBs that predate it (ADR-017 §3). A plain ADD COLUMN suffices — unlike
+        the kind CHECK-constraint change, no table swap is needed. No-ops once
+        the column exists.
+        """
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
+        }
+        if "candidate" not in cols:
+            self._conn.execute(
+                "ALTER TABLE edges ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _migrate_edges(self) -> None:
         """
@@ -350,6 +376,7 @@ class CodeDB:
                 'EXTENDS','IMPLEMENTS'
             )),
             resolved_target TEXT,
+            candidate       INTEGER NOT NULL DEFAULT 0,
             UNIQUE(source_fqn, target, kind)
         );
         INSERT OR IGNORE INTO edges_v2(id, source_fqn, target, kind)
@@ -581,12 +608,13 @@ class CodeDB:
             # Edges
             cur.executemany(
                 """
-                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target)
-                VALUES (?, ?, ?, ?)
+                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target, candidate)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 [
                     (e.source_fqn, e.target, _normalise_edge_kind(e.kind),
-                     getattr(e, "resolved_target", None))
+                     getattr(e, "resolved_target", None),
+                     int(getattr(e, "candidate", False)))
                     for e in edges
                 ],
             )
@@ -685,6 +713,7 @@ class CodeDB:
                 file_path=r["file_path"],
                 start_line=r["start_line"],
                 end_line=r["end_line"],
+                candidate=bool(r["candidate"]),
             )
             for r in rows
         ]
