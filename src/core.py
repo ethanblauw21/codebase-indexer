@@ -13,6 +13,7 @@ from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
 
 from config import load_indexer_config
+from device import resolve_device
 
 # ---------------------------------------------------------------------------
 # Embedder configuration (ADR-009 §P1) — config-driven via [embeddings].
@@ -62,8 +63,14 @@ def _get_embed_model() -> SentenceTransformer:
     global _embed_model
     if _embed_model is None:
         model_id = embed_model_id()
-        print(f"[core] Loading embedding model: {model_id} ...", flush=True)
-        _embed_model = SentenceTransformer(model_id, trust_remote_code=True)
+        # ADR-020: the embedder runs on every index, so it must honour the one
+        # authoritative device control. resolve_device() returns the auto-CUDA
+        # default (ADR-024) unless CODE_INDEXER_DEVICE forces a value — so
+        # CODE_INDEXER_DEVICE=cpu now actually makes indexing CPU-only, instead
+        # of sentence-transformers silently grabbing CUDA behind the override.
+        device = resolve_device()
+        print(f"[core] Loading embedding model: {model_id} (device={device}) ...", flush=True)
+        _embed_model = SentenceTransformer(model_id, trust_remote_code=True, device=device)
         # Cap sequence length to prevent native OOM on tier3 architectural chunks
         # (~4000 tokens). Self-attention memory scales as O(L²) — 4000-token inputs
         # require ~9 GB of intermediate tensors, killing the process with an

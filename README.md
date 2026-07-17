@@ -84,6 +84,21 @@ reindex()                          # full reindex (first time or after major ref
 reindex(changed_files_only=True)   # incremental (after routine edits)
 ```
 
+### Forcing CPU-only operation
+
+By default every model auto-selects CUDA when a GPU is present. To force the **entire local
+stack** (embedder, reranker, summarizer, and eval) onto the CPU — e.g. on a machine where GPU
+use is unstable — set one environment variable:
+
+```
+CODE_INDEXER_DEVICE=cpu       # authoritative override for all local model loads (ADR-020/ADR-024)
+```
+
+This is the supported force-CPU control. It is resolved by `src/device.py` (`resolve_device()`)
+and honoured by all four components, so a CPU-only index run is CPU-safe by construction. Any
+other value (`cuda`, `mps`, …) is passed through as an explicit device choice; unset means
+auto-CUDA-else-CPU.
+
 ### Connecting to Claude Code
 
 Add to your MCP config (`~/.claude/claude_mcp_config.json` or `.mcp.json` in your project):

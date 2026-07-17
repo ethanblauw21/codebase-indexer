@@ -57,6 +57,8 @@ from __future__ import annotations
 import atexit
 import logging
 
+from device import resolve_device
+
 logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,10 +168,13 @@ class ChunkSummarizer:
     def __init__(
         self,
         model_id: str = "Qwen/Qwen2.5-Coder-1.5B-Instruct",
-        device:   str = "auto",
+        device:   str | None = None,
     ) -> None:
+        # ADR-020: device defaults to resolve_device() (auto-CUDA unless
+        # CODE_INDEXER_DEVICE forces a value), so the one override governs the
+        # summarizer too. An explicit device= still wins for callers that pass one.
         self._model_id = model_id
-        self._device   = device
+        self._device   = device if device is not None else resolve_device()
         self._pipe     = None
         self._failed   = False
 
@@ -184,7 +189,10 @@ class ChunkSummarizer:
             import torch
             from transformers import pipeline
 
-            dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+            # ADR-020: key dtype off the RESOLVED device, not raw cuda availability,
+            # so CODE_INDEXER_DEVICE=cpu also forces float32 (avoiding float16-on-CPU
+            # quirks) rather than picking float16 because a GPU merely exists.
+            dtype = torch.float16 if self._device == "cuda" else torch.float32
             print(
                 f"  [Summarizer] Loading {self._model_id} "
                 f"(device={self._device}, dtype={dtype}) — first run only ..."
@@ -284,11 +292,15 @@ class IsolatedChunkSummarizer:
     def __init__(
         self,
         model_id: str = "Qwen/Qwen2.5-Coder-1.5B-Instruct",
-        device:   str = "auto",
+        device:   str | None = None,
         dtype:    str = "float16",
     ) -> None:
+        # ADR-020: device resolves via resolve_device() (CODE_INDEXER_DEVICE-aware)
+        # so the isolated-worker summarizer — the one the indexer actually uses —
+        # is CPU-forceable too. dtype stays an explicit knob: float16 is the
+        # deliberate CPU RAM-saving default (see class docstring), independent of device.
         self._model_id = model_id
-        self._device   = device
+        self._device   = device if device is not None else resolve_device()
         self._dtype    = dtype
         self._executor = None
         self._failed   = False
