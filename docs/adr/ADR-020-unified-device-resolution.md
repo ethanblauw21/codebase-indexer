@@ -72,7 +72,7 @@ Make `resolve_device()` the **actual** single source of truth for every local mo
 - [x] Verify `CODE_INDEXER_DEVICE=cpu` produces a fully CPU-only index run — proved on **CPU alone** in `tests/test_device.py` (6 new ADR-020 tests): the embedder receives `device="cpu"` under the override (and `"cuda"` when so forced), both summarizers resolve `_device="cpu"`, an explicit `device=` beats the override, and `ChunkSummarizer` dtype follows the resolved device (cpu→float32, cuda→float16). Model loads are faked/monkeypatched — no download, no GPU.
 - [x] Update `src/device.py`'s docstring now that the "single source of truth" claim holds for all four components.
 - [x] Document `CODE_INDEXER_DEVICE=cpu` in the README as the supported force-CPU control.
-- [ ] Close the superseded original branch `feature/adr-020-gpu-acceleration` and its `ADR-020-gpu-acceleration-amd.md` (branch cleanup — the old ADR file never reached master, so nothing to delete there).
+- [x] Close the superseded original branch `feature/adr-020-gpu-acceleration` and its `ADR-020-gpu-acceleration-amd.md` — local branch force-deleted 2026-07-17 (its only unmerged commit was the superseded AMD ADR); the remote ref was already gone and the old ADR file never reached master, so nothing else to remove.
 - [x] Add the bidirectional cross-reference into ADR-024 (**Depended on by: ADR-020**) — done in the rescope commit (PR #25).
 
 **Notes:**
