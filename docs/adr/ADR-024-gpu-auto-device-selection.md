@@ -5,7 +5,7 @@
 **Branch:** `feature/adr-024-gpu-auto-device`
 **Reviewer:** @edb
 **Depends on:** none
-**Depended on by:** none yet
+**Depended on by:** ADR-020 — *extends this ADR's `resolve_device()` to the embedder and summarizer, and makes `CODE_INDEXER_DEVICE` authoritative over all four model loads (this ADR wired only the reranker + eval; the embedder/summarizer still auto-select CUDA independently — see ADR-020 Context).*
 
 ## Context
 
@@ -68,3 +68,4 @@ Note: reranking is **off by default** (`[reranker].enabled = false` in `indexer.
   - The run then died at `hybrid_retriever.py:170` on the ADR-009 §P1 dimension guard — the benchmark indexes bundled to the VM are stale jina-768 while `indexer.toml` now configures bge-code-v1 at 1536. Those indexes are **gitignored, locally-built artifacts** (`.gitignore:64`), not committed ones, so this is local-machine staleness rather than a repo-state problem (**issue #21**; pre-existing, unrelated to this ADR, and not fixed here). The reranker therefore never loaded, so the CUDA batch-size cap (§Context: `min(batch_size, 8)`, tuned for a 16GB T4) and its OOM behavior remain **unverified on any GPU**.
   - The remaining unchecked item ("MCP server starts cleanly and `reindex` runs without error") is **not reachable via the cloud harness at all** — the eval imports `HybridRetriever` directly and never touches `MCPServer`, and `reindex` never loads a reranker. That item is CPU-only work gated on the local `faiss`/`pip install -e .` gap noted 2026-07-13; it needs no GPU.
 - 2026-07-17: Scope clarification on §Decision item 5 (worth recording so it isn't rediscovered): leaving `src/core.py` unchanged is correct for *auto-detection* — the embedder does pick CUDA on its own — but it means `CODE_INDEXER_DEVICE` **cannot force the embedder onto a specific device**, since the override lives in `resolve_device()` and `core.py:66` never calls it. `src/device.py`'s docstring ("single source of truth for which device GPU-capable components run on") is accurate for the reranker and retriever and overbroad for the embedder. Consequence: `CODE_INDEXER_DEVICE=cpu` does not make indexing CPU-only; only `CUDA_VISIBLE_DEVICES=""` does. Not changed here (out of scope — this ADR is reranker device selection); flag it if a real need for embedder pinning appears.
+- 2026-07-17: The "real need" above has appeared — the local GPU is currently unusable (kernel crashes), so a working `CODE_INDEXER_DEVICE=cpu` is a live safety requirement, not a hypothetical. **ADR-020** (rescoped from its obsolete AMD/DirectML original) now owns extending `resolve_device()` to the embedder and summarizer so the override governs all four model loads. Recorded here as the **Depended on by** link.
