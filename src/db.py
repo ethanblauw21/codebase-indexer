@@ -55,6 +55,37 @@ class CallGraphNode:
     # candidate (name-based / unresolved). MIN over reaching edges, so a node
     # with any resolved edge in this direction is verified. Drives the
     # safe-direction verdict rule (ADR-017 §7).
+    confidence: float = 1.0   # ADR-008 §4: MAX effective confidence over reaching
+    # edges (best path wins), derived from candidate when an edge is ungraded.
+    # Gated by EDGE_CONFIDENCE_FLOOR (§5) — the tunable dial that replaces the
+    # coarse boolean once producers (ADR-011) emit graded values.
+
+
+# ---------------------------------------------------------------------------
+# Edge confidence (ADR-008 §4/§5)
+#
+# The "emit unknown rather than a wrong edge" stance is a confidence-threshold
+# policy, not a hard-coded boolean. An edge's effective confidence is its own
+# `confidence` when a producer graded it, else derived from the coarse `candidate`
+# flag. The FLOOR is the single tunable dial: verdict tools assert only at/above it.
+# ---------------------------------------------------------------------------
+
+EDGE_CONFIDENCE_FLOOR = 0.5      # ADR-008 §5 default; tunable against the §1 harness
+_RESOLVED_CONFIDENCE  = 1.0      # candidate=False → fully resolved/verified
+_CANDIDATE_CONFIDENCE = 0.25     # candidate=True  → below the floor, name-match only
+
+
+def effective_confidence(candidate: bool, confidence: Optional[float]) -> float:
+    """An edge's confidence for verdict purposes (ADR-008 §4).
+
+    A graded value set by a producer (e.g. ADR-011) wins. Otherwise derive from
+    the legacy `candidate` boolean: resolved → 1.0, candidate → below the floor.
+    This mapping makes the migration behaviour-preserving — gating on
+    ``effective_confidence >= FLOOR`` is identical to gating on ``not candidate``
+    until real graded values start arriving."""
+    if confidence is not None:
+        return confidence
+    return _CANDIDATE_CONFIDENCE if candidate else _RESOLVED_CONFIDENCE
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +199,7 @@ CREATE TABLE IF NOT EXISTS edges (
     kind            TEXT    NOT NULL,
     resolved_target TEXT,
     candidate       INTEGER NOT NULL DEFAULT 0,
+    confidence      REAL,   -- ADR-008 §4: graded edge confidence; NULL = derive from candidate
     UNIQUE(source_fqn, target, kind)
 );
 
@@ -225,16 +257,28 @@ CREATE INDEX IF NOT EXISTS idx_chunks_file_tier    ON chunks(file_id, tier);
 # Recursive CTE — bidirectional call-graph traversal with cycle guard
 # ---------------------------------------------------------------------------
 
-_CALL_GRAPH_SQL = """\
+# ADR-008 §4: an edge's effective confidence in SQL — a producer-set value wins,
+# else derive from `candidate`. Mirrors effective_confidence() so Python and SQL agree.
+_EDGE_CONF_EXPR = (
+    f"COALESCE(e.confidence, CASE WHEN e.candidate THEN {_CANDIDATE_CONFIDENCE} "
+    f"ELSE {_RESOLVED_CONFIDENCE} END)"
+)
+
+# f-string: only the confidence constants/expression are interpolated; the SQL body
+# has no other braces. `candidate` (MIN) and `confidence` (MAX) are threaded together —
+# under the derived mapping they agree, and they diverge exactly when a producer grades
+# a candidate edge above the floor, which is the point of §4.
+_CALL_GRAPH_SQL = f"""\
 WITH RECURSIVE
-call_graph(fqn, depth, direction, visited, candidate) AS (
+call_graph(fqn, depth, direction, visited, candidate, confidence) AS (
 
     SELECT
         :fqn                                AS fqn,
         0                                   AS depth,
         'root'                              AS direction,
         char(31) || :fqn || char(31)        AS visited,
-        0                                   AS candidate
+        0                                   AS candidate,
+        {_RESOLVED_CONFIDENCE}              AS confidence
 
     UNION ALL
 
@@ -243,7 +287,8 @@ call_graph(fqn, depth, direction, visited, candidate) AS (
         cg.depth + 1,
         'calls',
         cg.visited || COALESCE(e.resolved_target, e.target) || char(31),
-        e.candidate
+        e.candidate,
+        {_EDGE_CONF_EXPR}
     FROM   edges      e
     JOIN   call_graph cg  ON cg.fqn = e.source_fqn
     WHERE  e.kind         = 'CALLS'
@@ -257,7 +302,8 @@ call_graph(fqn, depth, direction, visited, candidate) AS (
         cg.depth + 1,
         'called_by',
         cg.visited || e.source_fqn || char(31),
-        e.candidate
+        e.candidate,
+        {_EDGE_CONF_EXPR}
     FROM   edges      e
     JOIN   call_graph cg  ON cg.fqn = COALESCE(e.resolved_target, e.target)
     WHERE  e.kind         = 'CALLS'
@@ -272,7 +318,8 @@ SELECT
     f.path          AS file_path,
     s.start_line,
     s.end_line,
-    MIN(cg.candidate) AS candidate
+    MIN(cg.candidate)  AS candidate,
+    MAX(cg.confidence) AS confidence
 FROM   call_graph  cg
 LEFT   JOIN symbols s  ON s.fqn = cg.fqn
 LEFT   JOIN files   f  ON f.id  = s.file_id
@@ -339,6 +386,7 @@ class CodeDB:
         self._conn.executescript(_DDL_SQL)
         self._migrate_edges()
         self._migrate_edge_candidate()
+        self._migrate_edge_confidence()
         self._migrate_symbol_locations()
         self._migrate_files_freshness()
         self._seed_index_meta()
@@ -358,6 +406,19 @@ class CodeDB:
             self._conn.execute(
                 "ALTER TABLE edges ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0"
             )
+
+    def _migrate_edge_confidence(self) -> None:
+        """
+        Idempotent additive migration: add the `confidence` column to edges on DBs
+        that predate it (ADR-008 §4). Nullable, no default — NULL means "derive from
+        candidate" via effective_confidence(). Plain ADD COLUMN; no-ops once present.
+        """
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
+        }
+        if "confidence" not in cols:
+            self._conn.execute("ALTER TABLE edges ADD COLUMN confidence REAL")
 
     def _migrate_files_freshness(self) -> None:
         """
@@ -436,6 +497,7 @@ class CodeDB:
             )),
             resolved_target TEXT,
             candidate       INTEGER NOT NULL DEFAULT 0,
+            confidence      REAL,
             UNIQUE(source_fqn, target, kind)
         );
         INSERT OR IGNORE INTO edges_v2(id, source_fqn, target, kind)
@@ -678,13 +740,14 @@ class CodeDB:
             # Edges
             cur.executemany(
                 """
-                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target, candidate)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target, candidate, confidence)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (e.source_fqn, e.target, _normalise_edge_kind(e.kind),
                      getattr(e, "resolved_target", None),
-                     int(getattr(e, "candidate", False)))
+                     int(getattr(e, "candidate", False)),
+                     getattr(e, "confidence", None))
                     for e in edges
                 ],
             )
@@ -784,6 +847,7 @@ class CodeDB:
                 start_line=r["start_line"],
                 end_line=r["end_line"],
                 candidate=bool(r["candidate"]),
+                confidence=float(r["confidence"]) if r["confidence"] is not None else 1.0,
             )
             for r in rows
         ]

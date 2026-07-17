@@ -49,8 +49,14 @@ class Edge:
     resolved_target: Optional[str] = None  # canonical repo-relative path (IMPORTS only)
     candidate: bool = False       # True = name-based / unresolved edge, not verified
     # (ADR-017 §3: Tier-B edges, C++ overload sets). Firewalled from positive
-    # verdicts by the safe-direction rule (ADR-017 §7); ADR-008 §4 later grades
-    # this into Edge.confidence: float | None.
+    # verdicts by the safe-direction rule (ADR-017 §7).
+    confidence: Optional[float] = None
+    # ADR-008 §4: graded edge confidence. None = not scored (derive from `candidate`:
+    # a resolved edge reads as 1.0, a candidate edge as below the verdict floor).
+    # 1.0 = fully resolved/verified; (0,1) = graded (a Tier-B name-match or an
+    # ADR-011 partial resolution). Producers that can grade set this directly; the
+    # verdict floor (ADR-008 §5) is what gates it. `candidate` stays as the coarse
+    # back-compat signal and the default source of confidence.
 
 
 @dataclass
