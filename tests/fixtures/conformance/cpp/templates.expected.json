@@ -1,0 +1,23 @@
+{
+  "feature": "cpp/templates",
+  "language": "cpp",
+  "tier": "A",
+  "known_gap": {
+    "reason": "useTemplates() calls maxOf<int>(box.get(), 10) using explicit template arguments. A correct extractor should emit a call edge (util::useTemplates() -> maxOf) exactly as it would for any bare-identifier call, but tree-sitter-cpp parses an explicit-template-argument call site as a call_expression whose function child is a template_function node, which the adapter's _CALL_QUERY does not match (it only matches identifier / qualified_identifier / field_expression). The edge is silently dropped, so edges_all and edges_call score below 1.0 for this fixture.",
+    "ref": "docs/conformance-fixture-conventions.md#known-gaps — undocumented adapter bug surfaced by this batch (NOT the docstring's 'template instantiations are invisible' blind spot, which concerns instantiation-as-symbol-generation like Box<int>; here a real, already-indexed function loses its call edge). Root cause: _CALL_QUERY in src/adapters/cpp_adapter.py does not match the template_function call-target node tree-sitter-cpp emits for explicit-template-argument call sites — both bare (maxOf<int>(...)) and qualified (std::make_shared<int>(...), via qualified_identifier name: template_function). Recall-only, no FQN/identity corruption. Tracked in issue #16; fix is Major/ADR (src/adapters/cpp_adapter.py) and removes this known_gap marker."
+  },
+  "note": "Box<T> and maxOf<T> are indexed once as their generic definitions (util::Box, util::Box::Box(T), util::Box::get(), util::maxOf(T, T)) — there is no per-instantiation symbol for Box<int>, which is correct: the symbol model has no monomorphized-instantiation concept for any language, so this is not itself a gap. `Box<int> box(5);` is object construction (direct-initialization), not a call_expression, so — consistent with the `new Foo()` rule used across every language in this suite — it correctly produces no call edge and no spurious symbol. `box.get()` is an ordinary field_expression call and IS captured correctly (call edge -> get). The one real miss is the explicit-template-argument call to maxOf<int>(...), captured below as known_gap ground truth.",
+  "symbols": [
+    {"fqn": "util::Box", "kind": "class"},
+    {"fqn": "util::Box::Box(T)", "kind": "constructor"},
+    {"fqn": "util::Box::get()", "kind": "method"},
+    {"fqn": "util::maxOf(T, T)", "kind": "function"},
+    {"fqn": "util::useTemplates()", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "util::Box", "target": "util::Box::Box(T)", "kind": "owns"},
+    {"source": "util::Box", "target": "util::Box::get()", "kind": "owns"},
+    {"source": "util::useTemplates()", "target": "get", "kind": "call"},
+    {"source": "util::useTemplates()", "target": "maxOf", "kind": "call"}
+  ]
+}

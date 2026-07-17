@@ -1,0 +1,15 @@
+{
+  "feature": "cpp/free_functions",
+  "language": "cpp",
+  "tier": "A",
+  "note": "log(int) and log(const std::string&) are DISTINCT symbols because C++ FQNs embed full parameter types, not just arity — the exact contrast with C#'s Namespace.Type.Member/arity scheme, which would collapse both into one Foo/1 key (documented as accepted coarseness there). Both call sites in reportError (log(code) and log(\"boom\")) resolve to the same unresolved call-site name \"log\" (the adapter does not disambiguate overloads at the call site, matching its stated behavior for every language in the suite), so there is exactly one call edge, not two.",
+  "symbols": [
+    {"fqn": "diag::log(int)", "kind": "function"},
+    {"fqn": "diag::log(const std::string&)", "kind": "function"},
+    {"fqn": "diag::reportError(int)", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "free_functions.cpp", "target": "<string>", "kind": "import"},
+    {"source": "diag::reportError(int)", "target": "log", "kind": "call"}
+  ]
+}
