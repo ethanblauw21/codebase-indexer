@@ -737,7 +737,7 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     # run so a name that became ambiguous is demoted back to unresolved.
     res = resolve_call_edges(db)
     print(f"  Call resolution: {res['resolved']} resolved | "
-          f"{res['ambiguous']} ambiguous | {res['external']} external")
+          f"{res['typed']} typed | {res['ambiguous']} ambiguous | {res['external']} external")
 
     # Flush FAISS indexes to disk.
     # Chunk payloads are already in SQLite (committed per-file by upsert_file).

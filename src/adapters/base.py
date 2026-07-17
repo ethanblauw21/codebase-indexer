@@ -57,6 +57,12 @@ class Edge:
     # ADR-011 partial resolution). Producers that can grade set this directly; the
     # verdict floor (ADR-008 §5) is what gates it. `candidate` stays as the coarse
     # back-compat signal and the default source of confidence.
+    receiver_type: Optional[str] = None
+    # ADR-011: for a receiver-typed CALLS edge (recv.Method()), the inferred type name of
+    # the receiver, or None for a bare call / an un-inferable receiver. A *hint*, not a
+    # resolution: call_resolver restricts candidates to those owned by a type of this name
+    # and only a unique match resolves — a wrong hint can fail to match, never fabricate an
+    # edge. Read exclusively by call_resolver; inert everywhere else.
 
 
 @dataclass
