@@ -1,6 +1,6 @@
 # ADR-020: Unified Device Resolution Across the Local Model Stack
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-07-17
 **Branch:** `feature/adr-020-unified-device-resolution`
 **Reviewer:** @ethanblauw21
@@ -67,14 +67,15 @@ Make `resolve_device()` the **actual** single source of truth for every local mo
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] Thread `resolve_device()` into `src/core.py` `_get_embed_model()` (embedder), preserving the lazy singleton and the `max_seq_length` cap.
-- [ ] Thread `resolve_device()` into `src/summarizer.py` (default device + dtype keyed off the resolved device).
-- [ ] Verify `CODE_INDEXER_DEVICE=cpu` produces a fully CPU-only index run — provable on **CPU alone**, no GPU workload required (the point is to confirm the CPU path is taken).
-- [ ] Update `src/device.py`'s docstring now that the "single source of truth" claim holds for all four components.
-- [ ] Document `CODE_INDEXER_DEVICE=cpu` in the README as the supported force-CPU control.
-- [ ] Close the superseded original branch `feature/adr-020-gpu-acceleration` and its `ADR-020-gpu-acceleration-amd.md`.
-- [ ] Add the bidirectional cross-reference into ADR-024 (**Depended on by: ADR-020**) — done in this change.
+- [x] Thread `resolve_device()` into `src/core.py` `_get_embed_model()` (embedder), preserving the lazy singleton and the `max_seq_length` cap. Passes `device=resolve_device()` to the `SentenceTransformer` constructor; the `max_seq_length` cap and lazy-singleton semantics are untouched.
+- [x] Thread `resolve_device()` into `src/summarizer.py` (default device + dtype keyed off the resolved device). **Both** classes fixed: `ChunkSummarizer` (in-process) and `IsolatedChunkSummarizer` (subprocess — the one the indexer actually uses). `device` now defaults to `None` → `resolve_device()` (an explicit `device=` still wins). `ChunkSummarizer`'s dtype is keyed off `self._device == "cuda"` (was raw `torch.cuda.is_available()`). `IsolatedChunkSummarizer`'s `dtype` stays an explicit `"float16"` knob — its documented CPU RAM-saving default, independent of device placement.
+- [x] Verify `CODE_INDEXER_DEVICE=cpu` produces a fully CPU-only index run — proved on **CPU alone** in `tests/test_device.py` (6 new ADR-020 tests): the embedder receives `device="cpu"` under the override (and `"cuda"` when so forced), both summarizers resolve `_device="cpu"`, an explicit `device=` beats the override, and `ChunkSummarizer` dtype follows the resolved device (cpu→float32, cuda→float16). Model loads are faked/monkeypatched — no download, no GPU.
+- [x] Update `src/device.py`'s docstring now that the "single source of truth" claim holds for all four components.
+- [x] Document `CODE_INDEXER_DEVICE=cpu` in the README as the supported force-CPU control.
+- [ ] Close the superseded original branch `feature/adr-020-gpu-acceleration` and its `ADR-020-gpu-acceleration-amd.md` (branch cleanup — the old ADR file never reached master, so nothing to delete there).
+- [x] Add the bidirectional cross-reference into ADR-024 (**Depended on by: ADR-020**) — done in the rescope commit (PR #25).
 
 **Notes:**
 <!-- Add dated comments as you go -->
 - 2026-07-17: Rescoped from the AMD/DirectML/ROCm original. Trigger: while verifying ADR-024 on a spot T4 (PR #19), confirmed that `resolve_device()` governs only the reranker + eval, and that `CODE_INDEXER_DEVICE` does not reach the embedder (`core.py:66` passes no `device=`). Combined with the local GPU being unusable (kernel crashes), that makes the missing override coverage an active safety gap, not a cosmetic one. The old ADR's bulk-embedding-on-local-GPU rationale is fully superseded by the `cloud/` T4 harness, which already does that job (see also #21 on the harness's stale-index issue).
+- 2026-07-17: Implemented (this branch). Verified the footgun on master before fixing — `resolve_device()` was imported only by `hybrid_retriever.py`, `reranker.py`, `tools/real_repo_eval.py`; `core.py:66` and both summarizer classes never consulted it. Surprise during implementation: there are **two** summarizer classes and the live indexing path uses `IsolatedChunkSummarizer` (subprocess), not `ChunkSummarizer` — so fixing only the in-process class (which the §Decision text names) would have left the actual indexing path still ignoring the override. Fixed both. Kept `IsolatedChunkSummarizer.dtype` as its explicit `"float16"` default (documented RAM optimisation, orthogonal to device). Status → `accepted`: §Decision fully implemented, no `Depended on by` obligations to resolve. Full suite green; no GPU touched (CPU-only tests).
