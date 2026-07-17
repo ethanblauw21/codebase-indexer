@@ -20,7 +20,7 @@ try:
     _WATCHDOG_AVAILABLE = True
 except ImportError:
     _WATCHDOG_AVAILABLE = False
-from core import embed, jina_tokenizer, MultiIndexManager, DocumentStore
+from core import jina_tokenizer, MultiIndexManager, DocumentStore
 from hybrid_retriever import HybridRetriever, RetrievedChunk
 from iterative_retriever import IterativeRetriever, RetrievalSession
 
