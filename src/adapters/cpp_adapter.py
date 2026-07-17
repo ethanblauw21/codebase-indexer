@@ -23,7 +23,10 @@ Parameter type normalization rules (pinned in conformance suite):
 
 Documented blind spots (ADR-003 §2.3):
   - Preprocessor macros: macro-generated functions are invisible to the graph.
-  - Template instantiations: definitions index fine; instantiations are invisible.
+  - Template instantiations: definitions index fine; instantiations are invisible
+    (no monomorphized symbol for Box<int>). NOTE: this is symbol generation only — a
+    *call* at an explicit-template-arg site (foo<T>(), std::make_shared<T>()) IS
+    captured as a normal call edge to the callee (issue #16 fix; see _CALL_QUERY).
   - Function pointers and virtual dispatch: resolve to declared type only.
   - Operator overloads: indexed as symbols but rarely earn call edges.
 """
@@ -46,13 +49,21 @@ _GRAMMAR = Language(tscpp.language())
 # Tree-sitter queries
 # ---------------------------------------------------------------------------
 
-# Matches direct function calls: foo(), ns::foo(), obj.method()
+# Matches direct function calls: foo(), ns::foo(), obj.method(), and explicit-template-
+# argument call sites — bare foo<T>() and qualified ns::foo<T>() (issue #16). tree-sitter-cpp
+# wraps an explicit-template-arg call target in a `template_function` node (whose `name` child
+# is the callee identifier); without the two `template_function` alternatives below, every
+# `func<T>(...)` / `std::make_shared<T>(...)` call site is silently dropped. The callee is
+# captured as its bare final identifier (template args stripped), matching the notation used
+# for every other call target here.
 _CALL_QUERY = """
 (call_expression
   function: [
     (identifier) @name
     (qualified_identifier name: (identifier) @name)
+    (qualified_identifier name: (template_function name: (identifier) @name))
     (field_expression field: (field_identifier) @name)
+    (template_function name: (identifier) @name)
   ])
 """
 
