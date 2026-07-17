@@ -754,19 +754,26 @@ def _resolve_symbol_fqns(symbol: str, anchor_file: str = "") -> list[str]:
 def _caller_evidence(symbol: str, anchor_file: str = "") -> tuple[list, list]:
     """Return ``(verified, candidate)`` caller ``CallGraphNode``s for ``symbol``.
 
-    Callers reaching the symbol only through name-based / unresolved (candidate)
-    edges are firewalled into the second list — the safe-direction rule (ADR-017
-    §7) keys on this split. Deduped by caller FQN; a caller verified through any
-    resolved edge is never also counted as candidate. ``CallGraphNode.candidate``
-    is already ``MIN`` over reaching edges (ADR-017 P1), so it is per-node honest.
+    Callers reaching the symbol only through low-confidence (name-based /
+    unresolved) edges are firewalled into the second list — the safe-direction
+    rule (ADR-017 §7) keys on this split. Deduped by caller FQN; a caller verified
+    through any confident edge is never also counted as candidate.
+
+    ADR-008 §5: the split gates on ``CallGraphNode.confidence`` (the ``MAX``
+    effective confidence over reaching edges) against ``EDGE_CONFIDENCE_FLOOR``,
+    not the coarse boolean. Under the derived mapping this is identical to the old
+    ``node.candidate`` split, but a producer-graded candidate edge at/above the
+    floor now correctly reads as verified.
     """
+    from db import EDGE_CONFIDENCE_FLOOR
     db = _db()
     verified: dict[str, object] = {}
     candidate: dict[str, object] = {}
     for fqn in _resolve_symbol_fqns(symbol, anchor_file):
         for node in db.get_callers(fqn):
-            (candidate if node.candidate else verified)[node.fqn] = node
-    for f in list(candidate):        # a resolved sighting wins over a candidate one
+            below_floor = getattr(node, "confidence", 1.0) < EDGE_CONFIDENCE_FLOOR
+            (candidate if below_floor else verified)[node.fqn] = node
+    for f in list(candidate):        # a confident sighting wins over a candidate one
         if f in verified:
             del candidate[f]
     return list(verified.values()), list(candidate.values())
