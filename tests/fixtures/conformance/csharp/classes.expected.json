@@ -1,0 +1,21 @@
+{
+  "feature": "csharp/classes",
+  "language": "csharp",
+  "tier": "A",
+  "note": "C# member FQNs carry a /arity suffix (methods+constructors) but not on properties; type FQNs are namespace-qualified with no file-path prefix (CLR convention, ADR-003 D3). Symbol model = types + constructors + properties + methods; fields are not surfaced as symbols (consistent with the Python/TS batch).",
+  "symbols": [
+    {"fqn": "Shop.Billing.Invoice", "kind": "class"},
+    {"fqn": "Shop.Billing.Invoice.Invoice/1", "kind": "constructor"},
+    {"fqn": "Shop.Billing.Invoice.Customer", "kind": "property"},
+    {"fqn": "Shop.Billing.Invoice.Total/1", "kind": "method"},
+    {"fqn": "Shop.Billing.Invoice.Apply/1", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "classes.cs", "target": "System", "kind": "import"},
+    {"source": "Shop.Billing.Invoice", "target": "Shop.Billing.Invoice.Invoice/1", "kind": "owns"},
+    {"source": "Shop.Billing.Invoice", "target": "Shop.Billing.Invoice.Customer", "kind": "owns"},
+    {"source": "Shop.Billing.Invoice", "target": "Shop.Billing.Invoice.Total/1", "kind": "owns"},
+    {"source": "Shop.Billing.Invoice", "target": "Shop.Billing.Invoice.Apply/1", "kind": "owns"},
+    {"source": "Shop.Billing.Invoice.Total/1", "target": "Apply", "kind": "call"}
+  ]
+}

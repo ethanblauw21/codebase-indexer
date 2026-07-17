@@ -107,9 +107,16 @@ class Qwen3Reranker:
         return scores
 
 
-def load_reranker(model_id, device="cpu"):
+def load_reranker(model_id, device=None):
     """Return a reranker exposing .predict(pairs, batch_size). Qwen3 -> logit scorer;
-    anything else -> sentence-transformers CrossEncoder."""
+    anything else -> sentence-transformers CrossEncoder.
+
+    ``device`` defaults to ``device.resolve_device()`` (ADR-024) — ``"cuda"`` if
+    available, else ``"cpu"``. Override with ``CODE_INDEXER_DEVICE`` or pass explicitly.
+    """
+    if device is None:
+        from device import resolve_device
+        device = resolve_device()
     if "qwen3-reranker" in model_id.lower():
         print(f"Loading reranker (Qwen3 logit-scorer): {model_id}", flush=True)
         return Qwen3Reranker(model_id, device=device)

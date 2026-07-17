@@ -1,0 +1,12 @@
+{
+  "feature": "cpp/structs_enums",
+  "language": "cpp",
+  "tier": "A",
+  "note": "struct Point and enum class Status are both namespace-qualified type symbols (net::Point, net::Status); Point's data members (x, y) and Status's enumerators (Ok, Error) are NOT symbols, per the ADR-008 symbol model shared across all language batches. checkPoint's parameter type is recorded exactly as written in the source (\"const Point&\", unqualified — the adapter performs no type resolution to net::Point). Status::Error / Status::Ok are qualified-identifier expressions (enumerator access), not call_expressions, so correctly produce zero call edges — there is nothing here for a correct extractor to call-edge.",
+  "symbols": [
+    {"fqn": "net::Point", "kind": "struct"},
+    {"fqn": "net::Status", "kind": "enum"},
+    {"fqn": "net::checkPoint(const Point&)", "kind": "function"}
+  ],
+  "edges": []
+}

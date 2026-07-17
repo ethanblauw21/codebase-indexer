@@ -1,0 +1,14 @@
+{
+  "feature": "cpp/namespaces",
+  "language": "cpp",
+  "tier": "A",
+  "note": "Free functions are namespace-qualified with :: (net::square(int)); a nested namespace_definition (net::util) contributes an additional :: segment (net::util::triple(int)). Calls resolve to the callee's bare final identifier (square), matching the C# convention of edges keyed on the unresolved call-site name, not a fully-qualified target.",
+  "symbols": [
+    {"fqn": "net::square(int)", "kind": "function"},
+    {"fqn": "net::sumOfSquares(int, int)", "kind": "function"},
+    {"fqn": "net::util::triple(int)", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "net::sumOfSquares(int, int)", "target": "square", "kind": "call"}
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "feature": "cpp/templates",
+  "language": "cpp",
+  "tier": "A",
+  "note": "Box<T> and maxOf<T> are indexed once as their generic definitions (util::Box, util::Box::Box(T), util::Box::get(), util::maxOf(T, T)) — there is no per-instantiation symbol for Box<int>, which is correct: the symbol model has no monomorphized-instantiation concept for any language, so this is not itself a gap. `Box<int> box(5);` is object construction (direct-initialization), not a call_expression, so — consistent with the `new Foo()` rule used across every language in this suite — it correctly produces no call edge and no spurious symbol. `box.get()` is an ordinary field_expression call and IS captured correctly. The explicit-template-argument call maxOf<int>(...) produces a normal call edge to maxOf — formerly a known-gap (issue #16: _CALL_QUERY did not match the template_function call-target node), fixed by adding the bare + qualified template_function alternatives to _CALL_QUERY.",
+  "symbols": [
+    {"fqn": "util::Box", "kind": "class"},
+    {"fqn": "util::Box::Box(T)", "kind": "constructor"},
+    {"fqn": "util::Box::get()", "kind": "method"},
+    {"fqn": "util::maxOf(T, T)", "kind": "function"},
+    {"fqn": "util::useTemplates()", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "util::Box", "target": "util::Box::Box(T)", "kind": "owns"},
+    {"source": "util::Box", "target": "util::Box::get()", "kind": "owns"},
+    {"source": "util::useTemplates()", "target": "get", "kind": "call"},
+    {"source": "util::useTemplates()", "target": "maxOf", "kind": "call"}
+  ]
+}

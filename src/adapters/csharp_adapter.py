@@ -347,21 +347,24 @@ class CSharpAdapter:
                                symbols=symbols, edges=edges)
             return
 
-        # Modern C# file-scoped namespace: `namespace Foo.Bar;`
-        if t == "file_scoped_namespace_declaration":
-            ns_name = _qualified_or_identifier(node, src)
-            for child in node.children:
-                self._walk(child, src, file_path,
-                           ns=ns_name, outer_local=None,
-                           symbols=symbols, edges=edges)
-            return
-
         if t in _TYPE_DECL_KINDS:
             self._handle_type(node, src, file_path, ns, outer_local, symbols, edges)
             return
 
+        # Default: recurse into children. A file-scoped namespace (`namespace Foo.Bar;`, the
+        # .NET 6+ default) is NOT a container in the tree-sitter-c# grammar — the type
+        # declarations that follow it are its SIBLINGS under compilation_unit, not its
+        # children. So when we pass one in this loop it sets the namespace for every
+        # subsequent sibling (issue #14: previously it was walked as a container, found no
+        # type children, and the real types were walked with ns=None → unqualified FQNs).
+        # There is at most one, and it precedes all types. Block-form `namespace { ... }` is
+        # handled above via its declaration_list and is unaffected.
+        current_ns = ns
         for child in node.children:
-            self._walk(child, src, file_path, ns, outer_local, symbols, edges)
+            if child.type == "file_scoped_namespace_declaration":
+                current_ns = _qualified_or_identifier(child, src)
+                continue
+            self._walk(child, src, file_path, current_ns, outer_local, symbols, edges)
 
     def _handle_type(
         self,

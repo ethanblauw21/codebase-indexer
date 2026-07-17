@@ -1,0 +1,20 @@
+{
+  "feature": "csharp/filescoped_namespace",
+  "language": "csharp",
+  "tier": "A",
+  "note": "File-scoped namespace (`namespace Ledger;`, the .NET 6+ default): every type is qualified Ledger.Account (ADR-003 D3). Formerly a known-gap (issue #14: _walk treated file_scoped_namespace_declaration as a container, but the tree-sitter grammar makes the type declarations its SIBLINGS, so they were walked with ns=None → unqualified FQNs). Fixed by applying a file-scoped namespace to its subsequent siblings in _walk. Ground truth is unchanged — it always encoded the correct qualified semantics.",
+  "symbols": [
+    {"fqn": "Ledger.Account", "kind": "class"},
+    {"fqn": "Ledger.Account.Account/1", "kind": "constructor"},
+    {"fqn": "Ledger.Account.Balance", "kind": "property"},
+    {"fqn": "Ledger.Account.Deposit/1", "kind": "method"},
+    {"fqn": "Ledger.Account.Add/1", "kind": "method"}
+  ],
+  "edges": [
+    {"source": "Ledger.Account", "target": "Ledger.Account.Account/1", "kind": "owns"},
+    {"source": "Ledger.Account", "target": "Ledger.Account.Balance", "kind": "owns"},
+    {"source": "Ledger.Account", "target": "Ledger.Account.Deposit/1", "kind": "owns"},
+    {"source": "Ledger.Account", "target": "Ledger.Account.Add/1", "kind": "owns"},
+    {"source": "Ledger.Account.Deposit/1", "target": "Add", "kind": "call"}
+  ]
+}

@@ -71,6 +71,7 @@ def _progress(msg):
 
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 from eval_common import score_query, ci95 as _ci95, git_sha as _git_sha, append_baseline as _append_baseline  # noqa: E402
+from device import resolve_device  # noqa: E402
 
 # The reranker (arm C) is loaded inside each HybridRetriever construction — i.e. once
 # per repo — and on CPU that reload dominates wall-clock. Cache the load so the 0.6B
@@ -96,29 +97,11 @@ ARMS = {
 }
 
 
-def _auto_device():
-    """Pick the torch device the eval should run the reranker on.
-
-    Local dev has a CPU-only torch build → this resolves to ``cpu`` (unchanged
-    behavior). On a GPU box (e.g. the cloud eval) it resolves to ``cuda`` so the
-    reranker — the whole arm-C bottleneck — actually uses the accelerator instead of
-    silently staying on CPU. Production ``HybridRetriever`` is untouched: it still
-    defaults to ``cpu`` and only loads a reranker when ``[reranker].enabled``. Override
-    with ``EVAL_DEVICE=cpu|cuda`` for a forced comparison.
-    """
-    forced = os.environ.get("EVAL_DEVICE")
-    if forced:
-        return forced
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return "cuda"
-    except Exception:
-        pass
-    return "cpu"
-
-
-_DEVICE = _auto_device()
+# Device the eval runs the reranker on — shared with production (device.py, ADR-024):
+# cuda if available, else cpu. Override with CODE_INDEXER_DEVICE=cpu|cuda for a forced
+# comparison. The reranker (arm C) is the whole arm-C bottleneck, so a GPU box (e.g.
+# the cloud eval) actually uses the accelerator instead of silently staying on CPU.
+_DEVICE = resolve_device()
 # (label, minuend arm, subtrahend arm) — the three §5 paired lifts.
 LIFTS = [("graph", "B", "A"), ("reranker", "C", "B"), ("sparse", "D", "B")]
 LIFT_METRICS = ("mrr@10", "ndcg@10")  # the §5 gate metrics

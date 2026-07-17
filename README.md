@@ -231,8 +231,13 @@ These are known, documented constraints — not bugs. They reflect the fundament
 <!-- CONFORMANCE:START -->
 | Language | Symbols P/R | Edges P/R | Call edges P/R | Fixtures |
 |----------|-------------|-----------|----------------|----------|
+| cpp | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
+| csharp | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
 | python | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
 | typescript | 1.00 / 1.00 | 1.00 / 1.00 | 1.00 / 1.00 | 6 |
 
 _Measured on hand-authored feature fixtures (Tier-A adapters), not an exhaustive corpus — a row is "precision/recall on the fixtures we wrote," never a language's true precision (ADR-008 §7). Regenerate with `python tools/conformance_eval.py --write-readme`._
+
+**Known extraction gaps** (encoded as correct ground truth; reported, not gated — the ruler catching real, documented limitations):
+- **csharp/interface_impl_gap** — Class Foo implements two interfaces (IReader, IWriter) with no base class; both are correctly `implements`. The adapter lacks type resolution and applies the base-list heuristic 'first entry -> extends, rest -> implements', mislabeling IReader as `extends`. Expected edges encode the correct semantics, so all-edges scores below 1.0.
 <!-- CONFORMANCE:END -->

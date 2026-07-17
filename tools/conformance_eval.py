@@ -70,14 +70,36 @@ _CATEGORIES = ("symbols", "edges_all", "edges_call")
 
 
 def normalize_fqn(s: str) -> str:
-    """Strip the path prefix so identifiers are checkout-portable.
+    """Strip the checkout-specific path prefix so identifiers are portable.
 
-    `C:\\…\\sample.py::Foo.bar` -> `Foo.bar`; a bare file source -> its basename;
-    a bare call target (`dumps`) or module (`json`) is returned unchanged.
+    `C:\\…\\sample.py::Foo.bar` -> `Foo.bar`; a bare source-file path -> its basename
+    (`C:\\…\\async_gen.py` -> `async_gen.py`). A bare call target (`dumps`), module
+    (`json`), or namespaced FQN is returned UNCHANGED — including C# member FQNs of the
+    form `Namespace.Type.Member/arity`, whose trailing `/arity` is part of symbol identity,
+    not a path separator. (A naive `os.path.basename` splits on `/` and would collapse
+    every C# method to its arity digit, silently merging distinct methods and masking
+    real recall misses. C# is the first `/arity` language, so this only surfaces here.)
+
+    C++ uses `::` as its *namespace* separator (`shop::Order`, `shop::Order::compute(int)`),
+    NOT a path separator — and its symbols carry no path prefix. So `::` is only treated as
+    the path-prefix delimiter when its left side actually looks like a filesystem path
+    (has a separator or a source-file extension). A bare identifier left side (`shop`) is a
+    C++ namespace and is preserved. Without this guard, `normalize_fqn` would strip the
+    namespace off every C++ FQN, collapsing distinct symbols and masking recall misses —
+    the exact failure mode the C# `/arity` fix above guards against.
     """
     if "::" in s:
-        return s.split("::", 1)[1]
-    return os.path.basename(s)
+        prefix = s.split("::", 1)[0]
+        if ("/" in prefix or "\\" in prefix) or os.path.splitext(prefix)[1]:
+            return s.split("::", 1)[1]
+        return s
+    # Only basename strings that are genuinely filesystem paths: a path separator AND a
+    # file extension on the final component. A C# FQN has a '/' before the arity, but its
+    # final component is a bare integer with no extension, so it passes through untouched.
+    base = os.path.basename(s)
+    if ("/" in s or "\\" in s) and os.path.splitext(base)[1]:
+        return base
+    return s
 
 
 def _symbol_keys(symbols) -> set:
@@ -111,6 +133,77 @@ def _category_sets(symbol_keys: set, edge_keys: set) -> dict:
         "edges_all": edge_keys,
         "edges_call": {e for e in edge_keys if e[2] == "call"},
     }
+
+
+# ---------------------------------------------------------------------------
+# Key-distinctness invariant
+#
+# A normalized key must uniquely identify one raw fact. If two DISTINCT raw keys collapse
+# onto the same normalized key, the scorer can no longer tell them apart: counts undercount
+# and — worse — a real recall miss is masked by a surviving sibling of the same key. This is
+# exactly the defect the old `normalize_fqn` had for C# `/arity` FQNs (every method → its
+# arity digit). Surfacing collisions structurally makes that class of bug impossible to
+# reintroduce silently. (Same-name, same-arity C# overloads legitimately share a key — an
+# accepted coarseness, documented in the conventions doc — so we simply do not author them.)
+# ---------------------------------------------------------------------------
+
+
+def _collisions(raw_norm_pairs) -> dict:
+    """{normalized_key: {distinct raw_keys}} for every normalized key ≥2 raw keys map to."""
+    by_norm: dict = {}
+    for raw, norm in raw_norm_pairs:
+        by_norm.setdefault(norm, set()).add(raw)
+    return {norm: raws for norm, raws in by_norm.items() if len(raws) > 1}
+
+
+def _symbol_norm_pairs(symbols):
+    out = []
+    for s in symbols:
+        fqn = s["fqn"] if isinstance(s, dict) else s.fqn
+        kind = s["kind"] if isinstance(s, dict) else s.kind
+        out.append(((fqn, kind), (normalize_fqn(fqn), kind)))
+    return out
+
+
+def _edge_norm_pairs(edges):
+    out = []
+    for e in edges:
+        if isinstance(e, dict):
+            src, tgt, kind = e["source"], e["target"], e["kind"]
+        else:
+            src, tgt, kind = e.source_fqn, e.target, e.kind
+        out.append(((src, tgt, kind), (normalize_fqn(src), normalize_fqn(tgt), kind)))
+    return out
+
+
+def key_collisions(symbols, edges) -> dict:
+    """Return {'symbols': {...}, 'edges': {...}} of normalized-key collisions (empty = clean).
+
+    Accepts Symbol/Edge objects or expected-json dicts interchangeably, so the same check
+    runs over both hand-authored ground truth and live adapter output.
+    """
+    return {
+        "symbols": _collisions(_symbol_norm_pairs(symbols)),
+        "edges": _collisions(_edge_norm_pairs(edges)),
+    }
+
+
+def validate_known_gap(expected: dict, feature: str) -> dict | None:
+    """Return the known_gap block if present and well-formed, else None.
+
+    A known_gap MUST carry a non-empty `reason` and a `ref` pointing at the documenting
+    section/ADR — we refuse to record a gap nobody can look up (an unreferenced gap is an
+    authoring bug, not a measurement).
+    """
+    kg = expected.get("known_gap")
+    if kg is None:
+        return None
+    if not isinstance(kg, dict) or not kg.get("reason") or not kg.get("ref"):
+        raise ValueError(
+            f"{feature}: 'known_gap' must be an object with non-empty 'reason' and 'ref' "
+            f"(a pointer to the documenting README section or ADR)"
+        )
+    return kg
 
 
 def discover_fixtures() -> list[dict]:
@@ -178,11 +271,22 @@ def score_fixture(fixture: dict) -> dict:
             "spurious": sorted("|".join(map(str, k)) for k in (act_set - exp_set)),
         }
 
+    perfect = all(
+        not per_cat[cat]["missed"] and not per_cat[cat]["spurious"] for cat in _CATEGORIES
+    )
+    known_gap = validate_known_gap(expected, feature)
+
     return {
         "feature": feature,
         "language": language,
         "stem": fixture["stem"],
         "categories": per_cat,
+        "known_gap": known_gap,
+        "perfect": perfect,
+        "collisions": {
+            "expected": key_collisions(expected.get("symbols", []), expected.get("edges", [])),
+            "actual": key_collisions(result.symbols, result.edges),
+        },
     }
 
 
@@ -223,10 +327,51 @@ def aggregate(fixture_results: list[dict]) -> dict:
 
 
 def run() -> dict:
-    """Discover, score, aggregate. Returns {'fixtures': [...], 'by_language': {...}}."""
+    """Discover, score, aggregate into two disjoint sets.
+
+    `by_language` is the CLEAN set (known_gap fixtures excluded) — this is what the committed
+    baseline gates on, so a documented gap can never dilute or inflate the gated number.
+    `by_language_known_gap` reports the gap fixtures honestly; it never gates on a sub-1.0
+    score, but an *unexpected pass* there is surfaced separately (see unexpected_passes).
+    """
     fixtures = discover_fixtures()
     fixture_results = [score_fixture(f) for f in fixtures]
-    return {"fixtures": fixture_results, "by_language": aggregate(fixture_results)}
+    clean = [fr for fr in fixture_results if not fr["known_gap"]]
+    gaps = [fr for fr in fixture_results if fr["known_gap"]]
+    return {
+        "fixtures": fixture_results,
+        "by_language": aggregate(clean),
+        "by_language_known_gap": aggregate(gaps),
+    }
+
+
+def unexpected_passes(results: dict) -> list[str]:
+    """known_gap fixtures that scored perfectly — the documented gap has apparently closed.
+
+    This is an ALERT, not a silent success: the adapter improved (or the fixture drifted),
+    so the fixture must drop its known_gap marker and the docs must be updated. Returns the
+    offending feature names (empty = all gaps still manifest as expected).
+    """
+    return [fr["feature"] for fr in results["fixtures"] if fr["known_gap"] and fr["perfect"]]
+
+
+def collision_report(results: dict) -> list[str]:
+    """Flat list of key-collision messages across every fixture (empty = invariant holds).
+
+    Checks both hand-authored ground truth and live adapter output: a collision on either
+    side means normalization is merging distinct facts and the scorecard cannot be trusted.
+    """
+    msgs: list[str] = []
+    for fr in results["fixtures"]:
+        for side in ("expected", "actual"):
+            for cat in ("symbols", "edges"):
+                for norm_key, raws in fr["collisions"][side][cat].items():
+                    raw_list = ", ".join(sorted(str(r) for r in raws))
+                    msgs.append(
+                        f"{fr['feature']} [{side}/{cat}]: {len(raws)} distinct keys collapse "
+                        f"to {norm_key!r} — {raw_list}"
+                    )
+    return msgs
 
 
 # ---------------------------------------------------------------------------
@@ -236,15 +381,7 @@ def run() -> dict:
 _CAT_LABEL = {"symbols": "Symbols", "edges_all": "Edges (all)", "edges_call": "Call edges"}
 
 
-def render_scorecard(results: dict) -> str:
-    lines = ["", "ADR-008 — Extraction Conformance Scorecard", "=" * 62]
-    by_lang = results["by_language"]
-    if not by_lang:
-        lines.append("(no fixtures found under tests/fixtures/conformance/)")
-        return "\n".join(lines)
-
-    n_fix = len(results["fixtures"])
-    lines.append(f"{n_fix} fixture(s) across {len(by_lang)} language(s)\n")
+def _render_lang_block(lines: list, by_lang: dict) -> None:
     for lang, cats in by_lang.items():
         lines.append(f"[{lang}]")
         for cat in _CATEGORIES:
@@ -255,26 +392,72 @@ def render_scorecard(results: dict) -> str:
             )
         lines.append("")
 
-    # Surface fixtures that scored below perfect — the honest gaps.
-    gaps = []
+
+def render_scorecard(results: dict) -> str:
+    lines = ["", "ADR-008 — Extraction Conformance Scorecard", "=" * 62]
+    by_lang = results["by_language"]
+    gap_lang = results.get("by_language_known_gap", {})
+    if not by_lang and not gap_lang:
+        lines.append("(no fixtures found under tests/fixtures/conformance/)")
+        return "\n".join(lines)
+
+    n_fix = len(results["fixtures"])
+    n_gap = sum(1 for fr in results["fixtures"] if fr["known_gap"])
+    n_lang = len({fr["language"] for fr in results["fixtures"]})
+    lines.append(
+        f"{n_fix} fixture(s) across {n_lang} language(s)  —  "
+        f"{n_fix - n_gap} clean (gate CI), {n_gap} known-gap (reported, never gate)\n"
+    )
+
+    lines.append("CLEAN SET — regression-gated:")
+    lines.append("-" * 62)
+    _render_lang_block(lines, by_lang)
+
+    if gap_lang:
+        lines.append("KNOWN-GAP SET — documented gaps, reported honestly, excluded from the gate:")
+        lines.append("-" * 62)
+        _render_lang_block(lines, gap_lang)
+
+    # Per-fixture missed/spurious detail — the honest gaps. Tag known-gap fixtures so an
+    # expected sub-1.0 is not mistaken for a regression.
+    detail = []
     for fr in results["fixtures"]:
+        tag = " (known gap)" if fr["known_gap"] else ""
         for cat in _CATEGORIES:
             c = fr["categories"][cat]
             if c["missed"] or c["spurious"]:
-                gaps.append((fr["feature"], cat, c["missed"], c["spurious"]))
-    if gaps:
-        lines.append("Gaps (missed = not extracted; spurious = extracted but not expected):")
-        for feat, cat, missed, spurious in gaps:
+                detail.append((fr["feature"] + tag, cat, c["missed"], c["spurious"]))
+    if detail:
+        lines.append("Detail (missed = not extracted; spurious = extracted but not expected):")
+        for feat, cat, missed, spurious in detail:
             lines.append(f"  {feat} / {_CAT_LABEL[cat]}")
             for m in missed:
                 lines.append(f"      MISS {m}")
             for s in spurious:
                 lines.append(f"      SPUR {s}")
+        lines.append("")
+
+    # Alerts — either condition means the harness or a gap needs attention.
+    ups = unexpected_passes(results)
+    if ups:
+        lines.append("!! UNEXPECTED PASS — a known_gap fixture now scores 1.0; the gap has closed:")
+        for feat in ups:
+            lines.append(f"     {feat}  → drop its known_gap marker and update the docs.")
+    collisions = collision_report(results)
+    if collisions:
+        lines.append("!! KEY COLLISION — normalization is merging distinct facts (normalize_fqn defect?):")
+        for msg in collisions:
+            lines.append(f"     {msg}")
     return "\n".join(lines)
 
 
 def render_readme_table(results: dict) -> str:
-    """The committed per-language precision/recall table (ADR-008 §3)."""
+    """The committed per-language precision/recall table (ADR-008 §3).
+
+    The table reports the CLEAN set only (known_gap fixtures excluded), and the fixture
+    count is the clean count so the P/R and the N refer to the same fixtures. Documented
+    gaps are listed separately below so they are visible without contaminating the number.
+    """
     by_lang = results["by_language"]
     rows = [
         "| Language | Symbols P/R | Edges P/R | Call edges P/R | Fixtures |",
@@ -282,6 +465,8 @@ def render_readme_table(results: dict) -> str:
     ]
     counts: dict[str, int] = {}
     for fr in results["fixtures"]:
+        if fr["known_gap"]:
+            continue
         counts[fr["language"]] = counts.get(fr["language"], 0) + 1
     for lang, cats in by_lang.items():
         def pr(cat):
@@ -297,6 +482,17 @@ def render_readme_table(results: dict) -> str:
         "true precision (ADR-008 §7). Regenerate with `python tools/conformance_eval.py "
         "--write-readme`._"
     )
+
+    # Known-gap fixtures: listed, never averaged into the table above.
+    gap_lines = []
+    for fr in results["fixtures"]:
+        if fr["known_gap"]:
+            gap_lines.append(f"- **{fr['feature']}** — {fr['known_gap']['reason']}")
+    if gap_lines:
+        note += (
+            "\n\n**Known extraction gaps** (encoded as correct ground truth; reported, not "
+            "gated — the ruler catching real, documented limitations):\n" + "\n".join(gap_lines)
+        )
     return "\n".join(rows) + "\n" + note
 
 
@@ -377,13 +573,29 @@ def main() -> int:
         print(f"\n[readme {'updated' if ok else 'NOT found'}]")
 
     if args.check_baseline:
+        rc = 0
         problems = check_baseline(results)
         if problems:
-            print("\nBASELINE REGRESSION:")
+            print("\nBASELINE REGRESSION (clean set):")
             for p in problems:
                 print(f"  {p}")
-            return 1
-        print("\n[baseline OK]")
+            rc = 1
+        # Harness-integrity gates — independent of the P/R baseline.
+        collisions = collision_report(results)
+        if collisions:
+            print("\nKEY-COLLISION FAILURE (normalization is merging distinct facts):")
+            for msg in collisions:
+                print(f"  {msg}")
+            rc = 1
+        ups = unexpected_passes(results)
+        if ups:
+            print("\nUNEXPECTED PASS (a known_gap fixture now scores 1.0 — update fixture + docs):")
+            for feat in ups:
+                print(f"  {feat}")
+            rc = 1
+        if rc == 0:
+            print("\n[baseline OK; key-distinctness holds; known gaps still manifest]")
+        return rc
     return 0
 
 
