@@ -141,3 +141,51 @@ clean-set regression, and on any key collision.
    real gaps are captured as `known_gap`.
 4. `--write-baseline` and `--write-readme` to commit the numbers, then run `pytest
    tests/test_conformance.py`.
+
+## Resolution conformance (ADR-011 §4) — a separate harness
+
+The suite above measures **extraction**: what the adapter *emits* from a single pure parse
+(bare call targets like `Save`). It never runs `call_resolver`, so it cannot measure whether
+a call gets *resolved to a target* — the number ADR-011 stands on. That is a **separate
+harness** (`tools/resolution_eval.py`, fixtures under `tests/fixtures/resolution/`, gated by
+`tests/test_resolution_conformance.py` and its own CI job), kept apart because it needs the
+full index→resolve pipeline and a `CodeDB`, whereas the extraction scorer is deliberately
+parse-only.
+
+**What it proves.** On C#/C++ fixtures where several classes share a method name, receiver-type
+inference (ADR-011) raises the **call-edge resolution rate** while **precision is held** — the
+§4 contract. Each fixture is scored twice on the *identical* parse: with the `receiver_type`
+hint (ADR-011) and with it stripped (ADR-021 name-only), so the delta is attributable to
+receiver typing alone. Committed measurement: C# and C++ both **0.40 → 1.00** rate, precision
+**1.00**, zero wrong edges.
+
+**Ground-truth format** — `<feature>.resolution.json` beside the source:
+
+```json
+{
+  "language": "csharp",
+  "calls": [
+    {"source": "Shop.Service.SaveViaField/0", "target": "Save", "expected": "Shop.OrderRepo.Save/0"},
+    {"source": "Shop.Service.ExternalReceiver/1", "target": "Save", "expected": null}
+  ]
+}
+```
+
+**Authoring rules** (the same integrity discipline as extraction):
+
+- `expected` is the single correct in-repo target the resolver *should* pick, authored from
+  **source semantics** — never copied from resolver output.
+- `null` is a **first-class expected value**: it means the call is *correctly unresolvable*
+  (prefer-unknown, §2 — external receiver type, chained receiver `a().b()`, an overload set on
+  a known type). A resolver that resolves a `null`-expected site has manufactured a **wrong
+  edge**, and the harness scores it as a precision violation — not a pass.
+- Cover **every** emitted CALLS edge. The harness fails on a declared-but-unemitted call *or*
+  an emitted-but-undeclared one (`integrity_report`), so the number is never measured over a
+  cherry-picked subset.
+- Include at least one genuinely **shared** method name (the ambiguous case ADR-011 exists
+  for) — a fixture of only unique names resolves identically in both regimes and cannot show
+  the lift (`test_baseline_leaves_ambiguous_names_unresolved` guards this).
+
+Workflow: author the source + ground truth, `python tools/resolution_eval.py` to score,
+`--write-baseline` to commit `benchmarks/resolution/baseline.json`, then `pytest
+tests/test_resolution_conformance.py`.

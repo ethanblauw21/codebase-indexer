@@ -1,0 +1,13 @@
+{
+  "feature": "cpp/shared_method_names",
+  "language": "cpp",
+  "note": "Ground truth authored from source semantics (ADR-011 §4). Each call site's `expected` is the single correct in-repo target, or null where correctly unresolvable (prefer-unknown, §2: chained receiver). `Save` is defined on both OrderRepo and UserRepo, so only the receiver's TYPE settles it; `Load` and `get` are unique names that resolve without a hint (controls). Receiver reached via both -> and .; covers every emitted CALLS edge.",
+  "calls": [
+    {"source": "shop::Service::saveViaField()",           "target": "Save", "expected": "shop::OrderRepo::Save()"},
+    {"source": "shop::Service::saveViaParam(UserRepo*)",   "target": "Save", "expected": "shop::UserRepo::Save()"},
+    {"source": "shop::Service::saveViaLocal()",            "target": "Save", "expected": "shop::OrderRepo::Save()"},
+    {"source": "shop::Service::loadUnique()",              "target": "Load", "expected": "shop::OrderRepo::Load()"},
+    {"source": "shop::Service::chainedReceiver()",         "target": "Save", "expected": null},
+    {"source": "shop::Service::chainedReceiver()",         "target": "get",  "expected": "shop::Service::get()"}
+  ]
+}

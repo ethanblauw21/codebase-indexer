@@ -108,3 +108,26 @@ jobs:
       # metric dropped below the committed benchmarks/conformance/baseline.json.
       - name: Run extraction conformance scorecard
         run: python tools/conformance_eval.py --check-baseline
+
+  resolution-scorecard:
+    name: Resolution conformance (ADR-011 §4)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: pip install -e .
+
+      # The referee for ADR-011: index each C#/C++ fixture through the real pipeline
+      # (parse -> upsert -> resolve) twice — with the receiver-type hint (ADR-011) and with
+      # it stripped (ADR-021) — and fail the build unless the typed resolution rate is above
+      # the name-only baseline with precision held at 1.0. Pure tree-sitter + SQLite, no
+      # embedder, no GPU; runs in seconds.
+      - name: Run resolution conformance scorecard
+        run: python tools/resolution_eval.py --check-baseline

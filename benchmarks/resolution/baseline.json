@@ -1,0 +1,22 @@
+{
+  "cpp": {
+    "baseline": {
+      "precision": 1.0,
+      "rate": 0.4
+    },
+    "typed": {
+      "precision": 1.0,
+      "rate": 1.0
+    }
+  },
+  "csharp": {
+    "baseline": {
+      "precision": 1.0,
+      "rate": 0.4
+    },
+    "typed": {
+      "precision": 1.0,
+      "rate": 1.0
+    }
+  }
+}

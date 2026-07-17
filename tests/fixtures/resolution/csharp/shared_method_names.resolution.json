@@ -1,0 +1,14 @@
+{
+  "feature": "csharp/shared_method_names",
+  "language": "csharp",
+  "note": "Ground truth authored from source semantics (ADR-011 §4). Each call site's `expected` is the single correct in-repo target, or null where the call is correctly unresolvable (prefer-unknown, §2: external receiver type, chained receiver). `Save` is defined on both OrderRepo and UserRepo, so only the receiver's TYPE settles it; `Load` and `GetOrders` are unique names that resolve without a hint (controls). Covers every emitted CALLS edge.",
+  "calls": [
+    {"source": "Shop.Service.SaveViaField/0",     "target": "Save",      "expected": "Shop.OrderRepo.Save/0"},
+    {"source": "Shop.Service.SaveViaParam/1",      "target": "Save",      "expected": "Shop.UserRepo.Save/0"},
+    {"source": "Shop.Service.SaveViaNew/0",        "target": "Save",      "expected": "Shop.OrderRepo.Save/0"},
+    {"source": "Shop.Service.LoadUnique/0",        "target": "Load",      "expected": "Shop.OrderRepo.Load/0"},
+    {"source": "Shop.Service.ExternalReceiver/1",  "target": "Save",      "expected": null},
+    {"source": "Shop.Service.ChainedReceiver/0",   "target": "Save",      "expected": null},
+    {"source": "Shop.Service.ChainedReceiver/0",   "target": "GetOrders", "expected": "Shop.Service.GetOrders/0"}
+  ]
+}
