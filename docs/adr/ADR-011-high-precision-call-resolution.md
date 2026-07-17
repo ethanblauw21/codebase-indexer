@@ -134,13 +134,21 @@ These are *by-design unknowns*, consistent with prefer-unknown — the recall th
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] New per-language type-resolution pass module (runs after adapter parse).
-- [ ] C++ resolution pass in `src/adapters/cpp_adapter.py`: local/param/member type resolution; correctness gate emits `unknown` over wrong.
-- [ ] C# resolution pass in `src/adapters/csharp_adapter.py`: receiver-type inference (incl. the extension-method case currently resolved to candidates-only); same correctness gate.
-- [ ] Go/C resolution passes when those adapters land (future; ADR-017 promotion path).
-- [ ] Emit graded `confidence` per strategy via the shared `Edge.confidence` (ADR-008 §4); calibrate against ADR-008 fixtures.
-- [ ] Prove on C++/C# fixtures (Go/C as their adapters land): resolution rate up, precision held (ADR-008 harness).
+- [x] **Stage 1** — New per-language type-resolution pass module (`src/type_resolver.py`), runs at parse time over the adapter's tree.
+- [x] **Stage 1** — C# resolution pass: receiver-type inference for the **exact** strategies (parameter type, explicit local type, `var` + `new T()`, field type, `this` → enclosing type). Un-inferable receivers (chains, generics, external/predefined types) return `unknown`, never a guess. Wired into `csharp_adapter.py`.
+- [x] **Stage 1** — Receiver-type channel: `Edge.receiver_type` field (base.py) + nullable `edges.receiver_type` column + additive migration `_migrate_edge_receiver_type` (db.py). Read exclusively by `call_resolver`.
+- [x] **Stage 1** — `call_resolver.py` receiver-typed regime: restrict candidates to those whose **owning type's name** (via OWNS edges — language-neutral, no FQN string-parsing) matches the hint; a unique match resolves with graded `confidence` = `_TYPED_CONFIDENCE` (0.9, above the ADR-008 §5 floor, below the 1.0 unique-name grade). A hint matching 0 or ≥2 candidates stays **unresolved with no positional fallback** (§2, prefer-unknown).
+- [x] **Stage 1** — Tests (`tests/test_receiver_type_resolution.py`, 16, CPU-only): every exact strategy, prefer-unknown paths, floor-clearing + graph traversal, and bare-path regression. Full suite 219 pass; `src` flake8 clean.
+- [ ] **Stage 2** — C++ resolution pass in `src/adapters/cpp_adapter.py` (`obj->fn()`, member chains); heuristic member-chain strategy with a lower graded `confidence` (§3).
+- [ ] **Stage 2/3** — Go/C resolution passes when those adapters land (future; ADR-017 promotion path).
+- [ ] **Stage 3** — Prove on C++/C# fixtures via the ADR-008 harness (§4): resolution rate up, precision held. (Stage 1 ships the mechanism; the measured number is a follow-up.)
 - [ ] Resolve **Depended on by**: confirm the graded resolved-edge contract ADR-012 consumes, before `accepted`.
+
+**Stage-1 known limits (by-design, prefer-unknown):**
+- `UNIQUE(source_fqn, target, kind)` (predates this ADR) collapses two calls to the *same method name* from one source into one edge — so a method calling `Save()` on two different receiver types keeps only one hint. A **recall** limit, not precision: the surviving edge still resolves correctly to its type.
+- Only exact strategies ship; `var x = SomeMethod()` (return-type inference), `a.b().c()` chains, generics, and non-in-repo types resolve to `unknown`. These are the graded lower-confidence strategies Stage 2 adds.
 
 **Notes:**
 <!-- 2026-06-18: The mechanism behind the ADR-008 precision number. Pairs with ADR-008 (shares Edge.confidence A3). Defaults: correctness gate = emit `unknown`, never a wrong resolved target; graded confidence per resolution strategy (mirrors competitor's 6-strategy scoring). Done when call-edge resolution rises on C++/C# with precision held (Go/C as their adapters land). Open: how far to push C++ templates; C++/C# adapters not Tier-A yet, Go/C adapters not yet built. Effort H. -->
+<!-- 2026-07-17: Stage 1 landed — C# exact receiver-type inference on the §4/§5 confidence rail (stacked on that branch until #26 merges). C++ (Stage 2) and the ADR-008 harness measurement (Stage 3) are follow-ups; status stays `proposed` until the measured lift lands. -->
+Grammar notes surfaced during Stage 1 (tree-sitter-c-sharp): `this` is a bare `"this"` keyword node, not `this_expression`; a qualified generic (`Ns.List<int>`) ends in a `generic_name` child, so the final-segment name must be a plain `identifier` or it stays unknown.

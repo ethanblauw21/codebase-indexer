@@ -44,6 +44,7 @@ import tree_sitter_c_sharp as tscs
 from adapters.base import Edge, ParseResult, Reference, Symbol, TestConventions
 from adapters._treesitter import node_text, run_query
 from category_tagger import tag_symbol
+from type_resolver import infer_csharp_call_targets, csharp_field_types
 
 _GRAMMAR = Language(tscs.language())
 
@@ -418,9 +419,14 @@ class CSharpAdapter:
         if decl_list is None:
             return
 
+        # ADR-011: field name → declared type, seeded into each method's receiver scope so
+        # `_field.Method()` resolves. Computed once per type, shared by all its members.
+        field_types = csharp_field_types(node, src)
+
         for member in decl_list.children:
             self._handle_member(
-                member, src, file_path, ns, fqn, local_qualifier, symbols, edges
+                member, src, file_path, ns, fqn, local_qualifier,
+                name, field_types, symbols, edges,
             )
 
     def _handle_member(
@@ -431,6 +437,8 @@ class CSharpAdapter:
         ns: Optional[str],
         owner_fqn: str,
         owner_local: str,
+        type_name: str,
+        field_types: dict[str, str],
         symbols: list[Symbol],
         edges: list[Edge],
     ) -> None:
@@ -464,10 +472,9 @@ class CSharpAdapter:
                 shared        = False,
             ))
             edges.append(Edge(source_fqn=owner_fqn, target=member_fqn, kind="owns"))
-            for n, _ in run_query(_GRAMMAR, _CALL_QUERY, node):
-                call_name = node_text(n, src)
-                if call_name:
-                    edges.append(Edge(source_fqn=member_fqn, target=call_name, kind="call"))
+            for ct in infer_csharp_call_targets(node, src, field_types, type_name):
+                edges.append(Edge(source_fqn=member_fqn, target=ct.name,
+                                  kind="call", receiver_type=ct.receiver_type))
 
         elif t == "constructor_declaration":
             name = _decl_name(node, src)
@@ -486,10 +493,9 @@ class CSharpAdapter:
                 shared        = False,
             ))
             edges.append(Edge(source_fqn=owner_fqn, target=member_fqn, kind="owns"))
-            for n, _ in run_query(_GRAMMAR, _CALL_QUERY, node):
-                call_name = node_text(n, src)
-                if call_name:
-                    edges.append(Edge(source_fqn=member_fqn, target=call_name, kind="call"))
+            for ct in infer_csharp_call_targets(node, src, field_types, type_name):
+                edges.append(Edge(source_fqn=member_fqn, target=ct.name,
+                                  kind="call", receiver_type=ct.receiver_type))
 
         elif t == "property_declaration":
             name = _decl_name(node, src)

@@ -200,6 +200,7 @@ CREATE TABLE IF NOT EXISTS edges (
     resolved_target TEXT,
     candidate       INTEGER NOT NULL DEFAULT 0,
     confidence      REAL,   -- ADR-008 §4: graded edge confidence; NULL = derive from candidate
+    receiver_type   TEXT,   -- ADR-011: inferred receiver type name for a recv.Method() call; NULL = bare/unknown
     UNIQUE(source_fqn, target, kind)
 );
 
@@ -387,6 +388,7 @@ class CodeDB:
         self._migrate_edges()
         self._migrate_edge_candidate()
         self._migrate_edge_confidence()
+        self._migrate_edge_receiver_type()
         self._migrate_symbol_locations()
         self._migrate_files_freshness()
         self._seed_index_meta()
@@ -419,6 +421,20 @@ class CodeDB:
         }
         if "confidence" not in cols:
             self._conn.execute("ALTER TABLE edges ADD COLUMN confidence REAL")
+
+    def _migrate_edge_receiver_type(self) -> None:
+        """
+        Idempotent additive migration: add the `receiver_type` column to edges on DBs
+        that predate it (ADR-011). Nullable, no default — NULL means the call is bare or
+        the receiver type could not be inferred. Only `call_resolver` reads it. Plain
+        ADD COLUMN; no-ops once present.
+        """
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
+        }
+        if "receiver_type" not in cols:
+            self._conn.execute("ALTER TABLE edges ADD COLUMN receiver_type TEXT")
 
     def _migrate_files_freshness(self) -> None:
         """
@@ -498,6 +514,7 @@ class CodeDB:
             resolved_target TEXT,
             candidate       INTEGER NOT NULL DEFAULT 0,
             confidence      REAL,
+            receiver_type   TEXT,
             UNIQUE(source_fqn, target, kind)
         );
         INSERT OR IGNORE INTO edges_v2(id, source_fqn, target, kind)
@@ -740,14 +757,15 @@ class CodeDB:
             # Edges
             cur.executemany(
                 """
-                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target, candidate, confidence)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target, candidate, confidence, receiver_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (e.source_fqn, e.target, _normalise_edge_kind(e.kind),
                      getattr(e, "resolved_target", None),
                      int(getattr(e, "candidate", False)),
-                     getattr(e, "confidence", None))
+                     getattr(e, "confidence", None),
+                     getattr(e, "receiver_type", None))
                     for e in edges
                 ],
             )
