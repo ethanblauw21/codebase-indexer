@@ -65,7 +65,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -209,6 +211,110 @@ def compute_diff(db: CodeDB, disk: dict[str, str]) -> DiffResult:
 
 
 # ---------------------------------------------------------------------------
+# Git-derived content timestamps (ADR-025 §2)
+#
+# Every helper degrades to an empty/None result on ANY git failure (not a repo,
+# git binary absent, no commits) and NEVER raises — a git problem must not break
+# indexing. All paths are forward-slash relative to repo root, matching
+# scan_disk()'s normalization, so lookups line up without extra munging.
+# ---------------------------------------------------------------------------
+
+def _now_iso() -> str:
+    """Current UTC time in the same ISO-8601 shape the DDL default uses."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def git_change_times(repo_path: str) -> dict[str, tuple[str, str]]:
+    """One git pass → {path: (committer_iso, author_iso)} for the most recent
+    commit that touched each tracked path (first occurrence wins, as `git log`
+    is newest-first). Returns {} on any git failure. ~85 ms over this repo's
+    history; a single walk replaces per-file `git log -1` invocations.
+
+    A sentinel-prefixed --format lets header lines be told apart from name-only
+    path lines unambiguously (a path cannot begin with the sentinel)."""
+    try:
+        out = subprocess.check_output(
+            ["git", "log", "--format=@@@%cI|%aI", "--name-only", "--no-merges"],
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+
+    times: dict[str, tuple[str, str]] = {}
+    committer: Optional[str] = None
+    author: Optional[str] = None
+    for line in out.splitlines():
+        if line.startswith("@@@"):
+            parts = line[3:].split("|", 1)
+            if len(parts) == 2:
+                committer, author = parts[0], parts[1]
+            continue
+        path = line.strip()
+        if path and committer and path not in times:
+            times[path] = (committer, author or "")
+    return times
+
+
+def git_dirty_paths(repo_path: str) -> set[str]:
+    """Tracked files with uncommitted working-tree changes vs HEAD (ADR-025 §2
+    rule 2). Untracked files are NOT included — they have no git history and fall
+    through to NULL, which is correct. Empty set on any git failure."""
+    try:
+        out = subprocess.check_output(
+            ["git", "diff", "--name-only", "HEAD"],
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {ln.strip() for ln in out.splitlines() if ln.strip()}
+
+
+def git_head_commit(repo_path: str) -> Optional[str]:
+    """HEAD commit hash, or None on any git failure (ADR-025 §4)."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _backfill_null_stamps(db: CodeDB, git_times: dict[str, tuple[str, str]]) -> int:
+    """ADR-025 §1 one-time backfill. Rows indexed before this feature have a NULL
+    content_changed_at and would be invisible to "changed since T" forever. Fill
+    them from the git pass — only NULLs, only tracked paths, never overwriting a
+    real stamp. Idempotent: once filled they no longer match the WHERE, so it is a
+    no-op on every later run. (Legacy dirty files get committer time here rather
+    than now(); a one-time reconciliation, and their next real change restamps.)"""
+    n = 0
+    for path, (committer, author) in git_times.items():
+        cur = db._conn.execute(
+            "UPDATE files SET content_changed_at = ?, "
+            "authored_at = COALESCE(authored_at, ?) "
+            "WHERE path = ? AND content_changed_at IS NULL",
+            (committer, author or None, path),
+        )
+        n += cur.rowcount
+    return n
+
+
+def _write_index_meta(db: CodeDB, repo_path: str) -> None:
+    """ADR-025 §4/§5: record run-level freshness facts from the shared chokepoint
+    so CLI and MCP agree about what is indexed. Written on EVERY completed run,
+    including no-ops — "at commit X, at time T, we verified the index matches the
+    code" is true and strictly more informative than recording only on real work."""
+    head = git_head_commit(repo_path)
+    if head:
+        db.meta_set("last_indexed_commit", head)
+    db.meta_set("last_verified_at", _now_iso())
+    try:
+        db.meta_set("files_total", str(db.stats().get("files", 0)))
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Stale-vector identification (SQLite → FAISS IDs)
 # ---------------------------------------------------------------------------
 
@@ -298,6 +404,8 @@ def ingest_project_file(
     content:      str,
     content_hash: str,
     db:           CodeDB,
+    content_changed_at: Optional[str] = None,
+    authored_at:        Optional[str] = None,
 ) -> None:
     """
     Process a project descriptor (.csproj, .sln, or compile_commands.json):
@@ -318,11 +426,13 @@ def ingest_project_file(
         parse_result = parse_file(rel_path, content)
 
     db.upsert_file(
-        path           = rel_path,
-        content_hash   = content_hash,
-        symbols        = [],
-        edges          = parse_result.edges,
-        chunks_by_tier = {},
+        path               = rel_path,
+        content_hash       = content_hash,
+        symbols            = [],
+        edges              = parse_result.edges,
+        chunks_by_tier     = {},
+        content_changed_at = content_changed_at,
+        authored_at        = authored_at,
     )
     print(f"  [project:{rel_path}] {len(parse_result.edges)} dependency edges stored", flush=True)
 
@@ -340,6 +450,8 @@ def ingest_file(
     db:            CodeDB,
     resolver:      Optional[ImportResolver] = None,
     summarizer:    Optional[object] = None,
+    content_changed_at: Optional[str] = None,
+    authored_at:        Optional[str] = None,
 ) -> dict[str, int]:
     """
     Full pipeline for one file: AST parse → three-tier chunking → embedding
@@ -459,6 +571,8 @@ def ingest_file(
         },
         references=references,
         symbol_types=symbol_types,
+        content_changed_at=content_changed_at,
+        authored_at=authored_at,
     )
     print(f"  [ingest:{rel_path}] SQLite done", flush=True)
 
@@ -509,9 +623,25 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     disk_hashes = scan_disk(repo_path)
     diff        = compute_diff(db, disk_hashes)
 
+    # ADR-025 §2: one git pass up front. Reused for back-dating new files, dirty
+    # detection, and the §1 one-time backfill of legacy NULL stamps. Done before the
+    # no-op check so a quiet repo with legacy rows still gets its stamps backfilled.
+    _git_times = git_change_times(repo_path)
+    _dirty     = git_dirty_paths(repo_path)
+    _run_now   = _now_iso()
+    _n_backfilled = _backfill_null_stamps(db, _git_times)
+    if _n_backfilled:
+        print(f"  Backfilled content_changed_at for {_n_backfilled} legacy file(s).")
+
     n_changed = len(diff.new) + len(diff.modified) + len(diff.deleted)
     if n_changed == 0:
         print("Nothing changed — index is up to date.")
+        # ADR-025 §4: still record that we verified the index against this HEAD at
+        # this time. The early return fires only AFTER scan_disk hashed every file
+        # and found nothing changed, so "verified, nothing stale" is a true fact —
+        # and recording it means a docs-only commit still advances last_indexed_commit
+        # instead of leaving the staleness check firing on README.md forever.
+        _write_index_meta(db, repo_path)
         db.close()
         return
 
@@ -535,6 +665,27 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
         print(f"Indexing {len(to_index)} file(s)...")
     resolver = ImportResolver(repo_path)
 
+    # ADR-025 §2: resolve each file's content_changed_at / authored_at from the git
+    # pass computed above. New files back-date to real change history; modified files
+    # (content just changed since last index) stamp now(); dirty and history-less
+    # files never claim a time they didn't have.
+    _new_set = set(diff.new)
+
+    def _content_stamp(rel: str) -> tuple[Optional[str], Optional[str]]:
+        committer, author = _git_times.get(rel, (None, None))
+        if rel in _new_set:
+            # First index of this path → back-date. Rules, in order:
+            if rel in _dirty:
+                changed = _run_now          # rule 2: indexed the dirty version, not the committed one
+            elif committer:
+                changed = committer         # rule 1: tracked + clean → git committer time
+            else:
+                changed = None              # rule 3: no git history → NULL (segmem ignores it)
+        else:
+            # Modified since last index → the content changed now, as far as we saw.
+            changed = _run_now
+        return changed, (author or None)
+
     errors = 0
     for rel_path in to_index:
         full_path = os.path.join(repo_path, rel_path)
@@ -546,8 +697,13 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
                 content = fh.read()
             print(f"[loop]   {len(content)} chars read", flush=True)
 
+            _cc_at, _auth_at = _content_stamp(rel_path)
+
             if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
-                ingest_project_file(rel_path, content, disk_hashes[rel_path], db)
+                ingest_project_file(
+                    rel_path, content, disk_hashes[rel_path], db,
+                    content_changed_at=_cc_at, authored_at=_auth_at,
+                )
                 continue
 
             print("[loop]   calling ingest_file...", flush=True)
@@ -561,6 +717,8 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
                 db=db,
                 resolver=resolver,
                 summarizer=summarizer,
+                content_changed_at=_cc_at,
+                authored_at=_auth_at,
             )
             t1 = counts.get("tier1_surgical",       0)
             t2 = counts.get("tier2_component",       0)
@@ -585,6 +743,10 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     # Chunk payloads are already in SQLite (committed per-file by upsert_file).
     print("Saving indexes...")
     index_manager.save_all()
+
+    # ADR-025 §4/§5: record run-level freshness facts from this one chokepoint that
+    # all four triggers (CLI, MCP reindex, watchdog, startup) share, so they agree.
+    _write_index_meta(db, repo_path)
     db.close()
 
     with CodeDB(DB_PATH) as verify_db:

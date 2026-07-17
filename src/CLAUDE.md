@@ -115,13 +115,18 @@ Source files
 
 ### MCP Tools (MCPServer.py)
 
-Eleven AI-facing tools grouped by intent:
+Thirteen AI-facing tools grouped by intent:
 
 - **Search**: `semantic_code_search`, `find_similar_code`
 - **Impact**: `analyze_blast_radius`, `detect_pattern_violations`
 - **Tracing**: `trace_data_flow`, `investigate_architecture`
-- **Discovery**: `find_test_coverage`, `find_dead_code`, `find_unabstracted_collection_reads`, `map_module_communities`
-- **Maintenance**: `reindex`
+- **Discovery**: `find_test_coverage`, `find_dead_code`, `find_unabstracted_collection_reads`, `map_module_communities`, `verify_candidate_edges`
+- **Maintenance**: `reindex`, `index_status`
+
+`verify_candidate_edges` (ADR-023) reports edge-aware three-state verdicts over
+candidate (name-based / unresolved) call edges. `index_status` (ADR-025) reports
+index freshness — `last_verified_at`, `last_indexed_commit` vs HEAD, and files whose
+content changed within a window — for agents and downstream context hubs.
 
 `map_module_communities` (ADR-006) is the whole-graph structural view: it reads the
 SQLite edge graph, runs Louvain community detection + betweenness centrality over it
