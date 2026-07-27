@@ -44,6 +44,8 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-007](#b-007) | Verifiable retrieval — Merkle proofs over served index results | study §9.6 | L | raw · trigger-gated |
 | [B-008](#b-008) | Indexer crashes on a Windows `cp1252` console before indexing a single file | found 2026-07-27 | S | shaped |
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
+| [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
+| [B-011](#b-011) | RRF top-5 is a near-total tie — every score is `1/60` or `1/61` | same run, 2026-07-27 | M | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -310,3 +312,74 @@ of being a two-hour reconstruction.
 **Makes structural** the convention now written into
 [`CONTRIBUTING.md` §4.2](../CONTRIBUTING.md#42-measurement-provenance--a-baseline-names-the-stack-it-was-measured-on).
 Worth doing precisely because a convention people must remember is the thing that failed here.
+
+---
+
+<a id="b-010"></a>
+### B-010 — The same chunk text is returned twice, as separate tier-2 and tier-3 hits
+
+**Source:** first live search on the rebuilt index, 2026-07-27 · **Status:** shaped · **Size:** S
+
+A query for *"how are stable FAISS ids computed from a file and offset"* returned, at ranks 2 and 3:
+
+```
+0.0167  tier=tier2_component      fid=511099690527721806  src/stable_id.py:Full File_part_1  len=3794
+0.0167  tier=tier3_architectural  fid=111169463933075209  src/stable_id.py:Full File_part_1  len=3794
+```
+
+Distinct FAISS ids, distinct tiers, **identical text** — 3794 characters, twice, in a top-5. The
+same shape appeared for `src/RecFileSearch.py` and `src/hybrid_retriever.py` in other queries, so
+roughly a fifth of the returned slots were a duplicate of another slot.
+
+**Why it happens:** when a file is smaller than the tier-2 window, the tier-2 and tier-3 sliding
+windows both degenerate to the whole file. Both get embedded, both get stored, both can be retrieved.
+The tiers are meant to offer *different granularities of the same code*; for small files there is
+only one granularity available, and nothing collapses the redundancy afterwards.
+
+**Why it's worth fixing on its own:** it spends the context budget the packer in `core.py` exists to
+protect, and it does so invisibly — the caller sees five results and gets four. It needs no eval to
+justify, because returning the same bytes twice is not a ranking trade-off, it is waste. This is also
+the *cheap half* of what the 2026-07-27 search surfaced; the ranking half is [B-011](#b-011).
+
+**The want:** dedupe on chunk text (or on a content hash) when assembling the final result list,
+keeping the hit from the most specific tier. Open question worth deciding rather than assuming —
+whether to also stop *writing* the duplicate at index time, which would shrink the tier-3 index but
+changes the ingest path and the stable-id story, versus deduping at read time only, which is
+strictly local to the retriever.
+
+---
+
+<a id="b-011"></a>
+### B-011 — RRF top-5 is a near-total tie: every score is `1/60` or `1/61`
+
+**Source:** same run as [B-010](#b-010), 2026-07-27 · **Status:** raw · **Size:** M
+
+Across four unrelated queries on the freshly rebuilt index, **every** returned score was one of two
+values — `0.0167` (`1/60`) or `0.0164` (`1/61`). That is RRF with `k=60` where each result appears in
+**exactly one tier, at rank 0 or 1**. Nothing was reinforced across tiers; a chunk found by two tiers
+would score ~`0.033`, and none did.
+
+So the top-5 ordering is not really being *scored*. It is a five-way tie broken by tier iteration
+order. The ranking happened to be correct on all four queries — `scan_disk`, `get_stale_ids`,
+`search_three_tier_rrf` and `run_incremental` each came back at rank 1 — which is why this is a
+ranking-quality want and not a bug report.
+
+**Why it matters beyond aesthetics.** A flat score distribution gives every downstream signal nothing
+to work with. This is the same signature already recorded for the graph layer, where structural
+expansion turned out to be inert under RRF because the fused scores it was meant to reorder were
+already indistinguishable. Any future work that tries to *adjust* ranking — graph weighting, recency,
+tags — lands on the same flat surface. Fixing the fusion is upstream of all of it.
+
+**Not yet shaped, and deliberately so.** Candidate directions, none chosen:
+- Feed more than the top 1–2 per tier into the fusion, so ranks actually spread.
+- Reconsider `k=60`. It is the published default from the original RRF paper, tuned for fusing many
+  independent systems; three tiers over *one* embedder is a different regime.
+- Carry the dense similarity through as a tiebreak within an RRF tie, rather than discarding it.
+- Accept flat RRF and treat the top-k as an unordered candidate set, which is closer to how the
+  consuming agent actually uses it.
+
+**Measurement caveat, per [`CONTRIBUTING.md` §4.2](../CONTRIBUTING.md#42-measurement-provenance--a-baseline-names-the-stack-it-was-measured-on):**
+this observation is from `BAAI/bge-code-v1` (dim 1536), reranker off, `fusion_mode = "rrf"`, on a
+98-file index of this repo. It is four queries on one small corpus — a real signal about the score
+*distribution*, not a measurement of retrieval quality. Anything that changes fusion needs the ADR-007
+harness, which needs the T4, which is GPU-gated.
