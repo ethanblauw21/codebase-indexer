@@ -1,6 +1,6 @@
 # ADR-024: GPU Auto-Detection with CPU Fallback for the Reranker
 
-**Status:** proposed
+**Status:** accepted (2026-07-17) — built and merged (PR #19): `resolve_device()` auto-detects CUDA for the reranker and the eval harness, with CPU fallback, verified on a cloud T4. **Superseded in scope by ADR-020**, which extended the same helper to the embedder and summarizer and made `CODE_INDEXER_DEVICE` authoritative over the whole local model stack — this ADR wired the reranker only. *Status corrected 2026-07-27 — was `proposed` for ten days after merge.*
 **Date:** 2026-07-13
 **Branch:** `feature/adr-024-gpu-auto-device`
 **Reviewer:** @edb

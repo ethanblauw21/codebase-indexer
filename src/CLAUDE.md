@@ -9,11 +9,24 @@ A local code intelligence engine that indexes Python/TypeScript/JavaScript codeb
 ## Reference Documents
 
 - **Contribution Standards:** Read `CONTRIBUTING.md` before starting any new work — defines minor vs major classification, branch naming, ADR requirements, bug/feature tracking, and PR process.
+- **Docs map:** `docs/README.md` — what every document in `docs/` is for.
+
+## Working Lists
+
+Three documents, three jobs — do not let one hold another's content (`CONTRIBUTING.md` §4):
+
+- `docs/backlog.md` — **wants.** Problems and requests, `B-NNN`, with a source and a date.
+- `docs/roadmap.md` — **order.** Sequencing and dependency edges. Start here to find what's next.
+- `docs/adr/` — **decisions.** One committed solution per file, plus its Implementation Log.
+
+**A backlog item asserts a problem; an ADR asserts a solution you are building.** New wants go to the
+backlog, never to a new `proposed` ADR on `master`.
 
 ## Working Style
 
 - For non-trivial new features or significant design decisions, use `/grill-plan` to produce an ADR before implementing.
 - Major changes are any changes to `src/`. They require a branch, an ADR, and a PR. See `CONTRIBUTING.md`.
+- **The ADR is born on its branch** — created in the branch's first commit, `accepted` when it reaches `master`. Nothing is ever proposed on `master`.
 
 ## Installation
 

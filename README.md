@@ -191,6 +191,19 @@ indexer/
 
 The `.code-index/` directory (FAISS indexes, `graph.db`, `doc_store.json`) is generated at runtime and is git-ignored.
 
+## Documentation
+
+[`docs/README.md`](docs/README.md) is the map. Three working lists, three jobs, no overlap:
+
+| Doc | Holds |
+|---|---|
+| [`docs/backlog.md`](docs/backlog.md) | **wants** — problems and requests, with a source and a date |
+| [`docs/roadmap.md`](docs/roadmap.md) | **order** — sequencing and dependency edges. Start here to find what's next. |
+| [`docs/adr/`](docs/adr/) | **decisions** — one committed solution per file, plus its Implementation Log |
+
+A backlog item asserts a problem; an ADR asserts a solution you are building. Contribution standards,
+including the branch-born ADR rule, are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Key Design Decisions
 
 - **Stable FAISS IDs** — 60-bit deterministic IDs (file hash × offset) allow surgical removes without full rebuilds.

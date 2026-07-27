@@ -1,5 +1,26 @@
 # Proposed ADR Backlog — Buckets from the Research Docs
 
+> ## ⚠️ Frozen 2026-07-27 — superseded by `backlog.md` + `roadmap.md`
+>
+> This file did three jobs at once — **intake** (the buckets), **sequencing** (the waves), and
+> **per-ADR build kits** — and that is precisely why the ADR set drifted into a backlog. Nine of the
+> buckets below became `proposed` ADR files that were never built, and nothing in the process could
+> ever remove one again.
+>
+> The three jobs are now split:
+> **wants → [`backlog.md`](./backlog.md)** · **order → [`roadmap.md`](./roadmap.md)** ·
+> **decisions → [`adr/`](./adr/)**. See [`README.md`](./README.md#working-lists) for the rule.
+>
+> **This file is history, and history is the only job it still has — edit it never.** It is kept, not
+> deleted, for two things a summary would destroy: the **build kits** below (deps, touch-points,
+> default decisions and citations per ADR, still accurate as research) and the **traceability table**
+> mapping every research idea to its bucket. Live ADRs cite it as their source of record.
+>
+> **Read the wave plan below as of 2026-06-18, not as of today.** Waves 0 and 1 are complete —
+> including two component rejections the harness earned — and Waves 2 and 3 were never started.
+> [`roadmap.md`](./roadmap.md#closed-waves) carries the current state; where the two disagree, the
+> roadmap wins.
+
 > **Status:** planning index (not ADRs themselves). Groups the actionable ideas scattered across the 2026-06-18
 > research docs into coherent, independently-decidable ADR buckets, with dependencies and priority.
 > **Numbering is now assigned, not provisional.** ADRs **007–015** (the buckets below) have been drafted as

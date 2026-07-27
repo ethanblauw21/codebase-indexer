@@ -1,6 +1,6 @@
 # ADR-011: High-Precision Call Resolution — Hybrid Type Resolution That Earns the Precision ADR-008 Measures
 
-**Status:** proposed
+**Status:** accepted (2026-07-17) — Stages 1–3 built and merged (PRs #27, #28, #29): C# then C++ receiver-type inference via `type_resolver.py` + `Edge.receiver_type` + a language-neutral typed regime in `call_resolver`, proven by the Stage-3 resolution-conformance harness (`tools/resolution_eval.py`), which measured the resolution rate rising **0.40 → 1.00 with precision held at 1.0**. **Still open (checkboxes below, not blockers):** Stage 2b member chains (`a.b().c()`), and Go/C passes when those adapters land. The ADR-012 contract obligation is **recorded, not blocking** — ADR-012 is unbuilt, and per CONTRIBUTING §4.1 an obligation to an unbuilt ADR does not hold a shipped ADR at `proposed`. *Status corrected 2026-07-27 — this clause alone was the reason it read `proposed`.*
 **Date:** 2026-06-18
 **Branch:** `feature/adr-011-high-precision-call-resolution`
 **Reviewer:** @ethanblauw21
