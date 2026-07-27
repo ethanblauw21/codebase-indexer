@@ -7,6 +7,7 @@ Start here.
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Contribution standards — change classification, branches, the ADR lifecycle, PRs. Read before starting work. |
 | [`../src/CLAUDE.md`](../src/CLAUDE.md) | Architecture, the three-tier index, the RTR pipeline, the MCP tool surface. Read before touching code. |
 | [`../README.md`](../README.md) | What the tool is and what it does. |
+| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | Long-form walkthrough of every part of the engine and why it is shaped that way. A dated snapshot, not a living document. |
 
 ## Working lists
 

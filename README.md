@@ -224,6 +224,11 @@ The `.code-index/` directory (FAISS indexes, `graph.db`, `doc_store.json`) is ge
 A backlog item asserts a problem; an ADR asserts a solution you are building. Contribution standards,
 including the branch-born ADR rule, are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
+For depth this README intentionally skips, [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the
+long-form walkthrough of every part of the engine and why it is shaped that way — a dated snapshot,
+not a living document. Each ADR's `Status:` line is the source of truth for anything summarized here;
+where the two disagree, the ADR is right.
+
 ## Key Design Decisions
 
 - **Stable FAISS IDs** — 60-bit deterministic IDs (file hash × offset) allow surgical removes without full rebuilds.
@@ -289,29 +294,3 @@ _Measured on hand-authored feature fixtures (Tier-A adapters), not an exhaustive
 **Known extraction gaps** (encoded as correct ground truth; reported, not gated — the ruler catching real, documented limitations):
 - **csharp/interface_impl_gap** — Class Foo implements two interfaces (IReader, IWriter) with no base class; both are correctly `implements`. The adapter lacks type resolution and applies the base-list heuristic 'first entry -> extends, rest -> implements', mislabeling IReader as `extends`. Expected edges encode the correct semantics, so all-edges scores below 1.0.
 <!-- CONFORMANCE:END -->
-
-## Documentation
-
-**Decisions.** `docs/adr/` holds the Architecture Decision Records. The `Status:` line in
-each ADR is the source of truth for anything this README summarizes — where the two
-disagree, the ADR is right. `docs/adr-backlog.md` indexes what is proposed but undecided,
-and `docs/adr/ADR-000-template.md` is the starting point for a new one. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the process.
-
-**Orientation.** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the long-form walkthrough
-of every part of the engine and why it is shaped that way — start there for depth this
-README intentionally skips. It is a dated snapshot, not a living document.
-
-**Research and position work.** These informed the ADRs but are *not* committed work; each
-states its own non-binding status in its header.
-
-| Document | What it is |
-|---|---|
-| [prior-art-depth-over-breadth.md](docs/prior-art-depth-over-breadth.md) | The fewer-languages / provable-accuracy thesis underpinning ADR-004 |
-| [references-code-intelligence.md](docs/references-code-intelligence.md) | Working bibliography behind the design rationale |
-| [study-codebase-memory-mcp.md](docs/study-codebase-memory-mcp.md) | Study of the Codebase-Memory paper (tree-sitter KGs over MCP) |
-| [design-research-informed-improvements.md](docs/design-research-informed-improvements.md) | Sourced improvement opportunities mapped onto this codebase |
-| [modernization-stack-review.md](docs/modernization-stack-review.md) | Review of the retrieval stack against 2026 SOTA |
-| [merkle-tree-drift-handling.md](docs/merkle-tree-drift-handling.md) | Evaluation of a Merkle tree for drift detection |
-| [suggestions-future-directions.md](docs/suggestions-future-directions.md) | Menu of candidate directions from a full codebase audit |
-| [agent-prompt-code-intelligence-architect.md](docs/agent-prompt-code-intelligence-architect.md) | Agent prompt used to drive the ADR authoring pass |
