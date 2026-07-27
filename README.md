@@ -7,7 +7,7 @@ A local code intelligence engine that indexes Python, TypeScript, JavaScript, C#
 Instead of grepping for strings, the Codebase Indexer:
 
 - Parses source code with **tree-sitter** to extract real AST symbols (functions, classes, interfaces)
-- Embeds every symbol at **three granularities** using `jinaai/jina-embeddings-v2-base-code`
+- Embeds every symbol at **three granularities** using `BAAI/bge-code-v1`
 - Stores embeddings in **FAISS** and symbol relationships in **SQLite**
 - Serves **11 AI-facing MCP tools** so any compatible assistant (Claude Code, Continue.dev, etc.) can query it
 
@@ -31,7 +31,7 @@ At query time, all three tiers are searched and results are fused with **Recipro
 Source files
   → ast_chunker.py         (tree-sitter AST → symbols + edges + references)
   → incremental_indexer.py (MD5 change detection → stale removals + new embeddings)
-  → core.py                (Jina-Code embeddings, FAISS, token counting)
+  → core.py                (bge-code-v1 embeddings, FAISS, token counting)
   → db.py                  (SQLite: files, symbols, chunks, edges, symbol_references)
   → MCPServer.py           (MCP tools over the combined index)
 ```
@@ -42,7 +42,8 @@ Source files
 
 1. **Semantic** — FAISS top-50 candidates from tier-1
 2. **Structural** — One-hop call-graph expansion via SQLite (bidirectional CTEs, cycle-guarded)
-3. **Reranking** — `jina-reranker-v2-base-code` CrossEncoder (optional; falls back to FAISS scores)
+3. **Reranking** — `Qwen/Qwen3-Reranker-0.6B` cross-encoder. Off by default
+   (`[reranker].enabled = false`); when disabled the fused retrieval scores stand.
 
 `iterative_retriever.py` wraps this in multi-round loops with confidence-based early stopping and query enrichment from prior findings.
 
@@ -167,18 +168,37 @@ is tracked separately).
 
 ```
 indexer/
+├── indexer.toml               # Per-repo configuration (embedder, retrieval, eval, ignores)
 ├── requirements.txt
+├── benchmarks/                # Eval deliverables: baselines, qrels, fixtures (ADR-007/019)
+├── cloud/                     # GPU eval VM launcher + startup script
+├── docs/
+│   ├── ARCHITECTURE.md        # Full architecture walkthrough
+│   ├── adr/                   # Architecture Decision Records — the living source of truth
+│   └── adr-backlog.md         # Proposed/queued decisions
+├── examples/                  # Sample per-language rule configs
+├── scripts/                   # Benchmark launchers (run from the repo root)
+├── tests/
+├── tools/                     # Eval + CI harnesses (coir_eval, conformance_eval, …)
 └── src/
     ├── MCPServer.py            # MCP server entry point — all 11 tools
-    ├── core.py                 # Embeddings (Jina-Code), FAISS management, token counting
+    ├── config.py               # Locates and parses the per-repo indexer.toml
+    ├── core.py                 # Embeddings (bge-code-v1), FAISS management, token counting
     ├── ast_chunker.py          # tree-sitter AST → symbols, edges, chunks
+    ├── adapters/               # Per-language extraction adapters (ADR-003)
+    │   ├── base.py             #   Adapter interface + shared tree-sitter helpers
+    │   └── …                   #   python, ts, csharp, cpp, l5x
     ├── db.py                   # SQLite schema and queries (WAL mode)
+    ├── stable_id.py            # The 60-bit compound-key hash every symbol identity uses
+    ├── call_resolver.py        # Baseline CALLS-edge resolution (ADR-021)
     ├── graph_analytics.py      # Community detection + centrality + god-objects (ADR-006)
     ├── graph_report.py         # Markdown report rendering for map_module_communities
     ├── graph_viz.py            # Design Structure Matrix (DSM) HTML visualization
     ├── incremental_indexer.py  # MD5-based change detection and rebuild logic
     ├── hybrid_retriever.py     # Retrieve → Traverse → Rerank pipeline
     ├── iterative_retriever.py  # Multi-round retrieval with early stopping
+    ├── fusion.py               # Sparse tokenization + score-normalized fusion (ADR-009)
+    ├── reranker.py             # Cross-encoder rescoring — off by default
     ├── import_resolver.py      # tsconfig path aliases, barrel files, relative imports
     ├── category_tagger.py      # Symbol classification
     ├── summarizer.py           # Tier-3 summary generation
@@ -211,7 +231,7 @@ including the branch-born ADR rule, are in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - **Token budgeting** — Context packing in `core.py` respects LLM context windows and warns when truncating.
 - **Monster-line shredding** — `ast_chunker.py` detects and strips Base64 inline SVGs and similar noise before chunking to prevent embedding corruption.
 - **Import resolution** — `import_resolver.py` handles tsconfig path aliases, relative imports, barrel files, and extension inference so graph edges reflect real module boundaries.
-- **Lazy CrossEncoder** — The 500 MB `jina-reranker-v2-base-code` model loads only on the first `investigate_architecture` call, so the MCP handshake completes instantly.
+- **Lazy cross-encoder** — When the reranker is enabled, `Qwen/Qwen3-Reranker-0.6B` (~1.2 GB) loads only on first use rather than at startup, so the MCP handshake completes instantly.
 
 ## Languages Supported for Indexing
 
@@ -269,3 +289,29 @@ _Measured on hand-authored feature fixtures (Tier-A adapters), not an exhaustive
 **Known extraction gaps** (encoded as correct ground truth; reported, not gated — the ruler catching real, documented limitations):
 - **csharp/interface_impl_gap** — Class Foo implements two interfaces (IReader, IWriter) with no base class; both are correctly `implements`. The adapter lacks type resolution and applies the base-list heuristic 'first entry -> extends, rest -> implements', mislabeling IReader as `extends`. Expected edges encode the correct semantics, so all-edges scores below 1.0.
 <!-- CONFORMANCE:END -->
+
+## Documentation
+
+**Decisions.** `docs/adr/` holds the Architecture Decision Records. The `Status:` line in
+each ADR is the source of truth for anything this README summarizes — where the two
+disagree, the ADR is right. `docs/adr-backlog.md` indexes what is proposed but undecided,
+and `docs/adr/ADR-000-template.md` is the starting point for a new one. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the process.
+
+**Orientation.** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) is the long-form walkthrough
+of every part of the engine and why it is shaped that way — start there for depth this
+README intentionally skips. It is a dated snapshot, not a living document.
+
+**Research and position work.** These informed the ADRs but are *not* committed work; each
+states its own non-binding status in its header.
+
+| Document | What it is |
+|---|---|
+| [prior-art-depth-over-breadth.md](docs/prior-art-depth-over-breadth.md) | The fewer-languages / provable-accuracy thesis underpinning ADR-004 |
+| [references-code-intelligence.md](docs/references-code-intelligence.md) | Working bibliography behind the design rationale |
+| [study-codebase-memory-mcp.md](docs/study-codebase-memory-mcp.md) | Study of the Codebase-Memory paper (tree-sitter KGs over MCP) |
+| [design-research-informed-improvements.md](docs/design-research-informed-improvements.md) | Sourced improvement opportunities mapped onto this codebase |
+| [modernization-stack-review.md](docs/modernization-stack-review.md) | Review of the retrieval stack against 2026 SOTA |
+| [merkle-tree-drift-handling.md](docs/merkle-tree-drift-handling.md) | Evaluation of a Merkle tree for drift detection |
+| [suggestions-future-directions.md](docs/suggestions-future-directions.md) | Menu of candidate directions from a full codebase audit |
+| [agent-prompt-code-intelligence-architect.md](docs/agent-prompt-code-intelligence-architect.md) | Agent prompt used to drive the ADR authoring pass |
