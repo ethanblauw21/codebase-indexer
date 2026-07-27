@@ -47,6 +47,15 @@ Source files
 
 `iterative_retriever.py` wraps this in multi-round loops with confidence-based early stopping and query enrichment from prior findings.
 
+> **On the reranker, honestly.** It is a supported opt-in, not a recommended default, and the
+> research thread behind it is closed. Three reasons it stays off: on CPU it costs **~90 s/query**
+> against 0.3–2 s without it; the last measurement predates the current embedder, and on Python and
+> C# plain dense retrieval with `bge-code-v1` now scores *above* the old embedder *with* reranking;
+> and when these tools are consumed over MCP the calling agent re-ranks the results anyway. Turn it
+> on if you have a GPU and a Python-heavy repo — it measured a real lift there (+0.187 mrr@10 on
+> contamination-free fixtures) — but expect nothing for free. Full reasoning in
+> [ADR-009 §P4](docs/adr/ADR-009-retrieval-stack-modernization.md).
+
 ## Installation
 
 ```bash

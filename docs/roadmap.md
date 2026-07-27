@@ -29,12 +29,22 @@ done ─► ADR-020  CODE_INDEXER_DEVICE authoritative over the stack  (#25 #30)
 master is clean. Nothing is in flight.
 ```
 
-**Two branches are unmerged**, and both are decisions rather than unfinished work:
+**One branch is unmerged:**
 
 | Branch | Holds | Waiting on |
 |---|---|---|
 | `feature/adr-009-p2-contextual-chunks` | ADR-009 P2 contextual chunk augmentation — implemented, flag off | a validation run, which is a GPU workload |
-| `chore/repo-cleanup` | repo layout, ignore rules, README drift | nothing — merge or drop it |
+
+*(`chore/repo-cleanup` was merged 2026-07-27 — repo layout, ignore rules, and the README model drift.)*
+
+### The reranker thread is closed (2026-07-27)
+
+`[reranker].enabled` stays `false` **permanently as a default**, and no further reranker measurement
+is planned. The decisive finding: every reranker number was measured on the *previous* embedder, and
+`bge-code-v1` absorbed the gain — on Python and C#, dense-only now scores above the old embedder with
+reranking attached, at 0.3–2 s/query instead of ~90 s on CPU. Backlog **B-003 and B-004 are dropped**;
+the reasoning is recorded there and in ADR-009 §P4 / ADR-019 §6. The feature survives as a documented
+opt-in; the research thread does not.
 
 ### The constraint that shapes everything
 
@@ -50,17 +60,26 @@ it does not.
 
 ### What is actually next
 
-Nothing is committed, and that is the honest state. The three candidates, in the order they'd be
-picked up:
+Nothing is committed to yet, but the shape is clear. In the order they'd be picked up — and note the
+first three are all **first-run experience**, which is what "shared on GitHub for others to run
+locally" actually demands:
 
-1. **Merge or drop `chore/repo-cleanup`.** It is one commit, it has sat since 2026-07-16, and it is
-   the only thing on the board with no dependency at all.
-2. **[B-001](./backlog.md#b-001) — the `IGNORE_DIRS` virtualenv gap.** The one item here that is a
-   live defect rather than an enhancement: any Python repo with an in-tree `venv/` currently gets
-   `site-packages` indexed wholesale. CPU-only work; no GPU gate.
-3. **ADR-009 P2**, if a cloud T4 slot is worth spending on a validation run.
+1. **[B-008](./backlog.md#b-008) — the Windows `cp1252` crash.** The indexer dies on a
+   `UnicodeEncodeError` before indexing a single file on a stock Windows console. It is the first
+   thing a new user hits, and it looks like the tool is broken. Smallest item here, highest blast
+   radius.
+2. **[B-001](./backlog.md#b-001) — the ignore-set gap.** No longer theoretical: a reindex of *this
+   repo* immediately started embedding the cloned eval corpora under `benchmarks/`, which hold
+   **503 of the 601 indexable files in the tree**. Any Python repo with an in-tree `venv/` gets
+   `site-packages` indexed wholesale.
+3. **[B-002](./backlog.md#b-002) — config that does nothing.** Neither `[summarization].enabled` nor
+   the summarizer's `model_id` is read; both are module constants. Decide it together with B-001 —
+   it is one constant-vs-config question, not three.
+4. **The graph decision as an ADR** — the RTR contract change recorded below, which also closes
+   ADR-022.
+5. **ADR-009 P2**, only if a cloud T4 slot is worth spending on a validation run.
 
-Beyond that, the unbuilt ADRs are trigger-gated, not scheduled — see below.
+None of 1–4 is GPU-gated. Beyond that, the unbuilt ADRs are trigger-gated, not scheduled — see below.
 
 ---
 
