@@ -75,6 +75,37 @@ ADRs are required for all Major changes.
   - **An obligation to an unbuilt ADR does not block `accepted`.** Record it as an open checkbox and ship. *(Amended 2026-07-27: the original rule said resolve every obligation "before setting status to `accepted`", which left ADR-011 — merged, tested and measured — stuck at `proposed` because ADR-012, which will likely never be built, had not confirmed a contract. A built thing must not be described as unbuilt.)*
 - **AI agents:** Use `/grill-plan` to draft an ADR before implementing non-trivial features.
 
+## 4.2 Measurement Provenance — a baseline names the stack it was measured on
+
+**Every committed eval number records the components it ran with, and swapping a component marks the
+baselines that depend on it stale in the same PR.**
+
+A retrieval result is a property of the *whole stack*, not of the one part under test. When any
+component changes — embedder, reranker, chunker, fusion mode, resolver — every committed baseline
+measured on the old stack becomes a historical artifact, whether or not the change was "about" that
+baseline.
+
+Two obligations, and the second is the one that gets skipped:
+
+1. **Stamp it.** A result file records the model ids and dimensions it ran with, alongside the
+   `git_sha` it already carries. A number you cannot attribute to a stack is not evidence.
+2. **Invalidate it, in the same PR as the swap.** Do not leave a superseded baseline reading as
+   current. Add the caveat where the *verdict* lives — the ADR — not only in the results file, since
+   the ADR is what people quote.
+
+Also worth stating plainly: **an upgrade to an earlier pipeline stage can silently absorb a later
+stage's entire value.** A better retriever leaves a reranker less to fix. So a component swap does
+not merely age the downstream numbers, it can invert their conclusion.
+
+> **Why this rule exists.** On 2026-07-07 the reranker was settled `off` on a private-slice verdict
+> recorded at 09:42. `bge-code-v1` replaced the embedder at 11:44 the same morning — two hours and
+> nineteen minutes later — and the run that promoted it measured the dense arm only. For twenty days
+> the ADRs read as a current verdict about a stack that no longer existed. When it was finally
+> re-derived (2026-07-27), plain dense retrieval on the new embedder turned out to beat the old
+> embedder *with* reranking on two of five languages: the swap had absorbed the very gain the
+> reranker was being judged on. Nothing was wrong with either measurement. What was missing was the
+> line saying which stack each belonged to. See ADR-009 §P4 and ADR-019 §6.
+
 ## 5. Pull Requests
 
 - Use the PR template (`.github/pull_request_template.md`).

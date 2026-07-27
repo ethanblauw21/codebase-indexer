@@ -43,6 +43,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-006](#b-006) | Supply-chain release verification (SBOM, signing) | study §9.6 | L | raw · trigger-gated |
 | [B-007](#b-007) | Verifiable retrieval — Merkle proofs over served index results | study §9.6 | L | raw · trigger-gated |
 | [B-008](#b-008) | Indexer crashes on a Windows `cp1252` console before indexing a single file | found 2026-07-27 | S | shaped |
+| [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -103,6 +104,40 @@ misindexes its own, today. A working exclusion set is proven out in the run wrap
 additions are a one-line change, whereas moving the set to `indexer.toml` with a documented default
 touches the config contract and is arguably an ADR. Note the same config/constant drift affects
 [B-002](#b-002); deciding it once for both is probably the right move.
+
+#### Implementation survey (2026-07-27) — what the fix actually touches
+
+**Smaller than it looks, for three reasons.**
+
+1. **There is already one source of truth.** Both consumers import from `incremental_indexer`:
+   `scan_disk()` (`:156-177`) and the MCP watchdog filter (`MCPServer.py:1894`). Nothing to
+   reconcile or de-duplicate.
+2. **The migration is free.** `scan_disk()` returns the disk view, and `DiffResult.deleted` is
+   "present in SQLite, absent from disk" (`:184-188`). Newly-ignored files therefore land in
+   `deleted` and are purged on the next incremental run — **an existing bloated index cleans itself,
+   with no forced full reindex.**
+3. **The config path has an exact template.** `config.py` is 39 lines returning a plain dict;
+   `core.py`'s `_emb_cfg()` (`:39-45`) is the cached-read-with-defaults pattern a `[scan]` block
+   would copy verbatim.
+
+**Effort:** constants-only ≈ 10 lines / under an hour. Config-driven `[scan]` block ≈ half a day.
+Neither is architecturally risky.
+
+**The real work is tests: there are none.** No test in `tests/` references `scan_disk`,
+`IGNORE_DIRS`, or `IGNORE_ROOT_DIRS` — the scan gate, which decides what the entire product looks at,
+is completely uncovered. Any fix here should land the first tests for it, and that is the bulk of the
+effort.
+
+**Two genuine decisions, which is what keeps this off the "just do it" pile:**
+
+- **Name-matching is the wrong detector for virtualenvs.** Blanket-ignoring `env` at any depth would
+  skip legitimate source directories (`src/env/` is common), and a venv named `.venv-3.12` is missed
+  entirely. **A virtualenv is precisely identifiable by a `pyvenv.cfg` at its root** — content
+  detection is both stricter and more complete than a name list. Recommended, but it is a design
+  change, not a string addition.
+- **Removing `"indexer"`, `"public"` and `"mocks"` is a behaviour change.** `public/` is a real source
+  directory in many web projects, so today's list silently under-indexes them. Fixing that is
+  correct, but it means some users' next index gets meaningfully larger — worth a release note.
 
 ---
 
@@ -246,3 +281,32 @@ shared on GitHub for local use, this is a first-run blocker, not cosmetic.
 
 The second is smaller and cannot regress; the first keeps the nicer output. Either way, check every
 `print` on the indexing path, not just line 605 — the ingest logging uses `✓` too.
+
+---
+
+<a id="b-009"></a>
+### B-009 — Eval result files don't record which models produced them
+
+**Source:** the reranker provenance miss, 2026-07-27 · **Status:** shaped · **Size:** S
+
+Every row in `benchmarks/real_repo/*.jsonl` carries `repo`, `language`, `arm`, `n`, `git_sha` and the
+metrics — but **not the model ids it ran with**. So a result cannot state its own stack, and
+reconstructing it means checking out the recorded `git_sha` and reading `indexer.toml`. That is
+exactly the archaeology that had to be done on 2026-07-27 to discover that every reranker number
+predated the `bge-code-v1` swap by two hours.
+
+`git_sha` looks like it should be enough, and isn't: the authoritative n=148 run records
+`git_sha: "unknown"` because the cloud bundle is not a git checkout (noted in ADR-009 §P4). The one
+field meant to carry provenance is empty on the most important run.
+
+**The want:** the harness stamps `embedder_model_id`, `embedder_dim`, `reranker_model_id` and
+`summarizer_model_id` into every result row it writes — read from the same `load_indexer_config()`
+the run itself used, so it cannot drift from reality. Then a stale baseline is self-evident instead
+of being a two-hour reconstruction.
+
+**Why it's small:** `tools/eval_common.py` already owns the shared `append_baseline` path, and
+`config.py` already exposes the values. It is a dict update plus a doc line, not new machinery.
+
+**Makes structural** the convention now written into
+[`CONTRIBUTING.md` §4.2](../CONTRIBUTING.md#42-measurement-provenance--a-baseline-names-the-stack-it-was-measured-on).
+Worth doing precisely because a convention people must remember is the thing that failed here.
