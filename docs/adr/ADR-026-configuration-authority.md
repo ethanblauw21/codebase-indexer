@@ -293,13 +293,43 @@ Windows directory junctions are untested (symlinks are safe — `os.walk` defaul
 which undersold it: this is a config schema, a new leaf module, two rewired consumers, a
 deletion guard, an anchoring fix, and a live end-to-end verification run.
 
-**Commit 1 — tests and the inert half (no behaviour change)**
-- [ ] Baseline tests for `scan_disk()` as it exists today, before touching it
-- [ ] Drift test: shipped `indexer.toml` keys are all reachable; code defaults equal shipped values — **must fail on `core.py`'s jina/768 default before that default is fixed**
-- [ ] Fix `core.py`'s stale embedder defaults and the `src/CLAUDE.md` reference
-- [ ] `[summarization].enabled` gates indexing; `ENABLE_SUMMARIZATION` demoted to the default
-- [ ] `[summarization].model_id` threaded to **both** `ChunkSummarizer` and `IsolatedChunkSummarizer` — verify both load paths, per the ADR-020 split-brain precedent
-- [ ] Fix the stale `src/config.py` docstring (the embedder does read config, since ADR-009 §P1)
+**Commit 1 — tests and the inert half (no behaviour change)** ✅ done 2026-07-28
+- [x] Baseline tests for `scan_disk()` as it exists today, before touching it — `tests/test_scan_disk.py`, 13 cases. Four pin behaviour commit 3 will *invert* (venv indexed, `__pycache__` indexed, `public`/`mocks` skipped, case-sensitive matching), each marked `# ADR-026 commit 3 will invert this` so the flip shows up in a diff instead of happening silently.
+- [x] Drift test — `tests/test_config_drift.py`. **Verified it fails on the old defaults before fixing them:** reverting `core.py` to jina/768 produced 2 failures (`test_code_defaults_equal_shipped_values`, `test_embedder_dimension_default_matches_the_model`), then 0 after. The gate condition asked for exactly this evidence.
+- [x] Fix `core.py`'s stale embedder defaults (`bge-code-v1` / 1536) and the `src/CLAUDE.md` references
+- [x] `[summarization].enabled` gates indexing
+- [x] `[summarization].model_id` threaded to **both** summarizer classes
+- [x] Fix the stale `src/config.py` docstring
+- [x] Suite green: **265 passed** (244 before, +21 new)
+
+**Deviations from the Decision text, decided during commit 1:**
+
+1. **`ENABLE_SUMMARIZATION` was removed, not "demoted to the default".** §7 said the
+   constant becomes the default behind `enabled`. That cannot work: the default must sit
+   beside its accessor (§8), the accessor has to live in a leaf module so
+   `incremental_indexer` can ask "is summarization on?" without importing `summarizer`
+   (and therefore torch), and `config.py` importing `incremental_indexer` for the constant
+   would be the import cycle §2 warns about. So `DEFAULT_SUMMARIZATION_ENABLED` lives in
+   `config.py` and the module constant is gone. **This breaks anything that monkey-patched
+   `ii.ENABLE_SUMMARIZATION`** — including `scratchpad/run_cpu_index.py`, which no longer
+   needs to: `[summarization].enabled = false` now works.
+2. **Two more inert keys found:** `[indexer].repo_root` and `[indexer].index_dir` are
+   documented and read by nothing (`REPO_PATH = os.getcwd()`, `INDEX_DIR = ".code-index"`).
+   That makes five inert keys, not three. They are recorded in the drift test's
+   `KNOWN_INERT` map with reasons; `repo_root` is what §6's anchoring work will resolve.
+3. **`query_instruct` was added to the wired set.** Its default was `""` (the jina
+   behaviour) while the shipped config carries the bge instruction — the same drift as
+   `model_id`, one line below it, and it would have survived the fix otherwise.
+4. **`tools/coir_eval.py` has a third defaults table** (`load_config`, `:81-104`) still
+   naming `jinaai/jina-embeddings-v2-base-code` and `jinaai/jina-reranker-v2-base-code` —
+   the latter being the model id `indexer.toml` records as *non-existent*. Out of scope
+   for commit 1 (it is `tools/`, not `src/`) and **not** yet covered by the drift test.
+   Flagged here rather than fixed silently.
+5. **A test assumption of mine was wrong, in a way worth recording.** The case-sensitivity
+   test first used `Node_Modules/`; on Windows the fixture's existing `node_modules/`
+   absorbed it, so the file landed in the correctly-ignored path and the test passed for
+   the wrong reason. A case-variant only slips the gate when the canonically-cased
+   directory does *not* already exist. The test now uses `Dist/` and says why.
 
 **Commit 2 — plumbing (no default changes)**
 - [ ] `src/scan_policy.py` leaf module: `scan_policy()` + `is_indexable(rel_path)`, cached, with `reset()` for tests

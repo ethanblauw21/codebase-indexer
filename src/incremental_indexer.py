@@ -76,6 +76,7 @@ import numpy as np
 
 from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
 from call_resolver import resolve_call_edges
+from config import summarization_enabled, summarizer_model_id
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
@@ -89,7 +90,12 @@ REPO_PATH = os.getcwd()
 INDEX_DIR = ".code-index"
 DB_PATH   = f"{INDEX_DIR}/graph.db"
 
-ENABLE_SUMMARIZATION: bool = True
+# Summarization is config-driven (ADR-026): the gate is [summarization].enabled in
+# indexer.toml, resolved by config.summarization_enabled(). The module constant that
+# used to live here (ENABLE_SUMMARIZATION) was the real gate while the documented
+# config key did nothing, so turning summarization off — the difference between a CPU
+# index that completes and one that does not — required editing source. The default
+# now lives beside its accessor in config.py, once.
 
 IGNORE_DIRS: frozenset[str] = frozenset({
     ".next", "node_modules", "dist", ".git", "build",
@@ -609,10 +615,13 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     db            = CodeDB(DB_PATH)
 
     summarizer = None
-    if ENABLE_SUMMARIZATION:
+    if summarization_enabled():
         from summarizer import IsolatedChunkSummarizer
         summarizer = IsolatedChunkSummarizer()
-        print("  Chunk summarizer enabled (worker process starts on first file processed)")
+        print(f"  Chunk summarizer enabled: {summarizer_model_id()} "
+              f"(worker process starts on first file processed)")
+    else:
+        print("  Chunk summarizer disabled ([summarization].enabled = false)")
 
     faiss_indexes: dict[str, faiss.Index] = {
         name: index_manager.load_or_create(name)
