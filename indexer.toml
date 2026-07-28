@@ -177,16 +177,44 @@ ci_limit_queries = 50
 baseline_path = "benchmarks/baseline.jsonl"
 
 [ignore]
-# Directories to skip at any depth during disk scan.
-dirs = [
-    ".next", "node_modules", "dist", ".git", "build",
-    ".code-index", ".continue", ".claude", ".vs", ".vscode",
-    "Modelfiles", "playwright-report", "test-results",
-    ".github", ".firebase", ".idx", "genkit", "indexer", "public", "mocks",
-]
+# The disk scan gate (ADR-026). Read by src/scan_policy.py, which is the single
+# decision point for "does the indexer look at this file?" — both the indexer's
+# scan and the MCP server's file watcher ask it, so they cannot disagree.
+#
+# THREE KNOBS, TWO SPELLINGS EACH:
+#
+#   extra_dirs / extra_root_dirs / extra_extensions
+#       ADD to the built-in defaults. This is the common case and the safe one.
+#
+#   dirs / root_dirs / extensions
+#       REPLACE the built-in defaults outright. Omit unless you mean it — a user
+#       who sets `dirs` to add one directory silently loses node_modules.
+#
+# Setting both spellings of one knob is an error at load, naming both keys: there
+# is no combined reading of "extend and replace". An explicitly empty list is
+# honored as written — `extra_dirs = []` is a no-op, `dirs = []` excludes nothing.
+#
+# `.git` and `.code-index` are excluded unconditionally; they are not knobs.
+#
+# The built-in defaults live in src/scan_policy.py (DEFAULT_IGNORE_DIRS,
+# DEFAULT_IGNORE_ROOT_DIRS, DEFAULT_INDEXABLE_EXTS) — one home per knob, per §8.
+# They are NOT duplicated here: a bare key in this file *replaces* them, so a copy
+# kept "for reference" would freeze this repo's gate at the day it was copied and
+# silently drop every future default (a new Tier-A language, a new cache dir).
 
-# Directories to skip only at the repository root.
-root_dirs = ["functions"]
+# This repo's own generated and vendored trees. `benchmarks/` holds the cloned CoIR
+# eval corpora — 510 of this tree's 613 indexable files — so without this line an
+# index of this repo is ~83% third-party corpus. Root-only: a nested `benchmarks/`
+# in real source is legitimate.
+extra_root_dirs = ["benchmarks", "gpu-crash-repro", "graphify-out"]
 
-# File extensions to index.
-extensions = [".py", ".ts", ".tsx", ".js", ".jsx"]
+# Examples, for a repo that needs them:
+#
+#   extra_dirs = ["vendor", ".venv-3.12"]     # skipped at any depth
+#   extra_extensions = [".rs", ".go"]         # must start with a dot
+#
+# Defaults as of this writing, for reference only — do NOT paste these into a bare
+# key (see above). Any depth: .next, node_modules, dist, build, .code-index,
+# .continue, .claude, .vs, .vscode, Modelfiles, playwright-report, test-results,
+# .github, .firebase, .idx, genkit, indexer, public, mocks. Root only: functions.
+# Extensions: .py .ts .tsx .js .jsx .cs .cpp .cc .cxx .h .hpp

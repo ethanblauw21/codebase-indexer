@@ -18,17 +18,21 @@ from device import resolve_device
 # ---------------------------------------------------------------------------
 # Embedder configuration (ADR-009 §P1) — config-driven via [embeddings].
 #
-# Read once and cached. Defaults preserve the historical jina-v2 stack exactly
-# (model id, 512 max length, 768 dims), so an unconfigured repo behaves as before.
+# Read once and cached. The defaults below MUST equal the values shipped in
+# indexer.toml — tests/test_config_drift.py enforces that (ADR-026 §8). They used
+# to preserve the historical jina-v2 stack (768 dims), which silently drifted when
+# ADR-009 §P1 promoted bge-code-v1 (1536 dims) in config only: an unconfigured repo
+# would then build a 768-dim index that the configured repo could not load.
 # Swapping the embedder is a model_id + dimension change in indexer.toml followed
 # by a ONE-TIME reindex (vector dimensionality changes → FAISS rebuild; stable_ids
 # are unchanged so it is recompute-vectors-only). MultiIndexManager guards against
 # loading an index whose dimension no longer matches the configured embedder.
 # ---------------------------------------------------------------------------
 
-_DEFAULT_MODEL_ID = "jinaai/jina-embeddings-v2-base-code"
+_DEFAULT_MODEL_ID = "BAAI/bge-code-v1"
 _DEFAULT_MAX_SEQ_LENGTH = 512
-_DEFAULT_DIMENSION = 768
+_DEFAULT_DIMENSION = 1536
+_DEFAULT_QUERY_INSTRUCT = "Given a code search query, retrieve relevant code that answers it"
 
 _emb_cfg_cache = None
 
@@ -54,7 +58,7 @@ def embed_dimension() -> int:
 
 
 # Lazy singleton — loaded on first call to embed() / embed_batch().
-# Deferring the load prevents the Jina model from being loaded inside
+# Deferring the load prevents the embedding model from being loaded inside
 # ProcessPoolExecutor worker processes (which import this module via the
 # spawn import chain on Windows) and keeps import-time side effects minimal.
 _embed_model = None
@@ -124,13 +128,14 @@ def embed(text):
 
     This is the QUERY path (hybrid_retriever, MCPServer). Some embedders — e.g.
     bge-code-v1 (ADR-009 §P1) — require a task instruction on the query side only;
-    documents get no prefix, so embed_batch() (the indexing path) is untouched. When
-    [embeddings].query_instruct is empty (the jina default) no wrapping is applied.
+    documents get no prefix, so embed_batch() (the indexing path) is untouched. Set
+    [embeddings].query_instruct to an empty string to disable wrapping (the behaviour
+    the jina stack needed); the default matches the shipped bge-code-v1 config.
     """
     if not text or not text.strip():
         return np.zeros(embed_dimension(), dtype="float32")
 
-    instruct = _emb_cfg().get("query_instruct", "")
+    instruct = _emb_cfg().get("query_instruct", _DEFAULT_QUERY_INSTRUCT)
     if instruct:
         text = f"<instruct>{instruct}\n<query>{text}"
     vector = _get_embed_model().encode(text, convert_to_numpy=True)

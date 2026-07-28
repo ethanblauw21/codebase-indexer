@@ -35,8 +35,8 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 
 | ID | Want | Source | Size | Status |
 |---|---|---|---|---|
-| [B-001](#b-001) | `IGNORE_DIRS` doesn't exclude Python virtualenvs — an in-tree `venv/` gets fully indexed | ADR-025 review, 2026-07-17 | S | shaped |
-| [B-002](#b-002) | Summarizer model id is hardcoded while every other model reads `indexer.toml` | ADR-009/020 sweeps | S | shaped |
+| [B-001](#b-001) | `IGNORE_DIRS` doesn't exclude Python virtualenvs — an in-tree `venv/` gets fully indexed | ADR-025 review, 2026-07-17 | S | **promoted → ADR-026** |
+| [B-002](#b-002) | Summarizer model id is hardcoded while every other model reads `indexer.toml` | ADR-009/020 sweeps | S | **promoted → ADR-026** |
 | [B-003](#b-003) | ~~Grow the private eval slice to de-noise the clean-TypeScript reranker signal~~ | ADR-019 §6 clause-3 FAIL, 2026-07-07 | M | **dropped** |
 | [B-004](#b-004) | ~~Per-language reranking — the reranker helped Python and hurt TypeScript~~ | ADR-019 §6, 2026-07-07 | M | **dropped** |
 | [B-005](#b-005) | Stale "150+ languages" / "ADR-004 tiers" pointers in the research docs | doc sweep, 2026-07-27 | S | raw |
@@ -76,7 +76,7 @@ work actually starts. See [`roadmap.md`](./roadmap.md#the-legacy-unbuilt-set) fo
 ### B-001 — `IGNORE_DIRS` doesn't exclude Python virtualenvs
 
 **Source:** flagged in ADR-025 §(`ADR-025-index-freshness-metadata.md:140`) during the freshness
-work, 2026-07-17 · **Status:** shaped · **Size:** S
+work, 2026-07-17 · **Status:** promoted → [ADR-026](./adr/ADR-026-configuration-authority.md) · **Size:** S
 
 `IGNORE_DIRS` (`src/incremental_indexer.py:94-99`) excludes the JS/TS world thoroughly —
 `node_modules`, `.next`, `dist`, `build` — and the Python world not at all. Missing: `venv`, `.venv`,
@@ -146,8 +146,8 @@ effort.
 <a id="b-002"></a>
 ### B-002 — Summarizer model id is hardcoded
 
-**Source:** noted in `src/CLAUDE.md` during the ADR-009/ADR-020 model sweeps · **Status:** shaped
-· **Size:** S
+**Source:** noted in `src/CLAUDE.md` during the ADR-009/ADR-020 model sweeps · **Status:** promoted →
+[ADR-026](./adr/ADR-026-configuration-authority.md) · **Size:** S
 
 The embedder reads `[embeddings]` and the reranker reads `[reranker]`, both from `indexer.toml`.
 `src/summarizer.py` still hardcodes its model id, so the `[summarization]` config block is

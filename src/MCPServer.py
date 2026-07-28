@@ -1,7 +1,6 @@
 import os
 import re
 import threading
-from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
@@ -1286,7 +1285,10 @@ def reindex(changed_files_only: bool = False) -> str:
     _old_stdout = sys.stdout
     sys.stdout = _captured
     try:
-        run_incremental()
+        # interactive=False (ADR-026 §5): stdout is captured and there is no human on
+        # the other end, so a bulk deletion is reported in the tool result and skipped
+        # rather than blocking the server on a prompt nobody can see.
+        run_incremental(interactive=False)
     finally:
         sys.stdout = _old_stdout
 
@@ -1866,7 +1868,7 @@ class _ReindexDebouncer:
         print("\n[Watchdog] Change detected — running incremental reindex...")
         try:
             from incremental_indexer import run_incremental
-            run_incremental()
+            run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
             _reload_indexes()
             print("[Watchdog] Reindex complete — in-memory indexes reloaded.\n")
         except Exception as exc:
@@ -1879,11 +1881,12 @@ if _WATCHDOG_AVAILABLE:
         Filters OS filesystem events down to indexable source files, then
         schedules a debounced reindex.
 
-        Mirrors the inclusion/exclusion logic of incremental_indexer.scan_disk():
-          - Only reacts to files whose suffix is in INDEXABLE_EXTS
-          - Skips anything under IGNORE_DIRS at any depth
-          - Skips IGNORE_ROOT_DIRS at the repository root only
-          - Handles created, modified, deleted, and moved (rename) events
+        Shares the inclusion/exclusion decision with
+        `incremental_indexer.scan_disk()` by calling the same `scan_policy` export
+        (ADR-026 §2). It used to re-implement that logic by hand from the raw
+        constants, which is a rule that can drift — and had.
+
+        Handles created, modified, deleted, and moved (rename) events.
         """
 
         def __init__(self, debouncer: _ReindexDebouncer, repo_root: str) -> None:
@@ -1891,20 +1894,14 @@ if _WATCHDOG_AVAILABLE:
             self._repo_root  = repo_root.replace("\\", "/")
 
         def _is_relevant(self, path: str) -> bool:
-            from incremental_indexer import INDEXABLE_EXTS, IGNORE_DIRS, IGNORE_ROOT_DIRS
-            if Path(path).suffix.lower() not in INDEXABLE_EXTS:
-                return False
+            from scan_policy import scan_policy
             try:
-                rel   = os.path.relpath(path, self._repo_root).replace("\\", "/")
+                rel = os.path.relpath(path, self._repo_root).replace("\\", "/")
             except ValueError:
                 return False  # different drive — can't be under repo root
-            parts = rel.split("/")
-            if parts[0] in IGNORE_ROOT_DIRS:
-                return False
-            for part in parts[:-1]:  # directory components only; skip filename
-                if part in IGNORE_DIRS:
-                    return False
-            return True
+            if rel.startswith("../"):
+                return False  # outside the repo root entirely
+            return scan_policy(self._repo_root).is_scannable(rel)
 
         def _maybe_schedule(self, path: str) -> None:
             if self._is_relevant(path):
