@@ -74,13 +74,30 @@ jobs:
       - name: Install project
         run: pip install -e .
 
-      # The embedder (~300 MB) is deterministic; cache it so only the first run
-      # (or a model-id bump) pays the download. Keyed on the model id in core.py.
+      # The embedder is deterministic; cache it so only the first run (or a model-id
+      # bump) pays the download.
+      #
+      # The key is DERIVED from indexer.toml, not written by hand. Hardcoded, it named
+      # jina-embeddings-v2-base-code for the twenty-one days after ADR-009 §P1 promoted
+      # BAAI/bge-code-v1 (2026-07-07) — so the cache never held the model the tripwire
+      # actually loads, and every run re-downloaded ~3 GB under a name describing a
+      # model that had left. Same defect class as ADR-026: a knob whose value the code
+      # does not read. Do not replace this with a literal.
+      - name: Resolve the embedder being cached
+        id: embedder
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import pathlib, re, tomllib
+          cfg = tomllib.loads(pathlib.Path("indexer.toml").read_text(encoding="utf-8"))
+          model = cfg["embeddings"]["model_id"]
+          print("model_id=" + re.sub(r"[^A-Za-z0-9._-]", "-", model))
+          PY
+
       - name: Cache HuggingFace models
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: hf-jina-embeddings-v2-base-code
+          key: hf-${{ steps.embedder.outputs.model_id }}
 
       # One small repo (p-queue), arm B only, committed MRR@10 floor. Self-prepares
       # (clone at pinned SHA + production index), then fails the build if retrieval
