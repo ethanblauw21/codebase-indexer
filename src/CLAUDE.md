@@ -89,6 +89,18 @@ Model IDs live in `indexer.toml` (`[embeddings]`, `[reranker]`, `[summarization]
 
 **A code default must equal the value shipped in `indexer.toml`** — `tests/test_config_drift.py` enforces it (ADR-026 §8). This is not pedantry: `core.py` defaulted to jina/768 for twenty days after config moved to bge/1536, so an unconfigured repo would have built an index a configured repo could not load.
 
+## The Scan Gate
+
+**`src/scan_policy.py` is the single answer to "does the indexer look at this file?"** (ADR-026 §2). Both consumers call it — `incremental_indexer.scan_disk()`, which walks the tree, and `MCPServer._CodeChangeHandler._is_relevant`, which sees only a path string on each filesystem event. They used to be two hand-mirrored implementations over three module constants, which is how a JavaScript-seeded exclusion list survived on a Python tool long enough to index 510 files of third-party eval corpus from this repo's own `benchmarks/`.
+
+It is a **leaf module** — `os`, `dataclasses`, `functools`, `config`. Do not import a sibling `src` module into it: `config` importing `incremental_indexer` for a constant is the cycle ADR-026 §2 was written around, and it would surface only through the server's function-local import path.
+
+Two predicates, and the difference matters: `is_indexable()` is source that gets chunked and embedded; `is_scannable()` is that plus the `.csproj`/`.sln`/`compile_commands.json` descriptors, which are parsed for edges only. The watchdog uses the second — using the first meant editing a `.csproj` never triggered a reindex.
+
+Configuration is the `[ignore]` block. `extra_dirs` / `extra_root_dirs` / `extra_extensions` **add** to the defaults; the bare `dirs` / `root_dirs` / `extensions` keys **replace** them; setting both spellings of one knob raises. Defaults live in `scan_policy.py` and are deliberately **not** duplicated into the shipped `indexer.toml` — a bare key there would freeze this repo's gate and silently drop every future default.
+
+The scan is anchored to the directory holding `indexer.toml`, and a scan launched from a subdirectory is refused rather than resolving root-only exclusions against the wrong tree. A run that would delete more than `max(50, 20%)` of the index asks first (`--prune` to skip); unattended callers log and skip instead.
+
 The reranker and summarizer are both optional — the indexer degrades gracefully without them. **Reranking is off by default** (`[reranker].enabled = false`): the retriever returns the RRF-ranked top-10, which is the measured Wave-0 baseline (ADR-007), not a fallback.
 
 **Changing the embedder is a one-time reindex** (ADR-009 §P1): a new model usually has a different vector `dimension`, so update `model_id` + `dimension` together, delete `.code-index`, and rerun `code-indexer`. `stable_id`s are model-independent, so it is recompute-vectors-only; `core.py` refuses to load an index whose dimension no longer matches the configured embedder.

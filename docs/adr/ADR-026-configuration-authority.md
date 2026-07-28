@@ -468,8 +468,31 @@ is refused outright if it is launched from a subdirectory of the config's own ro
 
 **At merge**
 - [x] Suite green at ≥244 collected — **306**
-- [ ] Read-back: the Decision text matches the diff line-for-line. Under branch-only `proposed` there is no second chance to correct it.
-- [ ] Resolve the downstream obligations listed in **Depended on by** (none) while the context is fresh
+- [x] Read-back: the Decision text against the diff, section by section — below
+- [x] Resolve the downstream obligations listed in **Depended on by** — none, confirmed
+
+### Read-back (2026-07-28)
+
+Every section of the Decision, checked against what shipped. Under branch-only `proposed`
+there is no second chance to correct this text, so the divergences are named here rather
+than left for a reader to find.
+
+| § | Shipped as written? | Where |
+|---|---|---|
+| §1 `[ignore]` owns the gate; precedence; both-keys error; typed | yes | `scan_policy._resolve`, `_resolve_exts` |
+| §1 `extensions` "corrected to 11" | **no — removed instead** (deviation 1, commit 2) | `indexer.toml` |
+| §2 one leaf module, both consumers, constants privatized | yes, plus a third export (deviation 2) | `scan_policy.py`, `MCPServer:1893` |
+| §3 name-based venv exclusion; `pyvenv.cfg` rejected; case-folded | yes; its cost is smaller than priced (deviation 2, commit 3) | `DEFAULT_IGNORE_DIRS`, `_fold` |
+| §4 `indexer`/`public`/`mocks` removed | yes | `DEFAULT_IGNORE_DIRS` |
+| §5 bulk deletion confirmed, unattended runs skip | yes | `bulk_deletion_verdict` |
+| §6 anchored to the config's directory; `.git` boundary; mismatch refused | yes | `config.find_config_path`, `_check_anchor` |
+| §7 `[summarization]` read by both classes | yes | commit 1 |
+| §8 one default per knob, drift test | yes, plus `WIRED_NO_DEFAULT` (deviation 7, commit 2) | `tests/test_config_drift.py` |
+
+One unrecorded divergence, minor: §2 specifies the leaf module imports "only `os`,
+`tomllib` and `config`". It imports `os`, `dataclasses`, `functools` and `config` —
+`tomllib` is reached through `config` rather than directly. All stdlib, no sibling `src`
+module, so the acyclicity §2 depends on holds.
 
 ## Revision history
 

@@ -29,10 +29,11 @@ done ─► ADR-020  CODE_INDEXER_DEVICE authoritative over the stack  (#25 #30)
 master is clean. Nothing is in flight.
 ```
 
-**One branch is unmerged:**
+**Two branches are unmerged:**
 
 | Branch | Holds | Waiting on |
 |---|---|---|
+| `feature/adr-026-configuration-authority` | ADR-026 — all three commits built, 306 tests green | review + merge; nothing technical |
 | `feature/adr-009-p2-contextual-chunks` | ADR-009 P2 contextual chunk augmentation — implemented, flag off | a validation run, which is a GPU workload |
 
 *(`chore/repo-cleanup` was merged 2026-07-27 — repo layout, ignore rules, and the README model drift.)*
@@ -67,17 +68,23 @@ locally" actually demands:
 1. **[B-008](./backlog.md#b-008) — the Windows `cp1252` crash.** The indexer dies on a
    `UnicodeEncodeError` before indexing a single file on a stock Windows console. It is the first
    thing a new user hits, and it looks like the tool is broken. Smallest item here, highest blast
-   radius.
-2. **[B-001](./backlog.md#b-001) — the ignore-set gap.** No longer theoretical: a reindex of *this
-   repo* immediately started embedding the cloned eval corpora under `benchmarks/`, which hold
-   **503 of the 601 indexable files in the tree**. Any Python repo with an in-tree `venv/` gets
-   `site-packages` indexed wholesale.
-3. **[B-002](./backlog.md#b-002) — config that does nothing.** Neither `[summarization].enabled` nor
-   the summarizer's `model_id` is read; both are module constants. Decide it together with B-001 —
-   it is one constant-vs-config question, not three.
+   radius. **Now the only unfixed first-run blocker** — ADR-026 took the other two.
+2. **[B-010](./backlog.md#b-010) — read-time dedup.** ~5 lines over candidates already in memory,
+   fixes existing indexes with no rebuild, needs no eval to justify. The cheap half of what the
+   2026-07-27 live search surfaced.
+3. **[B-011](./backlog.md#b-011) as an ADR** — multi-tier RRF cannot reinforce, because the tier
+   name is the first component of the FAISS id. Upstream of every future ranking change, and the
+   containment-key fix has a real hazard (large-file bias), which is what earns it an ADR.
 4. **The graph decision as an ADR** — the RTR contract change recorded below, which also closes
-   ADR-022.
+   ADR-022. Note B-011 may subsume part of it: the graph layer's inertness under RRF and B-011 now
+   have the same explanation.
 5. **ADR-009 P2**, only if a cloud T4 slot is worth spending on a validation run.
+
+**Done since this list was written:** [B-001](./backlog.md#b-001) and
+[B-002](./backlog.md#b-002) were promoted together into
+[ADR-026](./adr/ADR-026-configuration-authority.md) — one constant-vs-config question, not three —
+and built on `feature/adr-026-configuration-authority`. A scan of this repo now yields 103 files
+instead of 613.
 
 None of 1–4 is GPU-gated. Beyond that, the unbuilt ADRs are trigger-gated, not scheduled — see below.
 
