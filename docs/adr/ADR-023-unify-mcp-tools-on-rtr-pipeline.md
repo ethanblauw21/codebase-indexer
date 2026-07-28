@@ -1,6 +1,6 @@
 # ADR-023: Unify the MCP Tools on the RTR Pipeline — One Retrieval Surface, Edge-Aware Verdicts
 
-**Status:** proposed
+**Status:** accepted (2026-07-17) — both phases built and merged (PR #23). Phase 1 routed the Search, Discovery and Tracing tools through one shared `_search()` RTR surface; Phase 2 added edge-aware three-state verdicts and the `verify_candidate_edges` tool. *Status corrected 2026-07-27 — was `proposed` for ten days after merge.*
 **Date:** 2026-07-08
 **Branch:** `feature/adr-023-unify-mcp-retrieval`
 **Reviewer:** @ethanblauw21

@@ -63,10 +63,13 @@ pointer.  Always deduplicate the id array first (np.unique preserves int64).
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import os
 import subprocess
+import sys
 import traceback
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -76,9 +79,11 @@ import numpy as np
 
 from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
 from call_resolver import resolve_call_edges
+from config import summarization_enabled, summarizer_model_id
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
+from scan_policy import PROJECT_EXTS, PROJECT_FILES, scan_policy
 from stable_id import stable_id, to_faiss_ids, TIER_CONFIGS, TIER_NUM, TIER_NAME
 
 # ---------------------------------------------------------------------------
@@ -89,35 +94,20 @@ REPO_PATH = os.getcwd()
 INDEX_DIR = ".code-index"
 DB_PATH   = f"{INDEX_DIR}/graph.db"
 
-ENABLE_SUMMARIZATION: bool = True
+# Summarization is config-driven (ADR-026): the gate is [summarization].enabled in
+# indexer.toml, resolved by config.summarization_enabled(). The module constant that
+# used to live here (ENABLE_SUMMARIZATION) was the real gate while the documented
+# config key did nothing, so turning summarization off — the difference between a CPU
+# index that completes and one that does not — required editing source. The default
+# now lives beside its accessor in config.py, once.
 
-IGNORE_DIRS: frozenset[str] = frozenset({
-    ".next", "node_modules", "dist", ".git", "build",
-    ".code-index", ".continue", ".claude", ".vs", ".vscode",
-    "Modelfiles", "playwright-report", "test-results",
-    ".github", ".firebase", ".idx", "genkit", "indexer", "public", "mocks"
-})
-IGNORE_ROOT_DIRS: frozenset[str] = frozenset({"functions"})
-
-# Source extensions the disk scan chunks + embeds. C#/C++ have full Tier-A adapters
-# (ADR-003; adapters/__init__.py registers .cs/.cpp/.cc/.cxx/.h/.hpp) and ADR-017 §1
-# lists them as Tier A, but the scan gate historically omitted them — so their source
-# was never chunked, only their .csproj/.sln descriptors (edges only). Wiring the
-# extensions here makes the shipping indexer honor the Tier-A claim for C#/C++.
-INDEXABLE_EXTS: frozenset[str] = frozenset({
-    ".py", ".ts", ".tsx", ".js", ".jsx",   # Tier-A: JS/TS/Python
-    ".cs",                                   # Tier-A: C#
-    ".cpp", ".cc", ".cxx", ".h", ".hpp",     # Tier-A: C++ (.h routed to the C++ adapter)
-})
-
-# Project descriptor files: edges only, no chunking or embedding.
-PROJECT_EXTS: frozenset[str] = frozenset({".csproj", ".sln"})
-
-# Specific filenames (regardless of extension) that are project descriptors.
-PROJECT_FILES: frozenset[str] = frozenset({"compile_commands.json"})
-
-# Combined set for disk scan
-_ALL_SCAN_EXTS: frozenset[str] = INDEXABLE_EXTS | PROJECT_EXTS
+# The scan gate lives in scan_policy (ADR-026 §2), which resolves it from the
+# [ignore] block of indexer.toml over built-in defaults. It used to be three module
+# constants right here, re-implemented by hand in MCPServer's watchdog filter — the
+# drift that let a JavaScript-seeded exclusion list survive on a Python tool.
+#
+# `from incremental_indexer import IGNORE_DIRS` now raises, deliberately: a stale
+# import must fail loudly rather than resolve to an unconfigured value.
 
 # ---------------------------------------------------------------------------
 # MD5 file hash (change detection only — not the stable ID formula)
@@ -142,39 +132,63 @@ def md5_file(path: str) -> str:
 # Disk scan
 # ---------------------------------------------------------------------------
 
-def scan_disk(repo_path: str) -> dict[str, str]:
+def scan_disk(repo_path: str, *, quiet: bool = False) -> dict[str, str]:
     """
     Walk `repo_path` and return {relative_path: md5_hash} for every indexable file.
 
-    Directory exclusions:
-      • Global ignores (IGNORE_DIRS) are applied at every depth.
-      • IGNORE_ROOT_DIRS ("functions") is skipped only at the repository root
-        because the same name might legitimately appear in nested packages.
+    What is included and excluded is decided entirely by `scan_policy` (ADR-026 §2),
+    which resolves `[ignore]` from `indexer.toml` over the built-in defaults. The
+    same policy object answers the MCP server's watchdog filter, so the two cannot
+    drift apart.
+
+    Raises `ValueError` when `repo_path` is not the directory holding `indexer.toml`
+    (ADR-026 §6) — resolved against the wrong root, a root-only exclusion silently
+    matches nothing, and under this gate a silent mismatch decides what gets deleted
+    from the index.
     """
+    policy = scan_policy(repo_path)
+    _check_anchor(policy, repo_path)
+
     result: dict[str, str] = {}
 
     for root, dirs, files in os.walk(repo_path):
         rel_root = os.path.relpath(root, repo_path).replace("\\", "/")
-
-        if rel_root == ".":
-            dirs[:] = [
-                d for d in dirs
-                if d not in IGNORE_DIRS and d not in IGNORE_ROOT_DIRS
-            ]
-        else:
-            dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        policy.prune(dirs, at_root=(rel_root == "."))
 
         for fname in files:
-            if Path(fname).suffix.lower() in _ALL_SCAN_EXTS or fname in PROJECT_FILES:
-                full_path = os.path.join(root, fname)
-                rel_path  = os.path.relpath(full_path, repo_path).replace("\\", "/")
+            rel_path = (fname if rel_root == "." else f"{rel_root}/{fname}")
+            if policy.is_scannable(rel_path):
                 try:
-                    result[rel_path] = md5_file(full_path)
+                    result[rel_path] = md5_file(os.path.join(root, fname))
                 except OSError:
                     # Race: file disappeared between os.walk listing and open()
                     pass
 
+    if not quiet:
+        print(f"{policy.describe()} files={len(result)}")
+
     return result
+
+
+def _check_anchor(policy, repo_path: str) -> None:
+    """Refuse a scan whose root is not the directory the config was found in.
+
+    `load_indexer_config()` walks *up* from its start directory while
+    `MCPServer.py` sets `repo_path = os.getcwd()`, and this repo's own `.gitignore`
+    notes the server is sometimes launched from `src/`. Launched that way the config
+    resolves at the real root while the scan root is `src/`, so
+    `extra_root_dirs = ["benchmarks"]` is matched against the wrong tree and does
+    nothing at all. Silence there is the expensive outcome, so it raises.
+    """
+    if policy.config_path is None:
+        return                      # no config: defaults apply anywhere, nothing to mismatch
+    if os.path.normcase(os.path.abspath(repo_path)) != os.path.normcase(policy.root):
+        raise ValueError(
+            f"Scan root {os.path.abspath(repo_path)!r} is not the directory holding "
+            f"{policy.config_path!r}. Run the indexer from {policy.root!r}, or put an "
+            f"indexer.toml in the directory you meant to scan — [ignore].root_dirs "
+            f"would otherwise be resolved against a tree it was not written for."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +199,74 @@ class DiffResult(NamedTuple):
     new:      list[str]    # paths present on disk, absent from SQLite
     modified: list[str]    # paths present in both, but MD5 hash differs
     deleted:  list[str]    # paths present in SQLite, absent from disk
+
+
+# ---------------------------------------------------------------------------
+# Bulk-deletion guard (ADR-026 §5)
+# ---------------------------------------------------------------------------
+
+def _deletion_threshold(n_indexed: int) -> int:
+    """Above this many deletions in one run, ask before purging.
+
+    `max(50, 20%)` rather than a flat number: 50 deletions out of 60 files is a
+    catastrophe and 50 out of 20,000 is a refactor.
+    """
+    return max(50, int(0.20 * n_indexed))
+
+
+def bulk_deletion_verdict(
+    diff: DiffResult,
+    n_indexed: int,
+    *,
+    prune: bool = False,
+    interactive: bool = True,
+) -> tuple[DiffResult, str | None]:
+    """Gate an unusually large deletion set. Returns (diff_to_apply, message).
+
+    **Why this exists.** `DiffResult.deleted` is "in SQLite, absent from disk", and it
+    drives an irreversible purge — FAISS `remove_ids` physically compacts the survivors
+    and `db.delete_file` cascades to symbols, chunks and locations. That mechanism is
+    also what makes this ADR's migration free: newly-ignored files land in `deleted`
+    and clean themselves up with no reindex. Both halves are the same mechanism, so
+    the change that fixes an over-broad index by pulling 84% of it out is
+    indistinguishable, at this line, from a misconfiguration that destroys one.
+
+    The guard does not try to tell those apart. It shows which top-level directories
+    are responsible and makes a human say yes — once, with the numbers in front of
+    them.
+
+    Deletions are *skipped*, not deferred: the entries stay in the index, stale, and
+    the next run asks again. `--prune` answers yes in advance.
+    """
+    if prune or len(diff.deleted) <= _deletion_threshold(n_indexed):
+        return diff, None
+
+    share = (len(diff.deleted) / n_indexed * 100) if n_indexed else 100.0
+    tops = Counter(p.split("/")[0] for p in diff.deleted).most_common(10)
+    report = "\n".join(f"     {count:6d}  {name}/" for name, count in tops)
+    banner = (
+        f"\n  This run would delete {len(diff.deleted)} of {n_indexed} indexed "
+        f"file(s) ({share:.0f}%) from the index.\n"
+        f"  Top-level directories responsible:\n{report}\n"
+        f"  Deleting from the index is irreversible (vectors are compacted, rows "
+        f"cascade).\n"
+    )
+
+    if not interactive or not sys.stdin or not sys.stdin.isatty():
+        return diff._replace(deleted=[]), (
+            banner
+            + "  No terminal to ask - deletions SKIPPED, everything else indexed.\n"
+            + "  Re-run `code-indexer --prune` from a shell to apply them."
+        )
+
+    print(banner)
+    try:
+        answer = input("  Apply these deletions? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if answer in {"y", "yes"}:
+        return diff, "  Deletions confirmed."
+    return diff._replace(deleted=[]), "  Deletions SKIPPED - everything else indexed."
 
 
 def compute_diff(db: CodeDB, disk: dict[str, str]) -> DiffResult:
@@ -583,7 +665,12 @@ def ingest_file(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_incremental(repo_path: str = REPO_PATH) -> None:
+def run_incremental(
+    repo_path: str = REPO_PATH,
+    *,
+    prune: bool = False,
+    interactive: bool = True,
+) -> None:
     """
     Main entry point.  Execution order is chosen for crash safety:
 
@@ -601,6 +688,10 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     Chunk payloads (formerly doc_store.json) are now served from SQLite.
     DocumentStore is an in-memory cache loaded from SQLite on startup;
     add() keeps it in sync during the run; no save() call is needed.
+
+    `prune` answers the ADR-026 §5 bulk-deletion prompt in advance; `interactive`
+    is False for callers with nobody watching (the watchdog, the `reindex` MCP
+    tool), which log and skip the bulk purge rather than block on a prompt.
     """
     print(f"━━ Incremental Indexer: {os.path.basename(repo_path)} ━━")
 
@@ -609,10 +700,13 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     db            = CodeDB(DB_PATH)
 
     summarizer = None
-    if ENABLE_SUMMARIZATION:
+    if summarization_enabled():
         from summarizer import IsolatedChunkSummarizer
         summarizer = IsolatedChunkSummarizer()
-        print("  Chunk summarizer enabled (worker process starts on first file processed)")
+        print(f"  Chunk summarizer enabled: {summarizer_model_id()} "
+              f"(worker process starts on first file processed)")
+    else:
+        print("  Chunk summarizer disabled ([summarization].enabled = false)")
 
     faiss_indexes: dict[str, faiss.Index] = {
         name: index_manager.load_or_create(name)
@@ -622,6 +716,16 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     print("Scanning files...")
     disk_hashes = scan_disk(repo_path)
     diff        = compute_diff(db, disk_hashes)
+
+    # ADR-026 §5: an ordinary run can irreversibly purge most of an index — that is
+    # the same mechanism that makes the ignore-set migration free. Checked before any
+    # mutation, so a "no" leaves the index exactly as it was.
+    _n_indexed = db._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    diff, _guard_msg = bulk_deletion_verdict(
+        diff, _n_indexed, prune=prune, interactive=interactive
+    )
+    if _guard_msg:
+        print(_guard_msg)
 
     # ADR-025 §2: one git pass up front. Reused for back-dating new files, dirty
     # detection, and the §1 one-time backfill of legacy NULL stamps. Done before the
@@ -763,7 +867,20 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
 
 
 def main() -> None:
-    run_incremental()
+    parser = argparse.ArgumentParser(
+        prog="code-indexer",
+        description="Incrementally index this repository (see indexer.toml).",
+    )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        # ASCII only: this reaches stdout, and B-008 is an open first-run crash on a
+        # cp1252 Windows console. Do not add box-drawing or dashes to this path.
+        help="apply bulk deletions without asking. Above max(50, 20%%) of the index, "
+             "deletions are confirmed first; this answers yes in advance.",
+    )
+    args = parser.parse_args()
+    run_incremental(prune=args.prune)
 
 
 if __name__ == "__main__":

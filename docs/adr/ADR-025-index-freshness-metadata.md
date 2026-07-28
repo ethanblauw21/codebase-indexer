@@ -1,6 +1,6 @@
 # ADR-025: Per-File Content-Change Timestamps & Index Freshness Metadata
 
-**Status:** proposed
+**Status:** accepted (2026-07-17) — built and merged (PR #24): per-file `content_changed_at` / `authored_at`, the `index_meta` table, and the `index_status` MCP tool; 196 tests pass. **Still open (checkboxes below, not blockers):** the end-to-end reindex verification and the segmem `codemap` re-check, both deferred because a real reindex is a GPU workload and the GPU is off limits. *Status corrected 2026-07-27 — was `proposed` for ten days after merge.*
 **Date:** 2026-07-16
 **Branch:** `feature/adr-025-index-freshness-metadata`
 **Reviewer:** @ethanblauw21

@@ -78,6 +78,19 @@ _TIER2_NAME = "tier2_component"
 _TIER3_NAME = "tier3_architectural"
 
 # ---------------------------------------------------------------------------
+# Config defaults (ADR-026 §8) — these MUST equal the values shipped in
+# indexer.toml; tests/test_config_drift.py enforces it. They were previously
+# inline literals in __init__, which is how core.py's embedder default drifted
+# 768/jina behind a 1536/bge config for twenty days without anything noticing.
+# ---------------------------------------------------------------------------
+
+_DEFAULT_RERANKER_MODEL_ID = "Qwen/Qwen3-Reranker-0.6B"
+_DEFAULT_RERANKER_ENABLED  = False
+_DEFAULT_FUSION_MODE       = "rrf"
+_DEFAULT_DENSE_WEIGHT      = 0.7
+_DEFAULT_SPARSE_WEIGHT     = 0.3
+
+# ---------------------------------------------------------------------------
 # Return type
 # ---------------------------------------------------------------------------
 
@@ -180,10 +193,10 @@ class HybridRetriever:
         rer_cfg = cfg.get("reranker", {})
         self._reranker_enabled: bool = (
             reranker_enabled if reranker_enabled is not None
-            else bool(rer_cfg.get("enabled", False))
+            else bool(rer_cfg.get("enabled", _DEFAULT_RERANKER_ENABLED))
         )
         self._reranker_model_id: str = (
-            reranker_model or rer_cfg.get("model_id", "Qwen/Qwen3-Reranker-0.6B")
+            reranker_model or rer_cfg.get("model_id", _DEFAULT_RERANKER_MODEL_ID)
         )
         self._device = device if device is not None else resolve_device()
 
@@ -198,9 +211,11 @@ class HybridRetriever:
         # behavior, ADR-009 §P3). "convex" adds a BM25 sparse signal — built once
         # here from the in-memory chunk corpus (RAM/startup cost; skipped for "rrf").
         ret_cfg = cfg.get("retrieval", {})
-        self._fusion_mode: str = (fusion_mode or ret_cfg.get("fusion_mode", "rrf")).lower()
-        self._dense_weight: float = float(ret_cfg.get("dense_weight", 0.7))
-        self._sparse_weight: float = float(ret_cfg.get("sparse_weight", 0.3))
+        self._fusion_mode: str = (
+            fusion_mode or ret_cfg.get("fusion_mode", _DEFAULT_FUSION_MODE)
+        ).lower()
+        self._dense_weight: float = float(ret_cfg.get("dense_weight", _DEFAULT_DENSE_WEIGHT))
+        self._sparse_weight: float = float(ret_cfg.get("sparse_weight", _DEFAULT_SPARSE_WEIGHT))
         self._bm25: Optional[object] = None
         self._bm25_fids: list[int] = []
         self._bm25_pos: dict[int, int] = {}   # faiss_id → row in the BM25 corpus

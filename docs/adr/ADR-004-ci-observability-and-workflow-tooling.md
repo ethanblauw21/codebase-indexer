@@ -1,6 +1,6 @@
 # ADR-004: CI Observability, PR Automation, and Commit Traceability
 
-**Status:** proposed
+**Status:** accepted (2026-07-27, retroactively) — all three features have shipped and are in daily use: the `test` / *Test + Mutate* job in `.github/workflows/ci.yml`, `tools/ci_summary.py`, `tools/gen_pr_body.py`, `.githooks/commit-msg`, the `dev` extras in `pyproject.toml`, and `CONTRIBUTING.md` §7. *Status and Implementation Log reconciled 2026-07-27 — both had been left untouched since the ADR was written, so built work read as unbuilt.*
 **Date:** 2026-06-11
 **Branch:** `chore/adr-004-ci-tooling`
 **Reviewer:** @ethanblauw21
@@ -132,14 +132,15 @@ Multi-line commits get the tag appended as a footer after a blank line. Single-l
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] Add `[project.optional-dependencies].dev` to `pyproject.toml` (`pytest`, `mutmut`, `pytest-timeout`)
-- [ ] Add `test` job to `.github/workflows/ci.yml` (pytest + mutmut + summary step)
-- [ ] Write `tools/ci_summary.py` (parse pytest_output.txt + mutmut results, write Step Summary markdown, enforce thresholds)
-- [ ] Write `tools/gen_pr_body.py` (branch → ADR → diff stat → filled PR template to stdout)
-- [ ] Write `.githooks/commit-msg` (bash hook: ADR tag + staged src/ files)
-- [ ] Add `git config core.hooksPath .githooks` setup instruction + section 7 to `CONTRIBUTING.md`
-- [ ] Smoke-test `gen_pr_body.py` on `chore/adr-004-ci-tooling` branch (graceful fallback path)
-- [ ] Smoke-test `commit-msg` hook: ADR branch → tag appended; chore branch → no tag; already-tagged → no double-tag
+- [x] Add `[project.optional-dependencies].dev` to `pyproject.toml` (`pytest`, `mutmut`, `pytest-timeout`) — `pyproject.toml:60-65`
+- [x] Add `test` job to `.github/workflows/ci.yml` (pytest + mutmut + summary step) — shipped as the `test` / *Test + Mutate* job
+- [x] Write `tools/ci_summary.py` (parse pytest_output.txt + mutmut results, write Step Summary markdown, enforce thresholds)
+- [x] Write `tools/gen_pr_body.py` (branch → ADR → diff stat → filled PR template to stdout)
+- [x] Write `.githooks/commit-msg` (bash hook: ADR tag + staged src/ files)
+- [x] Add `git config core.hooksPath .githooks` setup instruction + section 7 to `CONTRIBUTING.md`
+- [x] Smoke-test `commit-msg` hook — exercised in anger across every ADR branch since; the octal-misparse bug it surfaced was fixed in `af81d22`
+- [ ] Smoke-test `gen_pr_body.py` graceful-fallback path — the one item with no evidence either way; unverified rather than undone
 
 **Notes:**
 <!-- 2026-06-11: Plan converted to ADR. All three features are chore-level (no src/ changes), but ADR documents the design rationale for the tooling choices (mutmut vs Stryker, ADR-number vs FAISS IDs, augment-template vs new-artifact). -->
+<!-- 2026-07-27: Status reconciled. Every artifact this ADR describes has existed on master for weeks — ci.yml's test job, tools/ci_summary.py, tools/gen_pr_body.py, .githooks/commit-msg, the pyproject dev extras and CONTRIBUTING §7 — while the log sat entirely unchecked and the status read `proposed`. Boxes ticked against the files as found; only the gen_pr_body.py fallback smoke-test is left open, because nothing in the repo evidences it either way. This ADR is the clearest single case of the drift that motivated the 2026-07-27 working-list split (see ADR-001's log). -->

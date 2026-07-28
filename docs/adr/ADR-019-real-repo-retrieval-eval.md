@@ -107,6 +107,24 @@ A **small private eval** — same harness, same fixture format, same arms — ov
 
 **Authoring caveat (flag, don't skip).** A hand-written repo must have *real* structure — non-trivial call chains, some rare identifiers, realistic naming — or it becomes the "synthetic fixtures" alternative we rejected. Budget it as a genuine (if small) codebase, not a toy.
 
+> **⚠️ Read every §5 and §6 verdict as jina-era (added 2026-07-27).** All three reranker runs — the n=42
+> baseline (`7c39881`), the n=148 power rerun (`19ab135`) and this private slice (`5480766`) — used
+> `jinaai/jina-embeddings-v2-base-code` (dim 768), confirmed from `indexer.toml` at each commit. The private
+> slice's own log records `Loading embedding model: jinaai/jina-embeddings-v2-base-code` and finished at
+> 09:25 on 2026-07-07; `BAAI/bge-code-v1` (dim 1536) became the default at `bc1e353`, **11:44 the same
+> morning**. The §P1 run that promoted it was arm B only, so **no reranker arm has ever been run on the
+> shipped embedder**, and arm B — the baseline every C−B lift is measured against — is not the arm B this
+> project ships today. On Python and C#, bge dense-only now scores *above* jina-plus-reranker; see the
+> closing note in [ADR-009 §P4](./ADR-009-retrieval-stack-modernization.md) for the per-language table.
+>
+> **This does not reopen the verdict** — `[reranker].enabled` stays `false`, now for reasons that do not
+> depend on these numbers at all (~90 s/query on CPU; the consuming agent re-ranks anyway). It means these
+> numbers describe a retrieval stack that no longer exists and must not be quoted as current. The §6 follow-ups
+> (grow the slice, per-language reranking) were **dropped 2026-07-27** — `docs/backlog.md` B-003/B-004.
+>
+> Unaffected: the **§7 tripwire**, whose 0.45 floor was set against a jina p-queue baseline of 0.5875 and
+> still clears comfortably on bge (0.5847). The floor was chosen to survive a model swap, and it did.
+
 ### §7 — CI tripwire
 
 A tiny subset (one small repo, a handful of queries, arm B only) wired as a **regression tripwire** on retrieval-path changes — the analogue of ADR-007's `ci_subtasks`/`ci_limit_queries`. Fast, not publishable; it fails the build if MRR@10 drops below a committed floor, so a refactor that silently breaks retrieval is caught.

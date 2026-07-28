@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # ============================================================
 #  CoIR Wave-0 benchmark launcher (ADR-007) - dense, core set.
-#  For Git Bash. Run:  bash run_wave0.sh
+#  For Git Bash. Run:  bash scripts/run_wave0.sh
 #  Shows live progress AND writes benchmarks/wave0.log (tee).
 #  Keep the window open; plug in and close the lid.
 # ============================================================
 set -u
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1
 
 export HF_HUB_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false

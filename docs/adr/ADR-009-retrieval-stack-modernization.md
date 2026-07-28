@@ -158,6 +158,47 @@ public win was partly a memorization artifact. Two follow-ups are logged but **d
 regardless): (a) grow the private slice (n=44 is thin, split 25/19) to de-noise the TS negative; (b) per-language
 reranking (on for Python, off for TS) — a new ADR, since `[reranker].enabled` is a single global flag today.
 
+> ### ⚠️ Every reranker number above was measured on the *previous* embedder — and the thread is now closed (2026-07-27)
+>
+> **Provenance.** `indexer.toml` at each eval commit confirms it: the n=42 baseline (`7c39881`), the n=148
+> power rerun (`19ab135`) and the clause-3 private slice (`5480766`) **all ran on
+> `jinaai/jina-embeddings-v2-base-code` (dim 768)**. `BAAI/bge-code-v1` (dim 1536) was staged at `3ee1fb3`
+> (10:45) and promoted to default at `bc1e353` (11:44) — **2 h 19 m after the clause-3 verdict was recorded
+> at 09:42 the same morning.** The §P1 validation that promoted it was **arm B only**
+> (`benchmarks/real_repo/bge_code_v1_denseB.jsonl` — the filename is literal). **The reranker has never been
+> measured on the embedder this project actually ships.**
+>
+> **Why that is not a small caveat.** A reranker's marginal value depends on how good the first stage is, and
+> the first stage improved. Comparing bge dense-only against jina *plus* the reranker, per language (mrr@10):
+>
+> | Language | jina B | jina + reranker | **bge B (no reranker)** | bge B − jina+rerank |
+> |---|---|---|---|---|
+> | Python | 0.445 | 0.478 | **0.512** | **+0.034** |
+> | C# | 0.355 | 0.494 | **0.552** | **+0.058** |
+> | JavaScript | 0.606 | 0.638 | 0.585 | −0.053 |
+> | C++ | 0.359 | 0.491 | 0.380 | −0.111 |
+> | TypeScript | 0.273 | 0.651 | 0.309 | −0.342 |
+>
+> For **Python and C#, plain dense retrieval on the current embedder already beats the old embedder with the
+> reranker attached** — at 0.3–2 s/query instead of ~90 s/query on CPU. The TS gap is measured against the
+> contaminated zustand number and is not real. This is a **cross-embedder comparison** (two different retrieval
+> systems; the reranker was never run on bge), so it is suggestive, not a verdict — but it establishes that the
+> headroom the reranker was filling has been substantially consumed by §P1.
+>
+> **Decision (2026-07-27): both follow-ups are dropped and no further reranker measurement is planned.**
+> Recorded in `docs/backlog.md` as B-003/B-004 `dropped`. The reasoning:
+> 1. **The test has no decision value.** The action is "ship it as an opt-in flag, off by default" whether a
+>    rerun comes back positive or negative. A measurement that cannot change the outcome is not worth its cost.
+> 2. **The consumer is an agent, and the agent is the better judge.** These tools are consumed over MCP by a
+>    frontier model that re-reads and re-ranks the top-10 anyway. Paying a 0.6B cross-encoder to pre-sort a
+>    list a stronger judge is about to re-sort is duplicated work. Same reasoning that settled the graph layer
+>    toward agent-driven expansion rather than fused scoring.
+> 3. **Latency settles the default without any eval.** ~90 s/query on CPU versus 0.3–2 s — and CPU is what
+>    most people cloning this repo will run.
+>
+> **`[reranker].enabled` remains a real, working opt-in** (`indexer.toml`, query-time, `src/reranker.py`) for
+> someone with a GPU and a Python-heavy repo. What is retired is the *research thread*, not the feature.
+
 ### §S2 — Late interaction (optional research phase)
 
 ColBERT-style late-interaction (token-level multi-vector matching) is listed as an **optional research

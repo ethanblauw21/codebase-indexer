@@ -5,7 +5,7 @@
 > free slot) to resolve the collision. Other roadmap docs that still reference an
 > "ADR-004 tiered-language" should be read as pointing here.
 
-**Status:** proposed
+**Status:** proposed — **partially built.** The P1 data-model slice landed on `master` (PR #22): `Edge.candidate` flows through the extraction data model and is consumed by ADR-023's verdict tools and ADR-008's graded confidence. **The tier model itself — the Tier-A/B/C split, the generic fallback, and the Tier-B→Tier-A promotion path — is unbuilt**, so this stays `proposed` and sits in the legacy set (`docs/roadmap.md#the-legacy-unbuilt-set`). Promote when a Tier-B language is genuinely wanted. *(Annotated 2026-07-27.)*
 **Date:** 2026-06-18
 **Branch:** `feature/adr-017-tiered-language-support`
 **Reviewer:** @ethanblauw21

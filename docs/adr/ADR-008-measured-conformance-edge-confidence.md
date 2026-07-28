@@ -1,6 +1,6 @@
 # ADR-008: Measured Conformance & Edge Confidence — Turning the Accuracy Claim into a Reported Number
 
-**Status:** proposed
+**Status:** accepted (2026-07-17) — Phase 1 built and merged across PRs #13, #15, #17, #18, #26: the extraction precision/recall scorecard (`tools/conformance_eval.py`, §1–§3) plus C#/C++ fixtures, and §4/§5 graded `Edge.confidence` with a tunable `EDGE_CONFIDENCE_FLOOR`. The harness drove two real Python adapter fixes (extends edges, aliased imports) — py+ts now score 1.00/1.00. **Still open (checkboxes below, not blockers):** the precision/recall-vs-floor curve, and B4 execution-verified ground truth (Phase 2). *Status corrected 2026-07-27 — was `proposed` for ten days after merge.*
 **Date:** 2026-06-18
 **Branch:** `feature/adr-008-measured-conformance-edge-confidence`
 **Reviewer:** @ethanblauw21
