@@ -45,7 +45,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-008](#b-008) | Indexer crashes on a Windows `cp1252` console before indexing a single file | found 2026-07-27 | S | shaped |
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
-| [B-011](#b-011) | RRF top-5 is a near-total tie — every score is `1/60` or `1/61` | same run, 2026-07-27 | M | raw |
+| [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -338,45 +338,101 @@ only one granularity available, and nothing collapses the redundancy afterwards.
 
 **Why it's worth fixing on its own:** it spends the context budget the packer in `core.py` exists to
 protect, and it does so invisibly — the caller sees five results and gets four. It needs no eval to
-justify, because returning the same bytes twice is not a ranking trade-off, it is waste. This is also
-the *cheap half* of what the 2026-07-27 search surfaced; the ranking half is [B-011](#b-011).
+justify, because returning the same bytes twice is not a ranking trade-off, it is waste. This is the
+*cheap half* of what the 2026-07-27 search surfaced; the ranking half is [B-011](#b-011).
 
-**The want:** dedupe on chunk text (or on a content hash) when assembling the final result list,
-keeping the hit from the most specific tier. Open question worth deciding rather than assuming —
-whether to also stop *writing* the duplicate at index time, which would shrink the tier-3 index but
-changes the ingest path and the stable-id story, versus deduping at read time only, which is
-strictly local to the retriever.
+**The want:** dedupe on a content hash when assembling the final result list, keeping the hit from the
+most specific tier. **No schema change is needed** — `chunks` already stores `tier`, `start_line`,
+`end_line` and `text` (`db.py:167-177`), and `chunk_summaries` is already keyed on `MD5(chunk_text)`,
+so the hash is computed at ingestion today and there is precedent for using it as an identity.
+
+#### Two fixes, and they are not alternatives (2026-07-28)
+
+**Read-time dedup** is the correctness half: ~5 lines over the ~150 candidates already in memory,
+strictly local to the retriever, and it fixes **existing** indexes with no rebuild. Keep it
+permanently even after the second fix, because it also catches byte-identical content in *different*
+files, which no ingest-side rule will.
+
+**Ingestion-time gating** is the efficiency half, proposed by @edb: when a file fits entirely inside
+tier N's budget, tier N and tier N+1 both degenerate to the whole file — identical text, therefore
+identical embedding — so skip the higher tier. Saves embedding time and index size. Three caveats
+that make it the *second* step, not the first:
+
+- **It does not fix existing indexes.** Unchanged files are never re-ingested (md5 match), so
+  duplicates already written stay written. Unlike the ADR-026 scan-gate migration this one is *not*
+  free — it needs a forced rebuild or a one-off sweep.
+- **It makes the index heterogeneous.** Nothing may then assume every file has a tier-3
+  representation. Check the eval harness's `tier_projection` and the `core.py` context packer before
+  landing it.
+- It is an optimization of a decision that has not been made yet — see [B-011](#b-011), which may
+  change what tier membership is *for*.
 
 ---
 
 <a id="b-011"></a>
-### B-011 — RRF top-5 is a near-total tie: every score is `1/60` or `1/61`
+### B-011 — Multi-tier RRF cannot reinforce, because the tiers are disjoint document sets
 
-**Source:** same run as [B-010](#b-010), 2026-07-27 · **Status:** raw · **Size:** M
+**Source:** same run as [B-010](#b-010), 2026-07-27 · root cause found 2026-07-28 ·
+**Status:** shaped · **Size:** M
 
 Across four unrelated queries on the freshly rebuilt index, **every** returned score was one of two
-values — `0.0167` (`1/60`) or `0.0164` (`1/61`). That is RRF with `k=60` where each result appears in
-**exactly one tier, at rank 0 or 1**. Nothing was reinforced across tiers; a chunk found by two tiers
-would score ~`0.033`, and none did.
+values — `0.0167` (`1/60`) or `0.0164` (`1/61`).
 
-So the top-5 ordering is not really being *scored*. It is a five-way tie broken by tier iteration
-order. The ranking happened to be correct on all four queries — `scan_disk`, `get_stale_ids`,
+**The root cause is structural, not statistical.** The FAISS vector id is
+`stable_id(tier_name, file_path, scope)` (`src/stable_id.py:40-55`) — **the tier name is the first
+component of the hash.** So the same code, chunked at two granularities, is two different documents to
+FAISS and therefore two different documents to RRF. A document exists in exactly one tier's index, by
+construction. Cross-tier reinforcement is not merely absent in this sample: **it is impossible.**
+`1/60` and `1/61` are the only two values the current fusion can ever emit at rank 0 and 1.
+
+That means what the pipeline calls Reciprocal Rank *Fusion* is, in this configuration, a three-way
+rank interleave. There is nothing to fuse, because no document is ever seen twice.
+
+*(The first version of this item, written 2026-07-27, described this as "nothing happened to be
+reinforced" and proposed tuning `k`. That misread the symptom as the cause. Retained here because the
+correction is the useful part.)*
+
+The ranking was still correct on all four queries — `scan_disk`, `get_stale_ids`,
 `search_three_tier_rrf` and `run_incremental` each came back at rank 1 — which is why this is a
-ranking-quality want and not a bug report.
+ranking-quality want and not a bug report. But the ordering is decided by tier iteration order, not by
+score.
 
 **Why it matters beyond aesthetics.** A flat score distribution gives every downstream signal nothing
 to work with. This is the same signature already recorded for the graph layer, where structural
 expansion turned out to be inert under RRF because the fused scores it was meant to reorder were
-already indistinguishable. Any future work that tries to *adjust* ranking — graph weighting, recency,
-tags — lands on the same flat surface. Fixing the fusion is upstream of all of it.
+already indistinguishable — **that finding and this one now have the same explanation.** Any future
+work that tries to *adjust* ranking (graph weighting, recency, tags) lands on the same flat surface.
+This is upstream of all of it.
 
-**Not yet shaped, and deliberately so.** Candidate directions, none chosen:
-- Feed more than the top 1–2 per tier into the fusion, so ranks actually spread.
-- Reconsider `k=60`. It is the published default from the original RRF paper, tuned for fusing many
-  independent systems; three tiers over *one* embedder is a different regime.
-- Carry the dense similarity through as a tiebreak within an RRF tie, rather than discarding it.
+#### The shape of a fix (2026-07-28)
+
+The retriever needs a **document identity independent of chunk id**. That single change subsumes
+[B-010](#b-010): dedup and reinforcement are the same operation at two granularities — collapse
+identical, reinforce overlapping. Two candidate keys, doing different jobs:
+
+- **Content hash** — collapses byte-identical chunks. This is B-010, and it is the safe half.
+- **Containment** — a tier-1 symbol hit and the tier-2/3 windows whose line range contains it are the
+  same underlying code, so they should reinforce as one document. `chunks.start_line` /
+  `chunks.end_line` already exist (`db.py:167-177`), so **this needs no schema change either** — only
+  a query-time pass over the ~150 candidates already in memory, which is free at that size.
+
+**The known hazard, and the reason this is an ADR and not a patch:** containment-based reinforcement
+biases toward large files. A god object contributes many tier-1 symbol hits that all reinforce the
+same tier-2/3 window, so it accumulates score for being *big* rather than relevant — the opposite of
+what the tier design is for. Needs normalization, a cap, or a different key. That is a real decision
+with real alternatives, which is what earns an ADR under
+[`CONTRIBUTING.md` §4](../CONTRIBUTING.md#4-working-lists--backlog-roadmap-adrs).
+
+Still open, and unaffected by the root cause above:
+- Feed more than the top 1–2 per tier into the fusion, so ranks spread even without reinforcement.
+- Reconsider `k=60` — the published default is tuned for fusing many *independent* systems; three
+  tiers over one embedder is a different regime.
+- Carry the dense similarity through as a tiebreak within an RRF tie rather than discarding it.
 - Accept flat RRF and treat the top-k as an unordered candidate set, which is closer to how the
   consuming agent actually uses it.
+
+**Sequencing:** B-010's read-time dedup ships first and independently — it is a strict improvement
+needing no eval. Reinforcement is a ranking change, so it cannot be validated locally.
 
 **Measurement caveat, per [`CONTRIBUTING.md` §4.2](../CONTRIBUTING.md#42-measurement-provenance--a-baseline-names-the-stack-it-was-measured-on):**
 this observation is from `BAAI/bge-code-v1` (dim 1536), reranker off, `fusion_mode = "rrf"`, on a
