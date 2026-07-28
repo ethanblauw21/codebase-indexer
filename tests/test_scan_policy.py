@@ -17,6 +17,8 @@ import pytest
 
 import scan_policy as sp
 
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
@@ -200,6 +202,57 @@ def test_the_config_walk_stops_at_a_git_boundary(tmp_path):
     policy = sp.scan_policy(str(inner))
     assert policy.config_path is None
     assert policy.ignore_dirs == sp.DEFAULT_IGNORE_DIRS
+
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Verification against this repository — the incident, as a test
+# ---------------------------------------------------------------------------
+
+def test_this_repo_scans_to_source_only():
+    """The motivating incident, pinned (ADR-026 §Context).
+
+    A CPU reindex on 2026-07-27 immediately began embedding
+    `benchmarks/real_repo/corpus/click/…` — the cloned CoIR eval corpora, 510 of this
+    tree's 613 indexable files. An unpatched run produces an index that is ~83%
+    third-party corpus.
+
+    Asserted structurally rather than as a magic total: the numbers move every time
+    someone adds a file, and a test that has to be edited on every commit stops being
+    read. What must not move is *which trees are in scope*.
+    """
+    import incremental_indexer as ii
+
+    sp.reset()
+    try:
+        scanned = ii.scan_disk(_REPO_ROOT, quiet=True)
+    finally:
+        sp.reset()
+
+    tops = {p.split("/")[0] for p in scanned}
+    assert tops == {"src", "tests", "tools"}, f"unexpected trees in scope: {tops - {'src', 'tests', 'tools'}}"
+    assert not any(p.startswith("benchmarks/") for p in scanned)
+    assert "src/scan_policy.py" in scanned
+    assert len(scanned) < 200, (
+        f"{len(scanned)} files in scope — the corpus is back in the index"
+    )
+
+
+def test_the_shipped_config_is_loadable_and_anchored():
+    """The file this repo ships must itself satisfy the contract it documents."""
+    sp.reset()
+    try:
+        policy = sp.scan_policy(_REPO_ROOT)
+        assert policy.root == _REPO_ROOT
+        assert policy.config_path == os.path.join(_REPO_ROOT, "indexer.toml")
+        assert {"benchmarks", "gpu-crash-repro", "graphify-out"} <= policy.ignore_root_dirs
+        assert policy.ignore_dirs == sp.DEFAULT_IGNORE_DIRS      # defaults not replaced
+        assert policy.extensions == sp.DEFAULT_INDEXABLE_EXTS
+    finally:
+        sp.reset()
 
 
 # ---------------------------------------------------------------------------

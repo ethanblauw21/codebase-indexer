@@ -63,10 +63,13 @@ pointer.  Always deduplicate the id array first (np.unique preserves int64).
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import os
 import subprocess
+import sys
 import traceback
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -196,6 +199,74 @@ class DiffResult(NamedTuple):
     new:      list[str]    # paths present on disk, absent from SQLite
     modified: list[str]    # paths present in both, but MD5 hash differs
     deleted:  list[str]    # paths present in SQLite, absent from disk
+
+
+# ---------------------------------------------------------------------------
+# Bulk-deletion guard (ADR-026 §5)
+# ---------------------------------------------------------------------------
+
+def _deletion_threshold(n_indexed: int) -> int:
+    """Above this many deletions in one run, ask before purging.
+
+    `max(50, 20%)` rather than a flat number: 50 deletions out of 60 files is a
+    catastrophe and 50 out of 20,000 is a refactor.
+    """
+    return max(50, int(0.20 * n_indexed))
+
+
+def bulk_deletion_verdict(
+    diff: DiffResult,
+    n_indexed: int,
+    *,
+    prune: bool = False,
+    interactive: bool = True,
+) -> tuple[DiffResult, str | None]:
+    """Gate an unusually large deletion set. Returns (diff_to_apply, message).
+
+    **Why this exists.** `DiffResult.deleted` is "in SQLite, absent from disk", and it
+    drives an irreversible purge — FAISS `remove_ids` physically compacts the survivors
+    and `db.delete_file` cascades to symbols, chunks and locations. That mechanism is
+    also what makes this ADR's migration free: newly-ignored files land in `deleted`
+    and clean themselves up with no reindex. Both halves are the same mechanism, so
+    the change that fixes an over-broad index by pulling 84% of it out is
+    indistinguishable, at this line, from a misconfiguration that destroys one.
+
+    The guard does not try to tell those apart. It shows which top-level directories
+    are responsible and makes a human say yes — once, with the numbers in front of
+    them.
+
+    Deletions are *skipped*, not deferred: the entries stay in the index, stale, and
+    the next run asks again. `--prune` answers yes in advance.
+    """
+    if prune or len(diff.deleted) <= _deletion_threshold(n_indexed):
+        return diff, None
+
+    share = (len(diff.deleted) / n_indexed * 100) if n_indexed else 100.0
+    tops = Counter(p.split("/")[0] for p in diff.deleted).most_common(10)
+    report = "\n".join(f"     {count:6d}  {name}/" for name, count in tops)
+    banner = (
+        f"\n  This run would delete {len(diff.deleted)} of {n_indexed} indexed "
+        f"file(s) ({share:.0f}%) from the index.\n"
+        f"  Top-level directories responsible:\n{report}\n"
+        f"  Deleting from the index is irreversible (vectors are compacted, rows "
+        f"cascade).\n"
+    )
+
+    if not interactive or not sys.stdin or not sys.stdin.isatty():
+        return diff._replace(deleted=[]), (
+            banner
+            + "  No terminal to ask - deletions SKIPPED, everything else indexed.\n"
+            + "  Re-run `code-indexer --prune` from a shell to apply them."
+        )
+
+    print(banner)
+    try:
+        answer = input("  Apply these deletions? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = ""
+    if answer in {"y", "yes"}:
+        return diff, "  Deletions confirmed."
+    return diff._replace(deleted=[]), "  Deletions SKIPPED - everything else indexed."
 
 
 def compute_diff(db: CodeDB, disk: dict[str, str]) -> DiffResult:
@@ -594,7 +665,12 @@ def ingest_file(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def run_incremental(repo_path: str = REPO_PATH) -> None:
+def run_incremental(
+    repo_path: str = REPO_PATH,
+    *,
+    prune: bool = False,
+    interactive: bool = True,
+) -> None:
     """
     Main entry point.  Execution order is chosen for crash safety:
 
@@ -612,6 +688,10 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     Chunk payloads (formerly doc_store.json) are now served from SQLite.
     DocumentStore is an in-memory cache loaded from SQLite on startup;
     add() keeps it in sync during the run; no save() call is needed.
+
+    `prune` answers the ADR-026 §5 bulk-deletion prompt in advance; `interactive`
+    is False for callers with nobody watching (the watchdog, the `reindex` MCP
+    tool), which log and skip the bulk purge rather than block on a prompt.
     """
     print(f"━━ Incremental Indexer: {os.path.basename(repo_path)} ━━")
 
@@ -636,6 +716,16 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
     print("Scanning files...")
     disk_hashes = scan_disk(repo_path)
     diff        = compute_diff(db, disk_hashes)
+
+    # ADR-026 §5: an ordinary run can irreversibly purge most of an index — that is
+    # the same mechanism that makes the ignore-set migration free. Checked before any
+    # mutation, so a "no" leaves the index exactly as it was.
+    _n_indexed = db._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    diff, _guard_msg = bulk_deletion_verdict(
+        diff, _n_indexed, prune=prune, interactive=interactive
+    )
+    if _guard_msg:
+        print(_guard_msg)
 
     # ADR-025 §2: one git pass up front. Reused for back-dating new files, dirty
     # detection, and the §1 one-time backfill of legacy NULL stamps. Done before the
@@ -777,7 +867,20 @@ def run_incremental(repo_path: str = REPO_PATH) -> None:
 
 
 def main() -> None:
-    run_incremental()
+    parser = argparse.ArgumentParser(
+        prog="code-indexer",
+        description="Incrementally index this repository (see indexer.toml).",
+    )
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        # ASCII only: this reaches stdout, and B-008 is an open first-run crash on a
+        # cp1252 Windows console. Do not add box-drawing or dashes to this path.
+        help="apply bulk deletions without asking. Above max(50, 20%%) of the index, "
+             "deletions are confirmed first; this answers yes in advance.",
+    )
+    args = parser.parse_args()
+    run_incremental(prune=args.prune)
 
 
 if __name__ == "__main__":

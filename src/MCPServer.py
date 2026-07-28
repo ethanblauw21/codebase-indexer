@@ -1286,7 +1286,10 @@ def reindex(changed_files_only: bool = False) -> str:
     _old_stdout = sys.stdout
     sys.stdout = _captured
     try:
-        run_incremental()
+        # interactive=False (ADR-026 §5): stdout is captured and there is no human on
+        # the other end, so a bulk deletion is reported in the tool result and skipped
+        # rather than blocking the server on a prompt nobody can see.
+        run_incremental(interactive=False)
     finally:
         sys.stdout = _old_stdout
 
@@ -1866,7 +1869,7 @@ class _ReindexDebouncer:
         print("\n[Watchdog] Change detected — running incremental reindex...")
         try:
             from incremental_indexer import run_incremental
-            run_incremental()
+            run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
             _reload_indexes()
             print("[Watchdog] Reindex complete — in-memory indexes reloaded.\n")
         except Exception as exc:

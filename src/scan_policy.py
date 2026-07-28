@@ -38,10 +38,23 @@ from config import find_config_path, load_indexer_config
 # ---------------------------------------------------------------------------
 
 DEFAULT_IGNORE_DIRS: frozenset[str] = frozenset({
-    ".next", "node_modules", "dist", ".git", "build",
-    ".code-index", ".continue", ".claude", ".vs", ".vscode",
-    "Modelfiles", "playwright-report", "test-results",
-    ".github", ".firebase", ".idx", "genkit", "indexer", "public", "mocks",
+    # JavaScript / TypeScript build and dependency output
+    ".next", "node_modules", "dist", "build",
+    "playwright-report", "test-results",
+
+    # Python environments and caches (ADR-026 §3). Their absence is B-001: index any
+    # Python repo with an in-tree virtualenv and the scan chunks, embeds and graphs
+    # the whole of site-packages as if it were the user's code.
+    #
+    # Bare `env` is deliberately NOT here — `src/env/` is ordinary source in too many
+    # projects. A virtualenv under any other name (`.venv-3.12`, a conda prefix) needs
+    # one line of `extra_dirs`, which is exactly the escape hatch this ADR adds.
+    "venv", ".venv", "site-packages", "__pycache__",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".eggs", "htmlcov",
+
+    # Editor, tooling and infrastructure state
+    ".continue", ".claude", ".vs", ".vscode",
+    "Modelfiles", ".github", ".firebase", ".idx", "genkit",
 })
 
 DEFAULT_IGNORE_ROOT_DIRS: frozenset[str] = frozenset({"functions"})
@@ -74,11 +87,13 @@ ALWAYS_IGNORED_DIRS: frozenset[str] = frozenset({".git", ".code-index"})
 def _fold(name: str) -> str:
     """Normalization applied to directory names on both sides of a comparison.
 
-    Identity today — matching is case-sensitive, which is the behaviour ADR-026
-    commit 3 inverts. It is a function so that the flip is one line rather than a
-    scatter of ``.casefold()`` calls that can be applied to one side only.
+    Case-folded (ADR-026 §3). Matching used to be exact, so ``Dist/`` and
+    ``Node_Modules/`` walked straight through a list containing ``dist`` and
+    ``node_modules`` — on Windows and macOS, where those are the *same directory
+    name*. It is a function so the normalization cannot be applied to one side of a
+    comparison and not the other, which is the usual way this bug is written.
     """
-    return name
+    return name.casefold()
 
 
 # ---------------------------------------------------------------------------

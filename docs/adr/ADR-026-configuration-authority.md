@@ -391,17 +391,83 @@ the commits.
    unaccounted-for. A companion test asserts every key parked there is genuinely reachable,
    so the category cannot become a place to hide dead knobs. `KNOWN_INERT` ratchets 5 → 2.
 
-**Commit 3 — default changes and the guard (revertible without losing 1 or 2)**
-- [ ] Add `venv`, `.venv`, `site-packages`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.eggs`, `htmlcov` to defaults; bare `env` deliberately excluded
-- [ ] Remove `"indexer"`, `"public"`, `"mocks"` from defaults
-- [ ] Case-folded name matching on both sides; single in-place `dirs[:] = [...]` prune expression at `:156` — a second `dirs = [...]` rebinding compiles and silently does nothing
-- [ ] Deletion guard: `len(diff.deleted) > max(50, 20 %)` requires `--prune` or `y/N`; watchdog path logs and skips
-- [ ] Tests: a mixed-case directory name is excluded; a custom-named venv is *not* excluded by default but is via `extra_dirs`; a diff deleting >20 % does not silently purge; a previously-indexed file that becomes ignored appears in `DiffResult.deleted`
-- [ ] Verify against this repo as a test, not a manual check: a full scan yields 98 files (`src` 34 + `tests` 51 + `tools` 13), not 601
-- [ ] Release note covering **both** directions of the pull-only change, plus where a third-party user's own `indexer.toml` goes
+**Commit 3 — default changes and the guard (revertible without losing 1 or 2)** ✅ done 2026-07-28
+- [x] Add `venv`, `.venv`, `site-packages`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.eggs`, `htmlcov` to defaults; bare `env` deliberately excluded
+- [x] Remove `"indexer"`, `"public"`, `"mocks"` from defaults
+- [x] Case-folded name matching on both sides — via a single `_fold()` used by both, so it cannot be applied asymmetrically. The in-place prune lives in `ScanPolicy.prune()`, which is the only place `dirs[:]` is written.
+- [x] Deletion guard: `len(diff.deleted) > max(50, 20 %)` requires `--prune` or `y/N`; both unattended callers log and skip
+- [x] Tests: `tests/test_deletion_guard.py` (13 cases) + the four inverted scan tests + 2 repo-level verifications
+- [x] Verify against this repo as a test, not a manual check — `test_this_repo_scans_to_source_only`
+- [x] Release note — below
+- [x] Suite green: **306 passed** (290 after commit 2, +16 new)
+
+**Deviations and findings, commit 3:**
+
+1. **The verification test asserts shape, not a total.** The checklist said "98 files
+   (`src` 34 + `tests` 51 + `tools` 13)". The real number today is 103, because commits
+   1–3 added five files to `src/` and `tests/` — which is the problem with pinning a
+   total: it has to be edited on almost every commit, and a test that is routinely
+   edited stops being read. The test asserts the set of top-level trees in scope is
+   exactly `{src, tests, tools}`, that no `benchmarks/` path survives, and that the
+   count is under 200. Those fail on the regression this exists to catch and pass on an
+   ordinary day's work.
+2. **`"a custom-named venv is not excluded by default"` is only half true, and the other
+   half is better news than the ADR claimed.** §3 accepted "a venv named `.venv-3.12` is
+   missed entirely" as the cost of name matching. It is not missed entirely:
+   `site-packages` is itself an any-depth exclusion, so the *payload* — every
+   third-party package — is excluded no matter what the venv directory is called. What
+   leaks is the surrounding tree (`Scripts/`, `bin/`, `Lib/` stubs), which is two orders
+   of magnitude smaller. The rejection of `pyvenv.cfg` detection therefore costs less
+   than §3 priced it at. Pinned in
+   `test_a_custom_named_venv_leaks_only_outside_site_packages`.
+3. **`.git` moved out of the default ignore list into `ALWAYS_IGNORED_DIRS`.** It was in
+   the JS-seeded defaults, which meant `dirs = []` would have started indexing
+   packfiles. It is not a knob (§1 already said so); commit 2 built the unconditional
+   set and commit 3's default rewrite is where the duplicate entry came out.
+4. **New stdout strings are ASCII-only, deliberately.** [B-008](../backlog.md#b-008) is
+   an open first-run crash where the indexer dies with `UnicodeEncodeError` on a stock
+   Windows `cp1252` console before indexing a file. The guard banner and the `--prune`
+   help text are on that path, and the first draft of both used em-dashes. Fixed here
+   with a comment, rather than adding two more lines for B-008 to find later.
+5. **The MCP-caller test is parsed, not grepped.** `run_incremental()` appears in prose
+   in `MCPServer.py` as well as in code, so a text scan reads docstrings as call sites.
+   It walks the AST for `ast.Call` nodes and asserts both carry `interactive=False`.
+
+## Release note (ADR-026)
+
+**Your next index will change size, in both directions, from a `git pull` alone.**
+
+*Smaller.* Python virtualenvs and caches are now excluded by default — `venv`, `.venv`,
+`site-packages`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`,
+`.eggs`, `htmlcov`. If you have been indexing a repo with an in-tree virtualenv, most of
+that index was third-party code and will be deleted on the next run.
+
+*Larger.* `public/`, `mocks/` and `indexer/` are no longer excluded. They were leftovers
+from the JavaScript project this list was seeded from; `public/` in particular is real
+source in many web projects. Those trees will be chunked and embedded on the next run,
+which on CPU can be slow.
+
+*Also:* directory matching is now case-insensitive, so `Dist/` and `Node_Modules/` are
+excluded where they previously were not.
+
+**The first run after this update may prompt you.** When a single run would delete more
+than `max(50, 20 %)` of your indexed files, it prints the directories responsible and
+asks. Answer `y`, or pass `code-indexer --prune` to skip the prompt. Unattended runs (the
+file watcher, the `reindex` MCP tool) skip the deletions and log instead — nothing is
+purged without someone saying so.
+
+**To keep your own layout, edit `indexer.toml`.** `extra_dirs`, `extra_root_dirs` and
+`extra_extensions` *add* to the defaults; the bare `dirs`, `root_dirs` and `extensions`
+keys *replace* them. Prefer the `extra_*` form — a bare key freezes your gate at today's
+defaults and silently drops future ones. Setting both spellings of one knob is an error.
+
+**Third-party users: `indexer.toml` belongs at the root of the repository you are
+indexing**, next to its `.git`. The config walk now stops at that boundary, so a stray
+`indexer.toml` in a parent directory no longer configures repos beneath it — and the scan
+is refused outright if it is launched from a subdirectory of the config's own root.
 
 **At merge**
-- [ ] Suite green at ≥244 collected
+- [x] Suite green at ≥244 collected — **306**
 - [ ] Read-back: the Decision text matches the diff line-for-line. Under branch-only `proposed` there is no second chance to correct it.
 - [ ] Resolve the downstream obligations listed in **Depended on by** (none) while the context is fresh
 

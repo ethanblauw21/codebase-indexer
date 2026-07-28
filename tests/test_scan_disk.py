@@ -101,57 +101,107 @@ def test_ignore_root_dirs_apply_only_at_the_root(repo):
 
 
 # ---------------------------------------------------------------------------
-# Behaviour ADR-026 intends to change — pinned so the change is visible
+# The four behaviours ADR-026 commit 3 inverted
+#
+# Each of these asserted the opposite in commit 1, deliberately, so that the flip
+# would appear in a diff instead of happening silently. This is that diff.
 # ---------------------------------------------------------------------------
 
-def test_python_virtualenvs_are_currently_indexed(repo):
-    """A `venv/` with a `pyvenv.cfg` is walked today, site-packages and all.
+def test_python_virtualenvs_are_not_indexed(repo):
+    """B-001, the item that started this ADR.
 
-    This is B-001: index any Python repo with an in-tree virtualenv and the scan
-    embeds thousands of third-party files as if they were the user's code.
+    Was: a `venv/` was walked, site-packages and all — thousands of third-party
+    files chunked, embedded and graphed as if they were the user's code.
     """
     _write(repo, "venv/pyvenv.cfg", "home = /usr\n")
     _write(repo, "venv/Lib/site-packages/requests/api.py")
+    _write(repo, ".venv/Lib/site-packages/urllib3/util.py")
     found = ii.scan_disk(repo)
-    # ADR-026 commit 3 will invert this: the assertion becomes `not in`.
-    assert "venv/Lib/site-packages/requests/api.py" in found
+    assert "venv/Lib/site-packages/requests/api.py" not in found
+    assert ".venv/Lib/site-packages/urllib3/util.py" not in found
 
 
-def test_pycache_is_currently_indexed(repo):
-    _write(repo, "src/__pycache__/app.cpython-311.py")
-    # ADR-026 commit 3 will invert this.
-    assert "src/__pycache__/app.cpython-311.py" in ii.scan_disk(repo)
+def test_python_caches_are_not_indexed(repo):
+    for rel in (
+        "src/__pycache__/app.cpython-311.py",
+        ".pytest_cache/v/x.py",
+        ".mypy_cache/3.11/mod.py",
+        ".tox/py311/lib/pkg.py",
+        "htmlcov/report.js",
+    ):
+        _write(repo, rel)
+    found = ii.scan_disk(repo)
+    for rel in found:
+        assert not rel.startswith((".pytest_cache", ".mypy_cache", ".tox", "htmlcov"))
+    assert "src/__pycache__/app.cpython-311.py" not in found
 
 
-def test_public_and_mocks_are_currently_skipped(repo):
-    """Leftovers from the JavaScript project this list was seeded from.
+def test_public_and_mocks_are_now_indexed(repo):
+    """The JavaScript leftovers are gone from the defaults.
 
-    `public/` is a real source directory in many web projects, so excluding it
-    silently under-indexes them.
+    `public/` is a real source directory in many web projects, so the old list
+    silently under-indexed them. This is the direction of the change that makes
+    someone's next index *larger* — see the release note in the ADR.
     """
     _write(repo, "public/widget.js")
     _write(repo, "mocks/server.js")
     found = ii.scan_disk(repo)
-    # ADR-026 commit 3 will invert both of these.
-    assert "public/widget.js" not in found
-    assert "mocks/server.js" not in found
+    assert "public/widget.js" in found
+    assert "mocks/server.js" in found
 
 
-def test_directory_name_matching_is_currently_case_sensitive(repo):
-    """A case-variant of an ignored directory is walked, because matching is exact.
+def test_a_directory_named_after_this_project_is_indexed(repo):
+    """`"indexer"` in the ignore list would skip a directory named after the tool."""
+    _write(repo, "indexer/core.py")
+    assert "indexer/core.py" in ii.scan_disk(repo)
 
-    `"dist"` is in IGNORE_DIRS; `Dist/` is not, so its contents are indexed even
-    though on Windows and macOS they are the same directory name.
 
-    Note the fixture uses `Dist` rather than `Node_Modules`: the fixture already
+def test_directory_name_matching_is_case_folded(repo):
+    """`Dist/` and `dist/` are the same directory name on Windows and macOS.
+
+    The fixture uses `Dist` rather than `Node_Modules` on purpose: it already
     contains `node_modules/`, and on a case-insensitive filesystem creating
-    `Node_Modules/` resolves into the existing directory, so the file would land in
-    the correctly-ignored path and the test would pass for the wrong reason. The
-    variant has to name a directory the tree does not already have.
+    `Node_Modules/` resolves into the existing directory — so the file would land in
+    the correctly-ignored path and the test would pass for the wrong reason. A
+    case-variant only exercises the gate when the canonically-cased directory does
+    not already exist.
     """
     _write(repo, "Dist/bundle.js")
-    # ADR-026 commit 3 will invert this (matching becomes case-folded).
-    assert "Dist/bundle.js" in ii.scan_disk(repo)
+    _write(repo, "src/__PYCACHE__/x.py")
+    found = ii.scan_disk(repo)
+    assert "Dist/bundle.js" not in found
+    assert "src/__PYCACHE__/x.py" not in found
+
+
+def test_a_custom_named_venv_leaks_only_outside_site_packages(repo):
+    """The trade §3 accepts, measured — it is narrower than the ADR implies.
+
+    `pyvenv.cfg` detection was rejected because the path-only watchdog consumer
+    cannot evaluate it; that asymmetry is the ADR-020 split-brain. The stated cost was
+    that a venv named `.venv-3.12` is "missed entirely".
+
+    It is not. `site-packages` is itself an any-depth exclusion, so the *payload* of an
+    oddly-named venv — every third-party package in it — is still excluded. What leaks
+    is the rest of the tree: `Scripts/`, `Lib/` stubs, `bin/`. Real, and two orders of
+    magnitude smaller than "the venv is indexed".
+    """
+    import scan_policy
+
+    _write(repo, "venv-3.12/Lib/site-packages/requests/api.py")   # the payload
+    _write(repo, "venv-3.12/Scripts/rando.py")                    # what actually leaks
+    scan_policy.reset()
+    found = ii.scan_disk(repo)
+    assert "venv-3.12/Lib/site-packages/requests/api.py" not in found
+    assert "venv-3.12/Scripts/rando.py" in found
+
+    # ...and one line of config closes it, which is the escape hatch this ADR adds.
+    with open(os.path.join(repo, "indexer.toml"), "w", encoding="utf-8") as fh:
+        fh.write('[ignore]\nextra_dirs = ["venv-3.12"]\n')
+    scan_policy.reset()
+    try:
+        assert "venv-3.12/Scripts/rando.py" not in ii.scan_disk(repo)
+    finally:
+        scan_policy.reset()
 
 
 # ---------------------------------------------------------------------------
