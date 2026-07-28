@@ -69,15 +69,26 @@ def _wired() -> dict[tuple[str, str], object]:
     }
 
 
+# Wired, but with no single code default to compare against: `extra_*` keys are
+# per-repo additions on top of the defaults, so "the shipped value" is this repo's
+# own layout, not a default anything else should inherit. Accounted for, not compared.
+WIRED_NO_DEFAULT: dict[tuple[str, str], str] = {
+    ("ignore", "extra_dirs"):        "scan_policy._resolve — extends DEFAULT_IGNORE_DIRS",
+    ("ignore", "extra_root_dirs"):   "scan_policy._resolve — extends DEFAULT_IGNORE_ROOT_DIRS",
+    ("ignore", "extra_extensions"):  "scan_policy._resolve_exts — extends DEFAULT_INDEXABLE_EXTS",
+}
+
+
 # Documented in indexer.toml, read by nothing in src/. Each entry needs a reason and
 # an owner. THIS SET MUST ONLY SHRINK.
+#
+# ADR-026 commit 2 removed the three [ignore] entries: `dirs`/`root_dirs`/`extensions`
+# are live knobs now, and the shipped file no longer sets them — a bare key *replaces*
+# the defaults, so a copy kept here "for reference" would freeze this repo's gate and
+# silently drop every future default.
 KNOWN_INERT: dict[tuple[str, str], str] = {
-    ("indexer", "repo_root"):  "inert — incremental_indexer uses os.getcwd(); ADR-026 §6 anchors this",
-    ("indexer", "index_dir"):  "inert — INDEX_DIR is a module constant; not yet wired",
-
-    ("ignore", "dirs"):        "inert — ADR-026 commit 2 wires the [ignore] block",
-    ("ignore", "root_dirs"):   "inert — ADR-026 commit 2",
-    ("ignore", "extensions"):  "inert AND STALE (5 entries vs INDEXABLE_EXTS' 11) — ADR-026 commit 2 corrects it",
+    ("indexer", "repo_root"):  "inert — incremental_indexer uses os.getcwd(); ADR-026 §6 anchors the scan, not this key",
+    ("indexer", "index_dir"):  "inert — INDEX_DIR is a module constant; scan_policy hardcodes '.code-index' rather than half-wire it",
 }
 
 # Read by tools/coir_eval.py rather than src/. Out of scope for the src-side registry,
@@ -104,6 +115,8 @@ def test_every_shipped_key_is_accounted_for(shipped):
                 continue
             if (block, key) in wired or (block, key) in KNOWN_INERT:
                 continue
+            if (block, key) in WIRED_NO_DEFAULT:
+                continue
             unaccounted.append(f"[{block}].{key}")
 
     assert not unaccounted, (
@@ -116,12 +129,39 @@ def test_every_shipped_key_is_accounted_for(shipped):
 def test_known_inert_set_has_not_grown():
     """A tripwire on the inert list itself.
 
-    Update this count downward as commits 2 and 3 wire the [ignore] block. If you
-    find yourself raising it, you are adding a documented-but-dead knob.
+    Ratcheted down from 5 to 2 by ADR-026 commit 2, which made the [ignore] block
+    live. If you find yourself raising this number, you are adding a
+    documented-but-dead knob — which is the defect, not the fix.
     """
-    assert len(KNOWN_INERT) <= 5, (
+    assert len(KNOWN_INERT) <= 2, (
         f"KNOWN_INERT grew to {len(KNOWN_INERT)}. It may only shrink — see ADR-026 §8."
     )
+
+
+def test_wired_no_default_keys_are_really_read(shipped):
+    """Each `extra_*` key named as wired must actually reach the resolver.
+
+    Guards the loophole in WIRED_NO_DEFAULT: an entry there is exempt from the
+    value-comparison, so without this it would be a place to park a dead key.
+    """
+    import scan_policy
+
+    scan_policy.reset()
+    try:
+        policy = scan_policy.scan_policy(_REPO_ROOT)
+        block = shipped.get("ignore", {})
+        for extra_key, target in (
+            ("extra_dirs", policy.ignore_dirs),
+            ("extra_root_dirs", policy.ignore_root_dirs),
+            ("extra_extensions", policy.extensions),
+        ):
+            for value in block.get(extra_key, []):
+                assert value.lower() in {t.lower() for t in target}, (
+                    f"[ignore].{extra_key} lists {value!r} and the resolved policy "
+                    "does not contain it"
+                )
+    finally:
+        scan_policy.reset()
 
 
 def test_inert_keys_still_exist_in_the_shipped_config(shipped):

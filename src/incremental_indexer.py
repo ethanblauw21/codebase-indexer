@@ -80,6 +80,7 @@ from config import summarization_enabled, summarizer_model_id
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
+from scan_policy import PROJECT_EXTS, PROJECT_FILES, scan_policy
 from stable_id import stable_id, to_faiss_ids, TIER_CONFIGS, TIER_NUM, TIER_NAME
 
 # ---------------------------------------------------------------------------
@@ -97,33 +98,13 @@ DB_PATH   = f"{INDEX_DIR}/graph.db"
 # index that completes and one that does not — required editing source. The default
 # now lives beside its accessor in config.py, once.
 
-IGNORE_DIRS: frozenset[str] = frozenset({
-    ".next", "node_modules", "dist", ".git", "build",
-    ".code-index", ".continue", ".claude", ".vs", ".vscode",
-    "Modelfiles", "playwright-report", "test-results",
-    ".github", ".firebase", ".idx", "genkit", "indexer", "public", "mocks"
-})
-IGNORE_ROOT_DIRS: frozenset[str] = frozenset({"functions"})
-
-# Source extensions the disk scan chunks + embeds. C#/C++ have full Tier-A adapters
-# (ADR-003; adapters/__init__.py registers .cs/.cpp/.cc/.cxx/.h/.hpp) and ADR-017 §1
-# lists them as Tier A, but the scan gate historically omitted them — so their source
-# was never chunked, only their .csproj/.sln descriptors (edges only). Wiring the
-# extensions here makes the shipping indexer honor the Tier-A claim for C#/C++.
-INDEXABLE_EXTS: frozenset[str] = frozenset({
-    ".py", ".ts", ".tsx", ".js", ".jsx",   # Tier-A: JS/TS/Python
-    ".cs",                                   # Tier-A: C#
-    ".cpp", ".cc", ".cxx", ".h", ".hpp",     # Tier-A: C++ (.h routed to the C++ adapter)
-})
-
-# Project descriptor files: edges only, no chunking or embedding.
-PROJECT_EXTS: frozenset[str] = frozenset({".csproj", ".sln"})
-
-# Specific filenames (regardless of extension) that are project descriptors.
-PROJECT_FILES: frozenset[str] = frozenset({"compile_commands.json"})
-
-# Combined set for disk scan
-_ALL_SCAN_EXTS: frozenset[str] = INDEXABLE_EXTS | PROJECT_EXTS
+# The scan gate lives in scan_policy (ADR-026 §2), which resolves it from the
+# [ignore] block of indexer.toml over built-in defaults. It used to be three module
+# constants right here, re-implemented by hand in MCPServer's watchdog filter — the
+# drift that let a JavaScript-seeded exclusion list survive on a Python tool.
+#
+# `from incremental_indexer import IGNORE_DIRS` now raises, deliberately: a stale
+# import must fail loudly rather than resolve to an unconfigured value.
 
 # ---------------------------------------------------------------------------
 # MD5 file hash (change detection only — not the stable ID formula)
@@ -148,39 +129,63 @@ def md5_file(path: str) -> str:
 # Disk scan
 # ---------------------------------------------------------------------------
 
-def scan_disk(repo_path: str) -> dict[str, str]:
+def scan_disk(repo_path: str, *, quiet: bool = False) -> dict[str, str]:
     """
     Walk `repo_path` and return {relative_path: md5_hash} for every indexable file.
 
-    Directory exclusions:
-      • Global ignores (IGNORE_DIRS) are applied at every depth.
-      • IGNORE_ROOT_DIRS ("functions") is skipped only at the repository root
-        because the same name might legitimately appear in nested packages.
+    What is included and excluded is decided entirely by `scan_policy` (ADR-026 §2),
+    which resolves `[ignore]` from `indexer.toml` over the built-in defaults. The
+    same policy object answers the MCP server's watchdog filter, so the two cannot
+    drift apart.
+
+    Raises `ValueError` when `repo_path` is not the directory holding `indexer.toml`
+    (ADR-026 §6) — resolved against the wrong root, a root-only exclusion silently
+    matches nothing, and under this gate a silent mismatch decides what gets deleted
+    from the index.
     """
+    policy = scan_policy(repo_path)
+    _check_anchor(policy, repo_path)
+
     result: dict[str, str] = {}
 
     for root, dirs, files in os.walk(repo_path):
         rel_root = os.path.relpath(root, repo_path).replace("\\", "/")
-
-        if rel_root == ".":
-            dirs[:] = [
-                d for d in dirs
-                if d not in IGNORE_DIRS and d not in IGNORE_ROOT_DIRS
-            ]
-        else:
-            dirs[:] = [d for d in dirs if d not in IGNORE_DIRS]
+        policy.prune(dirs, at_root=(rel_root == "."))
 
         for fname in files:
-            if Path(fname).suffix.lower() in _ALL_SCAN_EXTS or fname in PROJECT_FILES:
-                full_path = os.path.join(root, fname)
-                rel_path  = os.path.relpath(full_path, repo_path).replace("\\", "/")
+            rel_path = (fname if rel_root == "." else f"{rel_root}/{fname}")
+            if policy.is_scannable(rel_path):
                 try:
-                    result[rel_path] = md5_file(full_path)
+                    result[rel_path] = md5_file(os.path.join(root, fname))
                 except OSError:
                     # Race: file disappeared between os.walk listing and open()
                     pass
 
+    if not quiet:
+        print(f"{policy.describe()} files={len(result)}")
+
     return result
+
+
+def _check_anchor(policy, repo_path: str) -> None:
+    """Refuse a scan whose root is not the directory the config was found in.
+
+    `load_indexer_config()` walks *up* from its start directory while
+    `MCPServer.py` sets `repo_path = os.getcwd()`, and this repo's own `.gitignore`
+    notes the server is sometimes launched from `src/`. Launched that way the config
+    resolves at the real root while the scan root is `src/`, so
+    `extra_root_dirs = ["benchmarks"]` is matched against the wrong tree and does
+    nothing at all. Silence there is the expensive outcome, so it raises.
+    """
+    if policy.config_path is None:
+        return                      # no config: defaults apply anywhere, nothing to mismatch
+    if os.path.normcase(os.path.abspath(repo_path)) != os.path.normcase(policy.root):
+        raise ValueError(
+            f"Scan root {os.path.abspath(repo_path)!r} is not the directory holding "
+            f"{policy.config_path!r}. Run the indexer from {policy.root!r}, or put an "
+            f"indexer.toml in the directory you meant to scan — [ignore].root_dirs "
+            f"would otherwise be resolved against a tree it was not written for."
+        )
 
 
 # ---------------------------------------------------------------------------

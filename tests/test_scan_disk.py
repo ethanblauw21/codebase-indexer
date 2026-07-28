@@ -158,19 +158,56 @@ def test_directory_name_matching_is_currently_case_sensitive(repo):
 # The second consumer — MCPServer's watchdog filter must agree with scan_disk
 # ---------------------------------------------------------------------------
 
-def test_watchdog_filter_mirrors_the_scan_gate_by_hand():
-    """`MCPServer._is_relevant` re-implements the gate instead of sharing it.
+def test_watchdog_filter_shares_the_gate_instead_of_mirroring_it():
+    """`MCPServer._is_relevant` calls the shared export (ADR-026 §2, commit 2).
 
-    It imports the raw constants inside the function body and walks the path
-    components itself. ADR-026 §2 replaces both with one `is_indexable()` export,
-    because a hand-mirrored rule is a rule that can drift — this test documents the
-    coupling that makes that necessary.
+    Commit 1's version of this test asserted the opposite — that the filter imported
+    the raw constants and walked the path components by hand. That was the coupling
+    to remove; this is the inversion.
     """
     import inspect
     import MCPServer
 
     source = inspect.getsource(MCPServer._CodeChangeHandler._is_relevant)
-    assert "from incremental_indexer import" in source
-    assert "IGNORE_DIRS" in source
-    assert "IGNORE_ROOT_DIRS" in source
-    assert "INDEXABLE_EXTS" in source
+    assert "from scan_policy import scan_policy" in source
+    assert "is_scannable" in source
+    for stale in ("IGNORE_DIRS", "IGNORE_ROOT_DIRS", "INDEXABLE_EXTS"):
+        assert stale not in source, f"{stale} is gone; the filter must not name it"
+
+
+def test_the_two_consumers_agree_on_every_scanned_path(repo):
+    """The property the shared export exists to guarantee, checked directly.
+
+    Whatever `scan_disk` picks up, the watchdog must consider relevant — otherwise a
+    file is indexed once and then never refreshed when it changes.
+    """
+    import scan_policy
+
+    _write(repo, "venv/Lib/site-packages/requests/api.py")
+    _write(repo, "public/widget.js")
+    _write(repo, "Dist/bundle.js")
+    _write(repo, "src/app.csproj", "<Project />\n")
+
+    scan_policy.reset()
+    policy = scan_policy.scan_policy(repo)
+    scanned = set(ii.scan_disk(repo))
+
+    for rel in scanned:
+        assert policy.is_scannable(rel), f"scan_disk took {rel}; the watchdog would ignore it"
+
+    # ...and the converse, over every file actually on disk.
+    for root, _dirs, files in os.walk(repo):
+        for fname in files:
+            rel = os.path.relpath(os.path.join(root, fname), repo).replace(os.sep, "/")
+            if policy.is_scannable(rel):
+                assert rel in scanned, f"the watchdog would fire on {rel}; scan_disk skips it"
+
+
+def test_stale_constant_imports_raise(repo):
+    """`from incremental_indexer import IGNORE_DIRS` must fail loudly.
+
+    Leaving a same-named alias behind would be a second definition of the knob —
+    the drift this ADR removes, reintroduced as a compatibility shim.
+    """
+    for name in ("IGNORE_DIRS", "IGNORE_ROOT_DIRS", "INDEXABLE_EXTS", "_ALL_SCAN_EXTS"):
+        assert not hasattr(ii, name), f"incremental_indexer still exposes {name}"

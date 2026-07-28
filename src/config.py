@@ -25,12 +25,26 @@ import tomllib
 
 
 def find_config_path(start_dir: str | None = None) -> str | None:
-    """Walk up from ``start_dir`` (default cwd) to the first ``indexer.toml``."""
+    """Walk up from ``start_dir`` (default cwd) to the first ``indexer.toml``.
+
+    **The walk stops at a repository boundary** (ADR-026 §6): a directory holding a
+    ``.git`` entry is the last one examined. Without that stop, a stray
+    ``indexer.toml`` in a parent of the repo — a home directory, a folder holding
+    several checkouts — silently configures every repo beneath it. That used to mean
+    the wrong reranker settings; once ``[ignore]`` is live it decides what gets
+    *deleted* from an index, which is not a mistake worth inheriting from a
+    grandparent directory.
+
+    ``.git`` is tested with ``exists`` rather than ``isdir`` on purpose: worktrees and
+    submodules record it as a file.
+    """
     d = os.path.abspath(start_dir or os.getcwd())
     while True:
         candidate = os.path.join(d, "indexer.toml")
         if os.path.isfile(candidate):
             return candidate
+        if os.path.exists(os.path.join(d, ".git")):
+            return None            # repo boundary — do not inherit from above it
         parent = os.path.dirname(d)
         if parent == d:
             return None

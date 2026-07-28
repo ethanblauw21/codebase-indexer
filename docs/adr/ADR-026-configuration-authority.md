@@ -331,15 +331,65 @@ deletion guard, an anchoring fix, and a live end-to-end verification run.
    the wrong reason. A case-variant only slips the gate when the canonically-cased
    directory does *not* already exist. The test now uses `Dist/` and says why.
 
-**Commit 2 — plumbing (no default changes)**
-- [ ] `src/scan_policy.py` leaf module: `scan_policy()` + `is_indexable(rel_path)`, cached, with `reset()` for tests
-- [ ] `[ignore]` block reads `dirs` / `root_dirs` / `extensions` and `extra_*` variants; precedence table enforced; both-keys-set raises `ValueError`; list-of-strings type validation
-- [ ] Correct the shipped `[ignore].extensions` to all 11 of `INDEXABLE_EXTS` in the same commit that makes it live
-- [ ] `scan_disk()` and `MCPServer._is_relevant` both call the shared export; `_is_relevant` stops re-implementing the logic
-- [ ] Rename `IGNORE_DIRS` / `IGNORE_ROOT_DIRS` / `INDEXABLE_EXTS` with a leading underscore so the old import **raises**
-- [ ] Scan root anchored to the directory containing `indexer.toml`; mismatch refused; upward walk stops at a `.git` boundary
-- [ ] Startup log line: config path, effective sets, resulting file count
-- [ ] Tests: `extra_*` extends; bare key replaces; both set raises; `extra_dirs = []` is a no-op; `dirs = []` excludes nothing; root-only exclusions do not match at depth; a scan launched from `src/` still excludes `benchmarks/`; a stale `from incremental_indexer import IGNORE_DIRS` raises
+**Commit 2 — plumbing (no default changes)** ✅ done 2026-07-28
+- [x] `src/scan_policy.py` leaf module: `scan_policy()` + `is_indexable(rel_path)`, cached per root, with `reset()` for tests
+- [x] `[ignore]` block reads `dirs` / `root_dirs` / `extensions` and `extra_*` variants; precedence table enforced; both-keys-set raises `ValueError` naming both; list-of-strings type validation
+- [x] The shipped `[ignore]` block given a disposition — **removed rather than corrected**, see deviation 1
+- [x] `scan_disk()` and `MCPServer._is_relevant` both call the shared export; `_is_relevant` stops re-implementing the logic
+- [x] `IGNORE_DIRS` / `IGNORE_ROOT_DIRS` / `INDEXABLE_EXTS` **deleted** from `incremental_indexer` so the old import raises (deviation 4)
+- [x] Scan root anchored to the directory containing `indexer.toml`; mismatch refused; upward walk stops at a `.git` boundary
+- [x] Startup log line: config path, effective sets, resulting file count
+- [x] Tests: `tests/test_scan_policy.py` (24 cases) + 3 new in `tests/test_scan_disk.py` + 1 in `tests/test_config_drift.py`
+- [x] Suite green: **290 passed** (265 before, +25 new)
+
+**Verified on this repo, before any default changed:** the scan drops from **613 files
+to 102** — `src` 35, `tests` 54, `tools` 13, and nothing else. `benchmarks/` (510 files
+of cloned CoIR corpus) and `gpu-crash-repro/` are gone. That is the whole of the
+motivating incident fixed by *configuration*, with the default exclusion set still
+byte-identical to the one that shipped on 2026-07-27 — which is the point of splitting
+the commits.
+
+**Deviations from the Decision text, decided during commit 2:**
+
+1. **The shipped `[ignore].dirs` / `.root_dirs` / `.extensions` were removed, not
+   corrected.** §1 said to fix `extensions` from 5 entries to all 11 "in the same commit
+   that makes it live". Making it live is what exposed the deeper problem: a **bare key
+   replaces the defaults**, so any values kept in the shipped file freeze this repo's gate
+   at the day they were written. A future Tier-A language added to
+   `DEFAULT_INDEXABLE_EXTS` would be silently ignored *in this repository* — the same
+   class of defect as the 5-vs-11 rot, reintroduced one layer up. The shipped file now
+   sets only `extra_root_dirs` (this repo's own generated trees) and documents the
+   defaults in a comment marked do-not-paste. A wrong list is now impossible rather than
+   merely corrected.
+2. **A third export, `is_scannable()`, was necessary — and it fixed a live bug.**
+   `scan_disk` admits `.csproj`/`.sln`/`compile_commands.json` as edges-only descriptors;
+   `_is_relevant` tested `INDEXABLE_EXTS` alone. So **editing a `.csproj` never triggered
+   a reindex even though the indexer reads it** — precisely the drift §2 predicts from a
+   hand-mirrored rule. `is_indexable()` (chunked + embedded) and `is_scannable()` (that,
+   plus descriptors) are now separate predicates and the watchdog uses the latter.
+   `tests/test_scan_disk.py::test_the_two_consumers_agree_on_every_scanned_path` asserts
+   the two agree in both directions over a real tree, rather than trusting either.
+3. **§6's mismatch is refused, which supersedes a checklist line.** The commit-2 checklist
+   asked that "a scan launched from `src/` still excludes `benchmarks/`". Under §6 the
+   scan root *is* the config's directory, so that scan is refused with an explicit message
+   instead — you cannot resolve root-only exclusions against a subtree you did not write
+   them for. The test asserts the refusal.
+4. **The constants were deleted, not underscore-renamed.** A leading-underscore alias is
+   still a second definition of the knob, and `scan_policy` is the first. Both spellings
+   raise `AttributeError`/`ImportError` now; `tests/test_cs_cpp_indexing.py` was repointed
+   at `scan_policy.DEFAULT_INDEXABLE_EXTS`.
+5. **`.code-index` is a literal in `ALWAYS_IGNORED_DIRS`, not a read of
+   `[indexer].index_dir`.** That key is still inert (`INDEX_DIR` is a module constant), and
+   reading it *only* for exclusion would leave one knob with two resolution paths — the
+   ADR-020 split-brain, in miniature. It stays in `KNOWN_INERT` with that reason.
+6. **Extensions must carry a leading dot, validated at load.** Not in the Decision text.
+   `extra_extensions = ["rs"]` parses fine, is type-correct, and matches zero files; the
+   ADR's own §1 example (`[".rs"]`) is the only thing that says otherwise. It raises.
+7. **The drift test grew a `WIRED_NO_DEFAULT` category.** `extra_*` keys are wired but have
+   no single code default to compare against — the shipped value is this repo's layout,
+   not something another repo should inherit. Left uncategorized they would have read as
+   unaccounted-for. A companion test asserts every key parked there is genuinely reachable,
+   so the category cannot become a place to hide dead knobs. `KNOWN_INERT` ratchets 5 → 2.
 
 **Commit 3 — default changes and the guard (revertible without losing 1 or 2)**
 - [ ] Add `venv`, `.venv`, `site-packages`, `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.eggs`, `htmlcov` to defaults; bare `env` deliberately excluded
