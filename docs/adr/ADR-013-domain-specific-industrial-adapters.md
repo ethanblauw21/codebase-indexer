@@ -132,6 +132,58 @@ discarded; they are routed to the correct edge type (a JSR target becomes a call
 lookup). The rate improved because the classification got *correct*, not because the resolver got
 broader — resolution scope is unchanged.
 
+### §5.1 — Why the 100% is not circular, and what to monitor instead
+
+A 100% rate produced by removing 5.0% of the denominator deserves suspicion, so the property that makes
+it meaningful is stated here rather than left to be inferred.
+
+**Role classification is positional and independent of resolution outcome.** `Signature.role_at` is a
+function of `(index, arity)` only. It never consults the tag registry, and the adapter assigns a role
+*before* attempting resolution. Operand 1 of `GSV` is typed by its position, not by whether that string
+happens to match a declared tag. So an operand cannot escape the denominator by failing to resolve —
+the two decisions are made independently and in that order.
+
+That independence is exactly what creates the failure mode worth naming: **if the role table is wrong,
+misclassified operands leave the denominator rather than failing to resolve, and the rate stays at 100%
+while extraction silently degrades.** A metric designed to detect bad extraction is definitionally
+incapable of falling under that condition.
+
+So the rate alone is not the health signal. **The monitored number is the exclusion rate, currently
+5.0% (1,575 of 31,304).** On a future corpus the thing to watch is exclusions moving away from 5.0%,
+not resolution dropping below 100%. Resolution cannot drop; exclusions can drift, and drift is what a
+wrong role entry looks like from the outside.
+
+The 7 nested-`ABS` artifacts are recorded rather than rounded away for the same reason. Nested
+instruction calls inside `CPT`/`FAL` expressions are a category the scanner does not handle — it
+matches every `MNEMONIC(` including nested ones — and 7 is the count *in this corpus*, not a bound.
+
+### §5.2 — Corrections not yet asserted by any fixture
+
+The `GSV` role bug was a correct fix verified against the survey that did nothing in the adapter. The
+survey and the adapter are two implementations of the same parse, so a fix verified in one says nothing
+about the other. That generalizes, and this is the resulting audit.
+
+| Correction | Verified against | Fixture asserts it |
+|---|---|---|
+| Bracket-depth operand splitting | synthetic unit cases + corpus delta | **yes** — `array_subscript_2d` |
+| JSR program-scoping | survey | **yes** — `jsr_same_program` |
+| Mnemonic alias table | fixture + teeth check | **yes** — `mnemonic_alias` |
+| AOI positional binding | 418 corpus call sites | **yes** — `aoi_definition` |
+| Alias → module I/O | survey | **yes** — `alias_module_io` |
+| `SWPB` destination index 2 | survey, Rockwell docs, profiling | **no** |
+| `GSV` destination last + multi-arity roles | survey, then audit | **no** |
+| `SSV` emits no write | profiling | **no** |
+| `BTD` destination index 2 | profiling | **no** |
+| `FAL` destination index 4 | profiling | **no** |
+| Nameless module handling | corpus counts | **no** |
+| Neutral text present in chunk body | corpus measurement | **no** |
+
+The seven rows marked **no** are established facts with no durable guard. They are true today and
+nothing would notice if they stopped being true. Fixtures — not the diagnostics — are the validation
+artifact, and the diagnostics under `tools/l5x/` should retire only once every fact they established
+has a fixture asserting it *in the adapter*. Otherwise they stay the convenient thing to check against,
+which is how a fix comes to be validated against the wrong implementation.
+
 ## §6 — Falsifications
 
 The tables in `l5x_instructions.py` are the least valuable part of this work. The valuable part is what
@@ -150,13 +202,25 @@ is why the write-position table was corrected four times rather than shipped wro
 | `FAL` destination is last (secondary docs) | Corpus operand-kind profile | **False.** Index 5 is always the expression; destination is index 4 |
 | Fixed-position roles suffice | Systematic audit of all 144 positions | **False.** `GSV`/`SSV` multi-arity forms put the tag where a keyword was declared, and the adapter skips keyword operands *before* consulting writes — silently suppressing a real write edge |
 | AOI binding is positional | 418 call sites | **True.** Arity rule `1 + required non-Enable parameters` held at 418/418 |
-| A `Module` always has a `Name` | Corpus | **False.** 22 of 83 (26.5%) have none; sub-modules key on parent + port id + address |
+| A `Module` always has a `Name` | Corpus | **False.** 22 of 83 (26.5%) have none; they key on parent + port id + address |
+| The 22 nameless ones might be nested in vendor blobs, making 61 correct | Ancestor-chain check | **False.** All 83 are direct children of `<Modules>` under `<Controller>`; `iter("Module")` and `Modules.findall("Module")` agree exactly. 83 is the inventory |
+| A missing attribute means a malformed element worth skipping | Module count | **False, and the pattern is the finding.** `if not name: continue` silently dropped a quarter of the module hierarchy. A missing attribute is a case to handle or fail loudly on, never to skip quietly |
 | The bracket bug explains the unresolved operands | Root-cause breakdown | **False.** It explained 36 of 556 (6.5%). The other 520 were role misclassification |
 
 Two method notes worth carrying to the next adapter:
 
-**Secondary documentation describes the wrong thing.** Third-party sources give the Studio 5000 *dialog
-field list*, which is not the neutral-text operand order. They were wrong for both `BTD` and `FAL`.
+**Documentation is authoritative for semantics and unreliable for serialization order — hypothesis,
+not established.** Documentation gives the Studio 5000 *faceplate / dialog field list*, which is not
+necessarily the order of the neutral-text serialization. `BTD` and `FAL` are both instructions where
+the editor groups operands differently from a flat argument list, which would explain why exactly those
+two were wrong while the semantics they describe were correct.
+
+If that mechanism is real, documentation is not unreliable in general — it is unreliable in one
+predictable direction, and the rule for the next adapter is: **take semantics to the manual, take
+serialization order to the corpus.** That is far more useful than "docs were wrong twice." Recorded as
+a hypothesis because two instances is not a pattern; a third instruction with grouped faceplate
+operands and a confirmed flat order would settle it.
+
 Rockwell's own docs site is JS-rendered and unfetchable; its literature PDFs need tooling not installed.
 
 **Corpus operand-kind profiling beats documentation.** A destination must be a declared tag, while bit
