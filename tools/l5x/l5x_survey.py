@@ -1,11 +1,26 @@
 #!/usr/bin/env python3
-"""L5X corpus survey - Phase 0 diagnostic for ADR-013.
+"""L5X corpus structural survey - exploratory diagnostic for ADR-013.
 
 Reports on the shape of an L5X corpus so that extraction design can be
 grounded in what the files actually contain. This script extracts nothing
-into the index, imports nothing from src/, and adds no dependencies. It is
-a throwaway. Once the findings are written into the ADR-013 implementation
-log, this can be deleted.
+into the index, imports nothing from src/, and adds no dependencies.
+
+**Not a throwaway, and not a verification artifact** (ADR-013 §5.5). An
+earlier version of this docstring said it could be deleted once the findings
+reached the ADR. That was withdrawn: this is the *structural* instrument —
+element histograms and file shape, distinct from `l5x_survey_v2.py`, which
+surveys instructions and operands — and it is the class of tool that found
+22 of 83 modules missing from the adapter, on a run made for an unrelated
+reason. Fixtures assert what you already know; diagnostics find what you do
+not, so retiring these once the fixtures are complete trades the discovery
+instrument for the regression net.
+
+Two rules come with keeping it. **Nothing is ever verified against this
+script's output** — the adapter is the only implementation that ships, and a
+fix confirmed here says nothing about it (§5.0: a wrong figure reached the
+ADR precisely this way). And **if this drifts from the adapter, that is a
+finding rather than a defect**; the disagreement is information about one of
+the two.
 
 Usage:
     python l5x_survey.py <dir-or-file> [<dir-or-file> ...]
