@@ -204,16 +204,19 @@ INSTRUCTIONS: dict[str, Signature] = {
     "RES": _sig((TAG,), writes=(0,)),
 
     # -- system / message ------------------------------------------------------
-    # GSV(Class, Instance, Attribute, Dest) - but the corpus carries 3-operand
-    # forms too, and the destination is the LAST operand in both. A fixed index
-    # wrote the short-form call sites to the wrong position.
-    # Position 1 is the object Instance, which is a keyword for singleton
-    # objects but names a real tag in 6 of 29 four-operand corpus occurrences.
-    # It is typed TAG rather than KEYWORD because the failure modes are not
-    # symmetric: a keyword string typed as TAG simply fails to resolve and
-    # emits nothing, whereas a tag typed as KEYWORD is skipped and silently
-    # loses a real read edge.
-    "GSV": _sig((KEYWORD, TAG, KEYWORD, TAG), writes=(-1,), last_role=TAG),
+    # GSV(Class, Instance, Attribute, Dest). The destination is the LAST
+    # operand; a fixed index wrote short-form call sites to the wrong position.
+    #
+    # Position 1 is the object Instance, and it is a KEYWORD. It was previously
+    # typed TAG on the argument that a keyword typed as TAG merely fails to
+    # resolve, while a tag typed as KEYWORD loses a real read edge — an
+    # asymmetry that is sound in general but rests on a false premise here.
+    # Profiling what operand 1 actually names: 21 of 35 match nothing declared,
+    # 8 name a Module, and the 6 that match a declared tag ALSO name a module
+    # every time — they are the module's alias tag colliding by name, not a tag
+    # read. So there was no read edge to lose, and typing it TAG emitted 6 false
+    # read edges plus 29 spurious resolution failures.
+    "GSV": _sig((KEYWORD, KEYWORD, KEYWORD, TAG), writes=(-1,), last_role=TAG),
     # SSV(Class, Instance, Attribute, Source) writes the system object, NOT a
     # tag. Its last operand is read. Giving it a write position would emit
     # false write edges - deliberately none.

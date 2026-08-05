@@ -149,6 +149,19 @@ class LanguageAdapter(Protocol):
     language_id: str
     extensions: frozenset[str]
 
+    # Optional. When an adapter defines `chunkable_kinds` as a frozenset of
+    # Symbol.kind values, only symbols of those kinds become tier-1 chunks.
+    # Omitting it — which every adapter but L5X does — means every symbol is
+    # chunkable, so this is additive and changes nothing by default.
+    #
+    # This filters CHUNKING ONLY. Symbols and edges reach the graph through
+    # `parse_file`, not through the chunker, so a non-chunkable kind is still a
+    # first-class node with all of its edges intact. It is not indexed as a
+    # retrievable passage, which is a statement about retrieval granularity
+    # rather than about extraction.
+    #
+    # chunkable_kinds: frozenset[str]
+
     def parse(self, path: str, src: bytes) -> ParseResult:
         """
         Parse source bytes and return symbols, edges, references, symbol types.

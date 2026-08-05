@@ -111,12 +111,12 @@ stable across those versions. All five are `TargetType="Controller"` with `Conta
 | | |
 |---|---|
 | Rungs | 3,935 — 1,779 in program routines, **2,156 inside AOI definitions** |
-| Routines | 209 in programs (183 RLL, 22 ST, 4 FBD) + 61 AOI definitions |
+| Routines | 279 — 209 in programs (183 RLL, 22 ST, 4 FBD), 70 inside 61 AOI definitions |
 | Tags | 2,326 declared, 97.9% controller-scoped, 412 aliases |
 | Modules | **83** — only 61 carry a `Name` attribute |
 | Operands | 31,304 |
-| Tag resolution | **25,986 / 25,986 = 100.000%** |
-| Write edges | 9,110, all resolving |
+| Write positions | 11,379, all resolving → 3,868 distinct write edges |
+| Read positions | 16,111, of which 285 unresolved (98.2%) |
 | JSR resolution | 156 / 156, program-scoped |
 | AOI positional binding | **418 / 418** |
 
@@ -124,18 +124,40 @@ stable across those versions. All five are `TargetType="Controller"` with `Conta
 more than half the code. AOI logic is also hermetically encapsulated: zero references outside its own
 parameters and local tags across all 2,156 AOI rungs.
 
-The 100% tag-resolution figure is only meaningful with its denominator stated. An earlier model treated
-every operand as a tag reference, giving 26,582 operands and a 2.0% failure rate. Under the operand-role
-model the denominator is 25,993 — 589 fewer — because 1,575 operands (5.0%) are not tag references at
-all: 986 literals, 220 expression fragments, 156 routine names, 155 keywords, 58 labels. Those are not
-discarded; they are routed to the correct edge type (a JSR target becomes a call edge, not a failed tag
-lookup). The rate improved because the classification got *correct*, not because the resolver got
-broader — resolution scope is unchanged.
+Two figures in earlier revisions of this table did not survive being checked against the adapter, and
+both are corrected above. They are left described rather than deleted because the way they failed is
+the reusable part.
 
-### §5.1 — Why the 100% is not circular, and what to monitor instead
+**"Tag resolution 25,986 / 25,986 = 100.000%" was never a fact about the adapter.** It was produced by
+a third implementation — a one-off measurement script, neither the survey nor the shipping code — which
+counted only *base operands at TAG positions*. The adapter also emits reads for identifiers found inside
+array subscripts and inside expression operands, and those are where nearly all failures live. Measured
+against the adapter: **285 of 16,111 read positions do not resolve (1.8%)**, split 222 expression
+interiors, 56 subscript interiors, 7 base operands. Writes resolve at 11,379 / 11,379.
 
-A 100% rate produced by removing 5.0% of the denominator deserves suspicion, so the property that makes
-it meaningful is stated here rather than left to be inferred.
+The expression-interior rate is 31% by itself, and that is a known imprecision rather than a defect:
+every identifier inside a `CPT` or `FAL` expression is treated as a read, which sweeps up nested
+mnemonics and symbolic constants along with real tag references. Narrowing it needs an expression
+parser. It is recorded here so the number is not mistaken for extraction failure.
+
+**"Write edges 9,110" was a survey figure presented as an adapter figure.** The adapter emits 11,379
+resolved write positions. The deduplicated total, 3,868 distinct write edges, agrees exactly — which is
+why the discrepancy survived: the number that got checked downstream was the one that was right.
+
+Neither correction changes a conclusion in this ADR. Both were found by §5.3's cross-source audit, and
+neither would have been found by looking at the output and finding it plausible.
+
+The operand-role reclassification the old figure described is still real and still the reason the model
+is right: an earlier model treated every operand as a tag reference, giving 26,582 operands and a 2.0%
+failure rate, because 1,575 operands (5.0%) are not tag references at all — 986 literals, 220 expression
+fragments, 156 routine names, 155 keywords, 58 labels. Those are not discarded; they are routed to the
+correct edge type (a JSR target becomes a call edge, not a failed tag lookup). Classification got
+*correct*; the resolver never got broader.
+
+### §5.1 — Why the resolution rate is not circular, and what to monitor instead
+
+A near-total resolution rate produced by removing 5.0% of the denominator deserves suspicion, so the
+property that makes it meaningful is stated here rather than left to be inferred.
 
 **Role classification is positional and independent of resolution outcome.** `Signature.role_at` is a
 function of `(index, arity)` only. It never consults the tag registry, and the adapter assigns a role
@@ -144,14 +166,31 @@ happens to match a declared tag. So an operand cannot escape the denominator by 
 the two decisions are made independently and in that order.
 
 That independence is exactly what creates the failure mode worth naming: **if the role table is wrong,
-misclassified operands leave the denominator rather than failing to resolve, and the rate stays at 100%
-while extraction silently degrades.** A metric designed to detect bad extraction is definitionally
-incapable of falling under that condition.
+misclassified operands leave the denominator rather than failing to resolve, and the rate stays high
+while extraction silently degrades.** A metric designed to detect bad extraction is largely incapable of
+falling under that condition.
 
 So the rate alone is not the health signal. **The monitored number is the exclusion rate, currently
 5.0% (1,575 of 31,304).** On a future corpus the thing to watch is exclusions moving away from 5.0%,
-not resolution dropping below 100%. Resolution cannot drop; exclusions can drift, and drift is what a
-wrong role entry looks like from the outside.
+not resolution dropping. Resolution barely can drop; exclusions can drift, and drift is what a wrong
+role entry looks like from the outside.
+
+`tools/l5x_role_audit.py` is the check that makes this operational, and it is deliberately **not** one
+of the retiring diagnostics — it needs a corpus of real controllers, so it can never become a fixture.
+It asserts three predicates per operand position. The first two (a non-tag role must not hold declared
+tags; a write position must resolve) were already being run informally. The third is new and exists
+because the first two have a blind spot: **a position typed `TAG` that never actually holds a tag is
+invisible to both.** That predicate found `GSV[1]` (§6). Its calibration matters — a *low tag fraction*
+at a TAG position is not a defect, since `ADD(A,5,Dest)` legitimately puts a literal at index 1 and
+literals are skipped harmlessly. Only undeclared names and CIP object names count. An earlier draft
+flagged on tag fraction and produced 22 false alarms against the 1 real finding.
+
+The table also carries a corpus-independent invariant, in `tests/test_l5x_adapter.py`: **every write
+position must also be typed `TAG` at every arity it can take.** The adapter skips non-tag roles *before*
+consulting `writes`, so a write position typed `KEYWORD` is not a wrong edge but a silently missing one.
+That is precisely what shipped in `GSV`, and it is checked without a corpus because the corpus exercises
+only 56 of the 72 table entries — the other 16 would otherwise go unchecked until a controller that used
+them turned up.
 
 The 7 nested-`ABS` artifacts are recorded rather than rounded away for the same reason. Nested
 instruction calls inside `CPT`/`FAL` expressions are a category the scanner does not handle — it
@@ -163,26 +202,139 @@ The `GSV` role bug was a correct fix verified against the survey that did nothin
 survey and the adapter are two implementations of the same parse, so a fix verified in one says nothing
 about the other. That generalizes, and this is the resulting audit.
 
-| Correction | Verified against | Fixture asserts it |
-|---|---|---|
-| Bracket-depth operand splitting | synthetic unit cases + corpus delta | **yes** — `array_subscript_2d` |
-| JSR program-scoping | survey | **yes** — `jsr_same_program` |
-| Mnemonic alias table | fixture + teeth check | **yes** — `mnemonic_alias` |
-| AOI positional binding | 418 corpus call sites | **yes** — `aoi_definition` |
-| Alias → module I/O | survey | **yes** — `alias_module_io` |
-| `SWPB` destination index 2 | survey, Rockwell docs, profiling | **no** |
-| `GSV` destination last + multi-arity roles | survey, then audit | **no** |
-| `SSV` emits no write | profiling | **no** |
-| `BTD` destination index 2 | profiling | **no** |
-| `FAL` destination index 4 | profiling | **no** |
-| Nameless module handling | corpus counts | **no** |
-| Neutral text present in chunk body | corpus measurement | **no** |
+| Correction | Verified against | Guard | Teeth check |
+|---|---|---|---|
+| Bracket-depth operand splitting | synthetic unit cases + corpus delta | `array_subscript_2d` | ✔ |
+| JSR program-scoping | survey | `jsr_same_program` | ✔ |
+| Mnemonic alias table | fixture + teeth check | `mnemonic_alias` | ✔ |
+| AOI positional binding | 418 corpus call sites | `aoi_definition` | ✔ |
+| Alias → module I/O | survey | `alias_module_io` | ✔ |
+| `SWPB` destination index 2 | survey, Rockwell docs, profiling | `write_position_swpb_btd` | ✔ |
+| `BTD` destination index 2 | profiling | `write_position_swpb_btd` | ✔ |
+| `FAL` destination index 4 + expression role | profiling | `fal_expression` | ✔ |
+| `GSV` destination last + multi-arity roles | survey, then audit | `gsv_ssv_system` | ✔ |
+| `GSV[1]` is a keyword, not a tag | role audit, predicate 3 | `gsv_ssv_system` | ✔ |
+| `SSV` emits no write | profiling | `gsv_ssv_system` | ✔ |
+| Nameless module handling | corpus counts | `module_nameless` | ✔ |
+| Module address from the **upstream** port | corpus port profile | `module_nameless` | ✔ |
+| Neutral text present in chunk body | corpus measurement | `test_l5x_adapter.py` | ✔ |
+| AOI internals are not tier-1 chunks | corpus chunk counts | `test_l5x_adapter.py` | ✔ |
+| Dropped elements are reported, not silent | the module bug | `test_l5x_adapter.py` | ✔ |
+| Empty operand slots preserve position | corpus, 7 sites | `test_l5x_adapter.py` | **none possible** |
 
-The seven rows marked **no** are established facts with no durable guard. They are true today and
-nothing would notice if they stopped being true. Fixtures — not the diagnostics — are the validation
-artifact, and the diagnostics under `tools/l5x/` should retire only once every fact they established
-has a fixture asserting it *in the adapter*. Otherwise they stay the convenient thing to check against,
-which is how a fix comes to be validated against the wrong implementation.
+Every correction now has a guard, and each guard was verified to fail when its fix is reverted — a
+fixture that scores 1.000 with and without the fix guards nothing. The teeth check is scripted rather
+than argued: revert the fix in memory, re-score all eleven fixtures, and confirm the intended one and
+only the intended one breaks.
+
+**One row cannot be given teeth, and that is itself the finding.** Preserving empty operand slots is
+correct — an omitted operand is a hole, and collapsing it renumbers everything after it — but reverting
+it reproduces the corpus edge counts *exactly*. `GSV` and `SSV` are the only instructions here that
+carry holes, and their role tuples are uniform keywords followed by a last-position destination, so a
+shift happens to re-type every operand to what it already was. The fix is defensive against a table
+that does not exist yet. It is asserted at the scanner instead, and flagged here rather than described
+as a bug fix, because claiming it corrected edges would be false.
+
+### §5.3 — Cross-source audit of the headline figures
+
+§5.2 covers *corrections* with no fixture. It does not cover *measurements* resting on a single script
+with nothing checking them, which is a different failure and the one that produced the module bug: 61
+looked plausible against 61 AOIs, and two unrelated numbers agreeing was enough to stop anyone looking.
+
+A valid second source must come from outside the code that produced the first number — an element
+histogram, a different traversal, raw-text arithmetic, or arithmetic that has to come out a particular
+way for structural reasons. Another function in the same module agreeing is not independent.
+
+| Figure | Value | Checked against | Result |
+|---|---|---|---|
+| Modules | 83 | `iter()` vs `Modules.findall()`; ancestor-chain check | agree |
+| Programs | 35 | whole-document element histogram | agree |
+| AOI definitions | 61 | whole-document element histogram | agree |
+| Routines | 279 | histogram + parent-map traversal (209 program / 70 AOI) | agree |
+| Tags | 2,326 | whole-document element histogram | agree |
+| Parameters | 2,280 | 2,402 elements − 61 AOIs × 2 implicit | agree |
+| Local tags | 947 | whole-document element histogram | agree |
+| Rungs | 3,935 | histogram vs parent-map ownership traversal | agree |
+| Alias edges | 412 | raw `AliasFor="` string count over file bytes | agree |
+| Tag scope split | 97.9% | parent-map traversal (2,276 controller / 50 program) | agree |
+| Symbols | 6,011 | per-kind arithmetic closes exactly | agree |
+| Edges | 13,316 | per-kind arithmetic closes exactly | agree |
+| JSR call sites | 156 | raw `JSR(` regex count over rung text | agree |
+| Write positions | 11,379 | — | **corrected**, see §5 |
+| Read resolution | 285 unresolved | — | **corrected**, see §5 |
+| Operands | 31,304 | *no independent source* | — |
+| Distinct tags referenced | — | *no independent source* | — |
+| Chunk counts | 2,784 | *equals chunkable-kind symbol count, not independent* | — |
+| AOI positional binding | 418 / 418 | *survey only* | — |
+
+**The blanks are the deliverable.** Operand totals have no second source because any recount uses the
+same scanner; a genuinely independent one needs a second tokenizer, which is a rewrite rather than a
+check. The AOI arity rule held at 418/418 but that was measured by the survey, so by the standard this
+section applies it is unconfirmed against the adapter — `aoi_definition` guards the *behaviour* but not
+the *rate*. Those three are where the next module-shaped bug is most likely sitting.
+
+Two audit findings are worth carrying forward as method. The audit found **two wrong figures out of
+thirteen checkable ones**, and in both cases the wrong number sat next to a right one that agreed with
+everything downstream — 9,110 write positions beside a correct 3,868 deduplicated total, and a 100%
+resolution claim beside genuinely resolving writes. A figure does not have to be load-bearing to be
+wrong, and a wrong figure next to a right one is *harder* to catch, not easier.
+
+The second: writing the audit surfaced a bug in the audit. Globbing `*.L5X` and `*.l5x` on a
+case-insensitive filesystem returns every file twice, which silently doubled every count in the first
+run of `tools/l5x_role_audit.py`. Checking tools need checking too.
+
+### §5.4 — Module identity, I/O decodability, and the packing rule
+
+**Nameless does not imply no I/O.** The earlier report inferred that the 25 connectionless modules were
+"almost certainly" the 22 nameless ones. The counts never matched, and the cross-tabulation shows the
+two properties are close to independent:
+
+| | has connection | no connection |
+|---|---|---|
+| **has `Name`** | 45 | 16 |
+| **no `Name`** | 13 | 9 |
+
+13 of 22 nameless modules carry a connection and 16 of 61 named ones do not. Any decoding work that
+inherited "nameless means no I/O" would have skipped 13 modules that do have I/O. This is why the
+handoff asked for four cells instead of an inference.
+
+**Identity keys on `Name` when present, and that is load-bearing.** `ParentModule` refers to its parent
+*by name*, and in all 83 corpus modules the parent named is one that carries a `Name` — so keying named
+modules on anything else would break every ownership edge. Nameless modules key on parent + parent port
+id + **upstream** port address, which is unique within every file and never collides with a named
+module's fqn. The upstream qualifier is not cosmetic: 18 modules expose two addressed ports, and in all
+18 the upstream one is *second* in document order, so taking the first addressed port keyed them on the
+downstream bus they provide rather than their own position in the tree. Uniqueness held anyway, by luck.
+
+**Decodability: the export is sufficient, and no out-of-band catalog is needed.** All **58 of 58**
+connections carry tag structure — member names and datatypes, 2 to 81 members. 44 declare an explicit
+`InputSize` and `OutputSize`; 28 carry a `ConnectionPath`; 50 modules carry a `ConfigTag`. The survey
+script's decodability verdict of 44/83 is pessimistic because it never inspects `ConnectionPath` or
+`ConfigTag`, and because the connectionless modules are mostly sub-devices with no I/O of their own.
+
+**The packing rule is wrong, and a decoder must not be built on it.** This is the check that mattered
+most and it came back negative. Computing the expected assembly size from the member list and comparing
+against the declared `InputSize`:
+
+| Candidate rule | Agrees |
+|---|---|
+| BOOLs pack 32/word, others align to own width | 14 / 44 |
+| BOOLs pack 8/byte, others align | 1 / 44 |
+| every BOOL takes a byte | 1 / 44 |
+| BOOLs pack 32/word, no alignment | 14 / 44 |
+
+`InputSize` is in bytes, not 32-bit words — nothing matched under a word reading. But the useful result
+is the *separation*, which is total and has no overlap: **every one of the 14 agreements has 1–15 BOOLs,
+and every one of the 30 disagreements has 41–123.** The rule holds exactly when the BOOLs fit in a
+single 32-bit word and fails whenever they span more than one. The residuals are not a constant offset
+either — declared exceeds computed 10 times and falls below it 20 times — so this is not a header or
+status word that could be added back.
+
+So the partial-word case is right and the multi-word layout is wrong: a long BOOL run is not a
+contiguous packed block in declaration order. Whatever the real rule is, a decoder written on the
+assumed one would be confidently off by a few bits on exactly the assemblies that carry the most data,
+which is worse than not decoding. **Capture work stays blocked on determining the real layout**, and
+that needs either documentation or a known-good capture to calibrate against, not more of this corpus.
 
 ## §6 — Falsifications
 
@@ -206,6 +358,13 @@ is why the write-position table was corrected four times rather than shipped wro
 | The 22 nameless ones might be nested in vendor blobs, making 61 correct | Ancestor-chain check | **False.** All 83 are direct children of `<Modules>` under `<Controller>`; `iter("Module")` and `Modules.findall("Module")` agree exactly. 83 is the inventory |
 | A missing attribute means a malformed element worth skipping | Module count | **False, and the pattern is the finding.** `if not name: continue` silently dropped a quarter of the module hierarchy. A missing attribute is a case to handle or fail loudly on, never to skip quietly |
 | The bracket bug explains the unresolved operands | Root-cause breakdown | **False.** It explained 36 of 556 (6.5%). The other 520 were role misclassification |
+| `GSV[1]` is a tag, since a keyword typed as TAG merely fails to resolve | Profiling what operand 1 *names* | **False,** and the reasoning was sound but rested on a false premise. All 8 resolvable instances name a **Module**; the 6 matching a declared tag are that module's alias tag colliding by name. There was no read edge to lose, and typing it TAG emitted 6 false read edges plus 29 spurious failures |
+| Checking non-tag roles and write positions audits the table | The `GSV[1]` bug surviving both | **False.** A position typed `TAG` that never holds a tag is invisible to both predicates. A third predicate was needed, and calibrating it on *undeclared names* rather than tag fraction is what made it usable — 1 real finding instead of 22 false alarms |
+| 25 connectionless modules are "almost certainly" the 22 nameless ones | 2×2 cross-tabulation | **False.** 13 of 22 nameless modules have a connection; 16 of 61 named ones do not. Nameless does **not** imply no I/O, and inheriting that would have skipped 13 modules that have it |
+| The first addressed `Port` gives a module's address | Port profile | **False.** 18 modules expose two; in all 18 the **upstream** port is second, so document order keyed them on the downstream bus they provide. Uniqueness held by luck |
+| BOOLs pack into 32-bit words in declaration order in an I/O assembly | Computed vs declared `InputSize`, 44 connections | **False, with a clean boundary.** 14/44 agree and all have 1–15 BOOLs; 30/44 disagree and all have 41–123. Correct within one word, wrong across words. Residuals go both directions, so it is not a header. **Decoder work stays blocked** |
+| The corpus is the second source for the ADR's figures | Cross-source audit (§5.3) | **False for two of thirteen.** "9,110 write positions" and "100.000% tag resolution" were both produced by non-adapter implementations and neither describes what ships. Both sat beside a correct figure that agreed downstream |
+| An audit script is trustworthy because it is an audit | Its own first run | **False.** Globbing `*.L5X` and `*.l5x` on a case-insensitive filesystem doubled every count |
 
 Two method notes worth carrying to the next adapter:
 
@@ -260,11 +419,22 @@ return something wrong, which the user believes. This is why `SSV` deliberately 
 
 ## §8 — Open items
 
-**Chunk granularity is not settled.** Chunking is currently per-symbol, so 2,326 tag declarations each
-become a chunk against roughly 280 routines — an ~8× index inflation, and a tag declaration in isolation
-is not a retrievable unit. Routine granularity is reasoned from rung-length distributions and **has
-never been measured against a query anyone actually asked**. Changing it on reasoning alone would repeat
-the mistake that produced the write-position table. Gated on a harness run once gold queries exist.
+**Chunk granularity is partly settled.** The half that was a category error is fixed: AOI parameters
+and local tags are declarations internal to a definition, and no query's best answer is one of them in
+isolation. They were 3,227 of 6,011 tier-1 chunks — more than half the index — and are now excluded,
+taking the corpus to **2,784**. Symbols and edges are untouched; all 6,011 still reach the graph, since
+chunking is downstream of `parse_file`.
+
+The mechanism is adapter-supplied policy, not a special case in shared code: an adapter may declare
+`chunkable_kinds`, and omitting it — which every other adapter does — means every symbol is chunkable.
+Chunk counts for Python, TypeScript, JavaScript, C# and C++ were recorded before and after and are
+byte-identical.
+
+The half that is genuinely open stays open. **Whether a controller-scoped `tag` declaration should be a
+tier-1 chunk could go either way**, so `tag` remains chunkable and waits for gold queries and a harness
+run. Routine granularity is still reasoned from rung-length distributions and **has never been measured
+against a query anyone actually asked**. Settling either on reasoning alone would repeat the mistake
+that produced the write-position table.
 
 **Gold queries do not exist.** They need controls engineers, not more parsing. Extraction proceeds
 without them; ranking, chunk assembly, and anything about the graph beyond emitting edges cannot.
@@ -286,12 +456,29 @@ occurrences here, so they cost nothing in this corpus but would matter on a diff
 match. Edges dedupe, so this is not a correctness problem, but it inflates operand counts and produced
 the only 7 apparent resolution failures before they were traced.
 
+**Expression interiors resolve at 69%.** Every identifier inside a `CPT` or `FAL` expression is treated
+as a read, which sweeps up nested mnemonics and symbolic constants: 222 of 706 do not resolve, and they
+are the bulk of the adapter's 285 unresolved reads. Narrowing it needs an expression parser rather than
+a regex. Recorded so the figure is not mistaken for extraction failure.
+
+**Three figures have no independent second source** (§5.3): operand totals, distinct tags referenced,
+and the 418/418 AOI arity rule, which was measured by the survey rather than the adapter. These are the
+most likely place for the next module-shaped bug.
+
+**Class 1 I/O decoding is blocked on the packing rule** (§5.4), not on the export. The export carries
+enough structure — 58 of 58 connections have member names and datatypes — but the assumed BOOL packing
+rule fails on every assembly whose BOOLs span more than one 32-bit word. Determining the real layout
+needs documentation or a known-good capture; more of this corpus will not settle it.
+
 ## Implementation Log
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
 - [x] Implement the L5X stub into real extraction — `src/adapters/l5x_adapter.py` plus the instruction model in `src/adapters/l5x_instructions.py`. Symbols for programs, routines, AOI definitions, parameters, local tags, tags and modules; edges for reads, writes, AOI and JSR calls, alias-to-module-I/O, and ownership.
-- [x] Curated conformance fixtures — 7 hand-authored synthetic L5X under `tests/fixtures/conformance/l5x/`, scoring 1.000/1.000 on symbols and edges. Verified they have teeth: disabling canonicalization drops `mnemonic_alias` and nothing else.
+- [x] Curated conformance fixtures — **11** hand-authored synthetic L5X under `tests/fixtures/conformance/l5x/`, scoring 1.000/1.000 on symbols and edges (81 symbols, 93 edges). Teeth verified by script: each fix is reverted in memory and the intended fixture — and only that one — must fail. Eight reversions checked, seven caught; the eighth is unguardable and is recorded as such in §5.2.
+- [x] Guards the conformance harness cannot express — `tests/test_l5x_adapter.py`, 12 tests: chunk-body content, chunking policy, loud failure on dropped elements, operand-slot positioning, and corpus-independent operand-role table invariants.
+- [x] `tools/l5x_role_audit.py` — the operand-role audit promoted to a permanent, corpus-facing check with a third predicate the informal version lacked. Exits non-zero on any prediction failure. **Not** one of the retiring `tools/l5x/` diagnostics; it can never become a fixture because it needs real controllers.
+- [x] Adapter-declared `chunkable_kinds` (`src/adapters/base.py`, `src/ast_chunker.py`) — opt-in policy, absent on every other adapter, verified to leave Python/TS/JS/C#/C++ chunk counts byte-identical.
 - [x] Registered via the existing `.L5X`/`.l5x` REGISTRY entries; `.L5X` added to `tools/conformance_eval.py`. **`lxml` was NOT added** — stdlib `xml.etree` was sufficient, and ADR-013 §1's preference for `lxml` is deliberately not exercised without a concrete need.
 - [x] Schema: `READS` / `WRITES` / `ALIAS_OF` edge kinds plus `_migrate_edge_kinds`. It needs its own guard because `_migrate_edges` gates on `"resolved_target" in cols`, already true on every existing index, and it must run *last* of the edge migrations because it rebuilds the table.
 - [ ] **IEC 61131-3 Structured Text parsing** — deferred, see §7. Not attempted.
@@ -309,6 +496,11 @@ the only 7 apparent resolution failures before they were traced.
 - Corpus run: 5/5 files, 12.7 MB, no parse failures, zero instructions lacking a signature.
   **6,011 symbols and 13,316 edges** — 83 modules, 2,326 tags, 2,280 parameters, 947 local tags,
   279 routines, 61 AOIs, 35 programs; 5,148 reads, 3,868 writes, 3,639 owns, 412 alias_of, 249 calls.
+  **2,784 of the 6,011 symbols are tier-1 chunks**; the 3,227 AOI-internal declarations are graph
+  nodes but not retrievable passages (§8).
+- The `GSV[1]` fix removed 6 false read edges and 29 spurious resolution failures. Deduplicated edge
+  counts are unchanged, because all 6 duplicated edges that already existed — which is exactly why a
+  deduplicated total is a poor place to look for this class of bug.
 
 <!-- 2026-06-18: Wave 3, best near-term differentiation. Default first target = IMPLEMENT the L5X stub (currently NotImplementedError, deferred ADR-003 §D4) + IEC 61131-3 ST parsing (no parser today). Reuses ADR-003 registry + ADR-017 tiers + ADR-008 conformance. Done when a new DSL adapter passes its conformance suite + tier table updated. Open: grammar availability per DSL. Effort M per DSL. -->
 

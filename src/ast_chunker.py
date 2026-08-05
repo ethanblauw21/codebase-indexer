@@ -156,8 +156,17 @@ def chunk_file_ast(
     for e in result.edges:
         edges_by_fqn.setdefault(e.source_fqn, []).append(e)
 
+    # Adapter-supplied chunking policy. Absent on every adapter but L5X, in
+    # which case every symbol is chunkable and behaviour is unchanged. Keeping
+    # this as adapter policy rather than a special case in shared code means a
+    # language's retrieval granularity is declared next to its extraction.
+    chunkable = getattr(adapter, "chunkable_kinds", None)
+
     chunks: list[Chunk] = []
     for sym in result.symbols:
+        if chunkable is not None and sym.kind not in chunkable:
+            # Still a graph node with all its edges — see LanguageAdapter.
+            continue
         sym_tags  = list(dict.fromkeys(file_tags + fqn_tags.get(sym.fqn, [])))
         sym_type  = type_by_fqn.get(sym.fqn)
         rich_text = _symbol_rich_text(sym, file_path, sym_tags, sym_type)

@@ -97,6 +97,24 @@ def scan_instructions(text: str):
     `Recipe[Row,Col]` at the comma inside the brackets and yields a phantom
     extra operand — measured at 36 operands across the survey corpus, and the
     cause of a matching count of unresolvable tag references.
+
+    **Empty operand slots are preserved.** `GSV(Class,,Attr,Dest)` omits the
+    instance name and is a four-operand call with a hole at position 1, not a
+    three-operand call. Dropping empty slots renumbers every operand after the
+    hole, and since roles are assigned positionally that silently re-types the
+    rest of the instruction. Measured at 7 sites (6 `GSV`, 1 `SSV`).
+
+    This is defensive, and honestly it currently changes nothing: reverting it
+    reproduces the corpus edge counts exactly. `GSV` and `SSV` are the only
+    instructions here that carry holes, and their role tuples are uniform
+    keywords followed by a last-position destination, so a shift happens to
+    re-type each operand to what it already was. It is kept because the parse
+    should not depend on that coincidence, and flagged in ADR-013 §5.2 as a
+    correction no fixture can currently give teeth to.
+
+    The one case where an empty slot is genuinely not an operand is a call
+    written with empty parens — `NOP()`, `TND()`, `AFI()`, 639 occurrences —
+    which yields a single empty slot and is normalised to zero operands.
     """
     for m in _MNEMONIC_RE.finditer(text):
         i = m.end()
@@ -122,6 +140,8 @@ def scan_instructions(text: str):
             i += 1
         if not closed:
             args.append(text[start:i])
+        if len(args) == 1 and not args[0].strip():
+            args = []          # `NOP()` — empty parens, not one empty operand
         yield m.group(1), args, m.start(), i + 1
 
 
@@ -196,6 +216,23 @@ class L5xAdapter:
     language_id = "l5x"
     extensions  = frozenset({".L5X", ".l5x"})
 
+    # Which symbol kinds become tier-1 chunks. `parameter` and `local_tag` are
+    # deliberately absent: they are declarations internal to an AOI definition,
+    # and there is no query whose best answer is one of them in isolation. On
+    # the survey corpus they were 3,227 of 6,011 tier-1 chunks — more than half
+    # the index — for symbols that only mean anything as part of the AOI whose
+    # signature they belong to, which is chunked and carries their descriptions.
+    #
+    # This is a category error being corrected, not a granularity choice being
+    # made. Whether a controller-scoped `tag` declaration should be a tier-1
+    # chunk is a genuine question that could go either way, so `tag` stays in
+    # and waits for gold queries and a harness run (ADR-013 §8).
+    #
+    # Symbols and edges are unaffected: all 6,011 symbols still reach the graph.
+    chunkable_kinds = frozenset({
+        "module", "tag", "aoi", "routine", "program",
+    })
+
     def parse(self, path: str, src: bytes) -> ParseResult:
         try:
             text = src.decode("utf-8-sig")
@@ -262,6 +299,26 @@ class _Extractor:
         self.aoi_names: set[str] = set()
         self.unknown_mnemonics: set[str] = set()
         self.unnamed_unkeyable = 0
+        # Element kind -> how many were skipped for want of an expected
+        # attribute. See `_skip`.
+        self.skipped: dict[str, int] = {}
+
+    # -- skipped elements ----------------------------------------------------
+
+    def _skip(self, kind: str) -> None:
+        """Record an element dropped because an expected attribute was absent.
+
+        Every drop goes through here so that none of them is silent. A bare
+        `if not name: continue` is what discarded 22 of 83 modules — a quarter
+        of the hardware tree — while the parse reported success. The corpus
+        that surfaced it happens to be clean for the other five element kinds,
+        which is a fact about that corpus and not a property of the adapter.
+
+        Counting rather than raising is deliberate: one malformed element
+        should not cost an entire controller. The count is reported at the end
+        of the parse, so the failure is loud without being fatal.
+        """
+        self.skipped[kind] = self.skipped.get(kind, 0) + 1
 
     # -- emit ---------------------------------------------------------------
 
@@ -297,6 +354,15 @@ class _Extractor:
         self._walk_aois(controller)
         self._walk_programs(controller)
 
+        if self.skipped:
+            log.warning(
+                "l5x: %s discarded %d element(s) missing an expected "
+                "attribute: %s. These are absent from the index; a parse that "
+                "drops structure must not report success quietly",
+                self.path, sum(self.skipped.values()),
+                ", ".join(f"{k}={v}" for k, v in sorted(self.skipped.items())),
+            )
+
         if self.unknown_mnemonics:
             log.info(
                 "l5x: %s used %d instruction(s) with no operand-role "
@@ -320,21 +386,35 @@ class _Extractor:
 
         Nameless modules are addressed by parent + port id + port address.
         Parent and port id alone are not enough: that pair collides 6 times in
-        the corpus, while adding the port address is unique across all 22.
+        the corpus, while adding the port address is unique within every file
+        and never collides with a named module's fqn.
+
+        `Name` stays the key when present, and that is load-bearing rather than
+        incidental: `ParentModule` refers to its parent *by name*, and in all 83
+        corpus modules the parent named is one that carries a `Name`. Keying
+        named modules on anything else would break every ownership edge.
+
+        The address is taken from the **upstream** port — the module's address
+        on its parent's bus. 18 modules expose two addressed ports, and in all
+        18 the upstream one is second in document order, so taking the first
+        addressed port keyed them on the downstream bus they provide instead of
+        their own position in the tree.
         """
         name = mod.attrib.get("Name")
         if name:
             return name
         parent = mod.attrib.get("ParentModule")
         port_id = mod.attrib.get("ParentModPortId")
+        addressed = [p for p in mod.iter("Port") if p.attrib.get("Address")]
+        upstream = [p for p in addressed if p.attrib.get("Upstream") == "true"]
         address = next(
-            (p.attrib.get("Address") for p in mod.iter("Port")
-             if p.attrib.get("Address")),
+            (p.attrib["Address"] for p in (upstream or addressed)),
             None,
         )
         if not parent or port_id is None or address is None:
             # Nothing stable to key on. Counted rather than silently dropped.
             self.unnamed_unkeyable += 1
+            self._skip("Module")
             return None
         return f"{parent}:{port_id}:{address}"
 
@@ -361,6 +441,7 @@ class _Extractor:
             for tag in tags_elem.findall("Tag"):
                 name = tag.attrib.get("Name")
                 if not name:
+                    self._skip("Tag")
                     continue
                 fqn = f"{scope_fqn}.{name}" if scope_fqn else name
                 found[name] = fqn
@@ -382,6 +463,7 @@ class _Extractor:
         for prog in controller.iter("Program"):
             pname = prog.attrib.get("Name")
             if not pname:
+                self._skip("Program")
                 continue
             span = self.lines.of_element("Program", pname)
             self._sym(pname, "program", pname, span, _describe(prog))
@@ -391,6 +473,7 @@ class _Extractor:
             for routine in prog.iter("Routine"):
                 rname = routine.attrib.get("Name")
                 if not rname:
+                    self._skip("Routine")
                     continue
                 owned.add(rname)
                 fqn = f"{pname}.{rname}"
@@ -403,6 +486,7 @@ class _Extractor:
         for aoi in controller.iter("AddOnInstructionDefinition"):
             aname = aoi.attrib.get("Name")
             if not aname:
+                self._skip("AddOnInstructionDefinition")
                 continue
             self.aoi_names.add(aname)
             span = self.lines.of_element("AddOnInstructionDefinition", aname)
@@ -413,6 +497,7 @@ class _Extractor:
             for param in aoi.iter("Parameter"):
                 pname = param.attrib.get("Name")
                 if not pname:
+                    self._skip("Parameter")
                     continue
                 fqn = f"{aname}.{pname}"
                 scope[pname] = fqn
@@ -430,6 +515,7 @@ class _Extractor:
             for local in aoi.iter("LocalTag"):
                 lname = local.attrib.get("Name")
                 if not lname:
+                    self._skip("LocalTag")
                     continue
                 fqn = f"{aname}.{lname}"
                 scope[lname] = fqn
@@ -440,6 +526,7 @@ class _Extractor:
             for routine in aoi.iter("Routine"):
                 rname = routine.attrib.get("Name")
                 if not rname:
+                    self._skip("Routine")
                     continue
                 fqn = f"{aname}.{rname}"
                 rspan = self.lines.of_element("Routine", rname)
@@ -532,7 +619,9 @@ class _Extractor:
 
     def _scan(self, body, routine_fqn, scope, owner_program) -> None:
         for raw_mnemonic, operands, _s, _e in scan_instructions(body):
-            operands = [o.strip() for o in operands if o.strip()]
+            # Positions are preserved, empties included: an omitted operand is
+            # a hole, not an absent slot, and roles are assigned by position.
+            operands = [o.strip() for o in operands]
             mnemonic = canonical_mnemonic(raw_mnemonic)
 
             if mnemonic in self.aoi_names:
@@ -545,6 +634,8 @@ class _Extractor:
             arity = len(operands)
 
             for i, operand in enumerate(operands):
+                if not operand:
+                    continue
                 role = sig.role_at(i, arity) if sig else TAG
                 if role in (LITERAL, KEYWORD, LABEL):
                     continue

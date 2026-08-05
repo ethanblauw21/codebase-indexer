@@ -1,0 +1,23 @@
+{
+  "feature": "l5x/fal_expression",
+  "language": "l5x",
+  "tier": "A",
+  "note": "FAL(Control, Length, Position, Mode, Dest, Expression) writes index 0 and index 4. Secondary documentation puts the destination last; corpus operand-kind profiling falsified that, because index 5 is always the expression and index 4 is always a declared tag. That correction was verified against tools/l5x survey output and had no guard on the adapter. This also covers the expression operand role, which no other fixture exercises: every identifier inside an expression is a read and nothing in an expression is ever written, so Source_A and Source_B are reads even though they sit in a single operand. Ctrl is written and NOT read - a write position suppresses the read, which is what distinguishes a destination from an in-out operand.",
+  "symbols": [
+    {"fqn": "MathProgram", "kind": "program"},
+    {"fqn": "MathProgram.FileMath", "kind": "routine"},
+    {"fqn": "Ctrl", "kind": "tag"},
+    {"fqn": "Result", "kind": "tag"},
+    {"fqn": "Source_A", "kind": "tag"},
+    {"fqn": "Source_B", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "MathProgram", "target": "MathProgram.FileMath", "kind": "owns"},
+
+    {"source": "MathProgram.FileMath", "target": "Ctrl", "kind": "writes"},
+    {"source": "MathProgram.FileMath", "target": "Result", "kind": "writes"},
+
+    {"source": "MathProgram.FileMath", "target": "Source_A", "kind": "reads"},
+    {"source": "MathProgram.FileMath", "target": "Source_B", "kind": "reads"}
+  ]
+}
