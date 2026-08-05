@@ -13,10 +13,11 @@ masked because GSV and SSV are the only instructions carrying holes and their
 role tuples absorb a positional shift. That is recorded in ADR-013 §5.2 rather
 than papered over, and is asserted at the scanner in tests/test_l5x_adapter.py.
 
-    python tools/l5x_fixture_teeth.py
+    python tools/l5x_fixture_teeth.py           # report
+    python tools/l5x_fixture_teeth.py --check   # exit 1 on a missing guard
 """
+import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -44,19 +45,44 @@ FEATURES = ["write_position_swpb_btd", "gsv_ssv_system", "fal_expression",
             "mnemonic_canonical", "mnemonic_alias", "aoi_definition",
             "alias_module_io", "jsr_same_program"]
 
+_ARGS = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+_ARGS.add_argument("--check", action="store_true",
+                   help="exit 1 if a correction has no guard that can fail")
+ARGS = _ARGS.parse_args()
+
+FAILURES: list[str] = []
+
 print("baseline:")
 for f in FEATURES:
     ok, _ = score(f)
+    if not ok:
+        FAILURES.append(f"baseline: {f} does not score clean")
     print(f"  {f:<28} {'PASS' if ok else 'FAIL'}")
 
 
-def teeth(label, mutate, restore, expect_fail):
+def teeth(label, mutate, restore, expect_fail, unguardable_reason=None):
+    """Revert one fix; the intended fixture must notice.
+
+    `unguardable_reason` marks a correction no fixture can catch. It is
+    tolerated rather than counted as a gap, but the reason must be stated —
+    and it is a fact about this corpus rather than a permanent property.
+    """
     mutate()
     broken = [f for f in FEATURES if not score(f)[0]]
     restore()
     hit = expect_fail in broken
-    print(f"  {label:<44} {'caught by ' + expect_fail if hit else '*** NOT CAUGHT ***'}"
-          f"   (all failing: {broken})")
+
+    if hit:
+        status = f"caught by {expect_fail}"
+    elif unguardable_reason:
+        status = f"not catchable — {unguardable_reason}"
+    else:
+        status = "*** NOT CAUGHT — this correction has no guard ***"
+        FAILURES.append(f"{label}: reverted with no fixture noticing")
+
+    print(f"  {label:<44} {status}")
+    if broken and broken != [expect_fail]:
+        print(f"{'':46}   (also failing: {broken})")
 
 
 print("\nteeth checks — revert a fix, see which fixture notices:")
@@ -110,7 +136,8 @@ def drop_empties():
 teeth("empty operand slots dropped (position shift)",
       drop_empties,
       lambda: setattr(A, "scan_instructions", _scan),
-      "gsv_ssv_system")
+      "gsv_ssv_system",
+      unguardable_reason="masked ON THIS CORPUS ONLY; see note below")
 
 _fqn = A._Extractor._module_fqn
 
@@ -146,3 +173,25 @@ teeth("nameless modules skipped entirely (the original bug)",
       drop_nameless,
       lambda: setattr(A._Extractor, "_module_fqn", _fqn),
       "module_nameless")
+
+
+print(
+    "\nNote on the unguardable row. It is unguardable ON THIS CORPUS, not in\n"
+    "principle. GSV and SSV are the only instructions here that carry operand\n"
+    "holes, and their role tuples are uniform keywords followed by a\n"
+    "last-position destination, so a positional shift re-types every operand to\n"
+    "what it already was. An instruction with heterogeneous roles and an omitted\n"
+    "operand would be mis-typed immediately. A different controller mix makes\n"
+    "this catchable, so the row is a corpus fact rather than a permanent\n"
+    "property — do not read seven-of-eight as a ceiling."
+)
+
+if ARGS.check:
+    if FAILURES:
+        print(f"\nFAILED ({len(FAILURES)}):")
+        for problem in FAILURES:
+            print(f"  - {problem}")
+        raise SystemExit(1)
+    print("\nEvery correction has a guard that can fail.")
+
+raise SystemExit(0)

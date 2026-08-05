@@ -303,6 +303,13 @@ class _Extractor:
         # attribute. See `_skip`.
         self.skipped: dict[str, int] = {}
 
+        # AOI positional binding, counted by the adapter rather than inferred
+        # from the survey. The 418/418 arity rule was measured by a different
+        # implementation from the one that ships, and 786 write edges depend on
+        # it, so it is the one unverified figure with consequences attached.
+        self.aoi_calls_bound = 0
+        self.aoi_calls_arity_mismatch = 0
+
     # -- skipped elements ----------------------------------------------------
 
     def _skip(self, kind: str) -> None:
@@ -361,6 +368,17 @@ class _Extractor:
                 "drops structure must not report success quietly",
                 self.path, sum(self.skipped.values()),
                 ", ".join(f"{k}={v}" for k, v in sorted(self.skipped.items())),
+            )
+
+        if self.aoi_calls_arity_mismatch:
+            total = self.aoi_calls_bound + self.aoi_calls_arity_mismatch
+            log.warning(
+                "l5x: %s bound %d of %d AOI call sites positionally; %d had an "
+                "operand count the arity rule (1 + required non-Enable "
+                "parameters) does not predict, and their parameter edges are "
+                "absent",
+                self.path, self.aoi_calls_bound, total,
+                self.aoi_calls_arity_mismatch,
             )
 
         if self.unknown_mnemonics:
@@ -713,12 +731,15 @@ class _Extractor:
         if len(actuals) != len(required):
             # Arity disagreement means positional binding is not safe here.
             # Emit the call edge and stop rather than bind to the wrong slots.
+            self.aoi_calls_arity_mismatch += 1
             log.info(
                 "l5x: %s call site passed %d operand(s) for %d required "
                 "parameter(s); positional binding skipped",
                 aoi_name, len(actuals), len(required),
             )
             return
+
+        self.aoi_calls_bound += 1
 
         for param, actual in zip(required, actuals):
             base, indices = split_operand(actual)

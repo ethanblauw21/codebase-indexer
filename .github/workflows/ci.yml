@@ -148,3 +148,36 @@ jobs:
       # embedder, no GPU; runs in seconds.
       - name: Run resolution conformance scorecard
         run: python tools/resolution_eval.py --check-baseline
+
+  l5x-table-integrity:
+    name: L5X operand-role table integrity (ADR-013 §5.1)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: pip install -e .
+
+      # These two are CHECKS, not diagnostics. The distinction matters (ADR-013
+      # §5.5): the surveys under tools/l5x/ are exploratory instruments and are
+      # deliberately not run here, because finding something new is not a pass/fail
+      # condition. These two are pass/fail.
+      #
+      # A role-table entry silently becoming wrong is exactly the failure they exist
+      # to catch, and it does not announce itself: a wrong role drops an operand out
+      # of the denominator rather than failing to resolve, so extraction degrades
+      # while every headline metric holds steady.
+      #
+      # Both are corpus-free — they run against the committed synthetic fixtures and
+      # against the table's own internal invariants. No embedder, no GPU, seconds.
+      - name: Fixture teeth — every correction must have a guard that can fail
+        run: python tools/l5x_fixture_teeth.py --check
+
+      - name: L5X adapter guards
+        run: python -m pytest tests/test_l5x_adapter.py -q
