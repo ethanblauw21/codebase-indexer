@@ -1,0 +1,30 @@
+{
+  "feature": "l5x/mnemonic_canonical",
+  "language": "l5x",
+  "tier": "A",
+  "note": "Canonical half of the mnemonic-spelling pair. The symbol and edge lists here are byte-identical to mnemonic_alias.expected.json by design: the two source files express the same logic in different spellings and MUST extract identically. This fixture is expected to pass before canonicalization is wired in; its alias twin is expected to fail until then. Per plcHandoff.md the canonical spelling feeds edges and stable IDs while mnemonic_raw preserves what was written, so canonicalization must not be a config flag - flipping one would silently invalidate every stable ID in the index.",
+  "symbols": [
+    {"fqn": "LevelProgram", "kind": "program"},
+    {"fqn": "LevelProgram.Monitor", "kind": "routine"},
+    {"fqn": "Mode", "kind": "tag"},
+    {"fqn": "Level", "kind": "tag"},
+    {"fqn": "Low_Limit", "kind": "tag"},
+    {"fqn": "High_Limit", "kind": "tag"},
+    {"fqn": "In_Range", "kind": "tag"},
+    {"fqn": "Fault", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "LevelProgram", "target": "LevelProgram.Monitor", "kind": "owns"},
+
+    {"source": "LevelProgram.Monitor", "target": "Mode", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "Mode", "kind": "writes"},
+
+    {"source": "LevelProgram.Monitor", "target": "Low_Limit", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "Level", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "High_Limit", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "In_Range", "kind": "writes"},
+
+    {"source": "LevelProgram.Monitor", "target": "In_Range", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "Fault", "kind": "writes"}
+  ]
+}

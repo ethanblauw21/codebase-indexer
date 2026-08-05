@@ -1,31 +1,230 @@
 """
-L5X adapter stub — Rockwell Automation Logix Designer XML format.
+L5X adapter — Rockwell Automation Logix Designer XML export (ADR-013).
 
-L5X has no tree-sitter grammar. The design (rung chunking, tag edges, embedding
-strategy) is deferred pending an example corpus and gold queries.
+L5X has no tree-sitter grammar, so this is a hand-written adapter over the
+export XML plus the Rockwell "neutral text" instruction language carried inside
+each rung. It uses `xml.etree.ElementTree`; the survey work that preceded it ran
+fine on stdlib XML, so `lxml` is not pulled in without a concrete need.
 
-This stub claims the L5X extensions in the adapter registry from day one so
-that a future implementer cannot accidentally reach for tree-sitter out of
-convention — proving the interface contains no tree-sitter assumption.
+## What a file is
 
-See ADR-003 §D4 for the deferral rationale.
+One L5X file is one entire controller, not one module. The largest file in the
+survey corpus was 7.9 MB and 131,940 XML elements. That is a real mismatch with
+file-granularity incremental indexing — any edit anywhere invalidates the whole
+controller — and it is recorded as an open architectural question rather than
+solved here.
+
+## Chunking
+
+The **routine** is the chunk unit and the **rung** is the addressable sub-unit.
+Rungs are far too small to chunk on (median well under 130 characters); a
+routine is a reasonable tier-1 chunk, mirroring the class-and-method shape the
+other adapters already use.
+
+## Embedded text
+
+This adapter departs from every other one in the project. Elsewhere the source
+text IS the embedding payload. Here neutral text like `XIC(a)XIO(b)OTE(c)`
+carries almost no natural language, so the embedding payload is assembled from
+rung comments, tag descriptions, routine and program names, and AOI parameter
+descriptions. The neutral text is preserved verbatim in the chunk so lexical
+search still finds what someone actually typed, but it is supporting structure
+rather than the thing embedded.
+
+## Scope
+
+RLL (ladder) is extracted. **ST and FBD are explicitly unsupported**: their
+routines are emitted as symbols so the structure is not silently missing, but
+no body extraction is attempted. FBD needs a block-and-wire graph rather than
+text extraction. ST extraction is a scoped follow-on (ADR-013 §3 pairs L5X with
+IEC 61131-3 Structured Text).
+
+See `l5x_instructions.py` for the mnemonic and operand-role tables, and
+docs/adr/ADR-013 for the measured findings behind them.
 """
 from __future__ import annotations
 
-from adapters.base import ParseResult, Symbol
+import logging
+import re
+from xml.etree import ElementTree as ET
 
+from adapters.base import Edge, ParseResult, Reference, Symbol
+from adapters.l5x_instructions import (
+    EXPR,
+    KEYWORD,
+    LABEL,
+    LITERAL,
+    ROUTINE,
+    TAG,
+    canonical_mnemonic,
+    signature,
+)
+
+log = logging.getLogger(__name__)
+
+# The instruction token immediately preceding an open paren.
+_MNEMONIC_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{1,31})\(")
+
+# Identifiers inside an array subscript, which are themselves tag reads.
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+_LITERAL_START = frozenset("0123456789-+.$'\"")
+
+# Emitted on every AOI by the export; they carry no design intent and would add
+# two noise symbols per definition.
+_IMPLICIT_AOI_PARAMS = frozenset({"EnableIn", "EnableOut"})
+
+
+# ------------------------------------------------------------------ helpers
+
+def _text_of(elem) -> str:
+    return "".join(elem.itertext()) if elem is not None else ""
+
+
+def _describe(elem) -> str:
+    """The Description child's text, flattened, or ''."""
+    if elem is None:
+        return ""
+    node = elem.find("Description")
+    return " ".join(_text_of(node).split()) if node is not None else ""
+
+
+def scan_instructions(text: str):
+    """Yield `(mnemonic, raw_operands, start, end)` from neutral text.
+
+    A comma separates operands only where paren depth is 1 and bracket depth is
+    0. Tracking parens alone splits a two-dimensional subscript like
+    `Recipe[Row,Col]` at the comma inside the brackets and yields a phantom
+    extra operand — measured at 36 operands across the survey corpus, and the
+    cause of a matching count of unresolvable tag references.
+    """
+    for m in _MNEMONIC_RE.finditer(text):
+        i = m.end()
+        start, paren, brack, args = i, 1, 0, []
+        closed = False
+        while i < len(text):
+            c = text[i]
+            if c == "(":
+                paren += 1
+            elif c == ")":
+                paren -= 1
+                if paren == 0:
+                    args.append(text[start:i])
+                    closed = True
+                    break
+            elif c == "[":
+                brack += 1
+            elif c == "]":
+                brack = max(0, brack - 1)
+            elif c == "," and paren == 1 and brack == 0:
+                args.append(text[start:i])
+                start = i + 1
+            i += 1
+        if not closed:
+            args.append(text[start:i])
+        yield m.group(1), args, m.start(), i + 1
+
+
+def split_operand(operand: str) -> tuple[str | None, list[str]]:
+    """Return `(base_name, index_identifiers)` for a tag-role operand.
+
+    `Recipe[Row,Col].Member` yields `("Recipe", ["Row", "Col"])`. Literals,
+    unbound `?` placeholders and empty operands yield `(None, [])`. Module I/O
+    addresses keep their full text as the base, since they name hardware
+    endpoints rather than declared symbols.
+    """
+    s = operand.strip()
+    if not s or s[0] in _LITERAL_START or s.startswith("?"):
+        return None, []
+
+    indices: list[str] = []
+    for chunk in re.findall(r"\[([^\]]*)\]", s):
+        indices.extend(_IDENT_RE.findall(chunk))
+
+    stripped = re.sub(r"\[[^\]]*\]", "", s)
+    if ":" in stripped:
+        # Module I/O: `DI_01:I.Data.0`. Hardware, not a declared symbol.
+        return stripped, indices
+
+    base = stripped.split(".")[0]
+    return (base or None), indices
+
+
+def is_module_io(name: str) -> bool:
+    return ":" in name
+
+
+class _Lines:
+    """Maps a character offset in the source to a 1-based line number."""
+
+    def __init__(self, text: str):
+        self._starts = [0]
+        for i, ch in enumerate(text):
+            if ch == "\n":
+                self._starts.append(i + 1)
+        self._text = text
+
+    def of_offset(self, offset: int) -> int:
+        lo, hi = 0, len(self._starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._starts[mid] <= offset:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo + 1
+
+    def of_element(self, tag: str, name: str, start: int = 0) -> tuple[int, int]:
+        """Best-effort line span for `<tag Name="name" ...>`.
+
+        ElementTree does not record source positions, so the element is located
+        by searching the raw text. A miss returns (1, 1) rather than raising —
+        a wrong line number must not cost a symbol.
+        """
+        needle = f'<{tag} Name="{name}"'
+        at = self._text.find(needle, start)
+        if at < 0:
+            return 1, 1
+        close = self._text.find(f"</{tag}>", at)
+        end = close if close >= 0 else at + len(needle)
+        return self.of_offset(at), self.of_offset(end)
+
+
+# ------------------------------------------------------------------ adapter
 
 class L5xAdapter:
     language_id = "l5x"
     extensions  = frozenset({".L5X", ".l5x"})
 
     def parse(self, path: str, src: bytes) -> ParseResult:
-        raise NotImplementedError(
-            "L5X adapter is not implemented. "
-            "See docs/adr/ADR-003 §D4 for deferral rationale. "
-            "Design (rung chunking, tag edges, embedding strategy) is deferred "
-            "pending an example corpus and gold queries."
-        )
+        try:
+            text = src.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            log.warning("l5x: %s is not UTF-8; skipping", path)
+            return ParseResult([], [], [], [])
+
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError as exc:
+            log.warning("l5x: %s failed to parse: %s", path, exc)
+            return ParseResult([], [], [], [])
+
+        # Every file in the survey corpus was a whole-controller export. A
+        # routine- or program-level fragment export has different scoping, so
+        # refuse it loudly rather than mis-attribute its symbols. Returning
+        # empty rather than raising keeps the Protocol contract.
+        target_type = root.attrib.get("TargetType")
+        contains_context = root.attrib.get("ContainsContext", "false")
+        if target_type != "Controller" or contains_context == "true":
+            log.warning(
+                "l5x: %s is a %s fragment export (ContainsContext=%s), not a "
+                "whole-controller export; extraction is not supported",
+                path, target_type or "unknown", contains_context,
+            )
+            return ParseResult([], [], [], [])
+
+        return _Extractor(path, text, root).run()
+
 
     def analyze_tags(
         self,
@@ -33,12 +232,364 @@ class L5xAdapter:
         src: bytes,
         symbols: list[Symbol],
     ) -> tuple[list[str], dict[str, list[str]]]:
-        raise NotImplementedError(
-            "L5X adapter is not implemented. See docs/adr/ADR-003 §D4."
-        )
+        return [], {}
 
     def test_conventions(self):
         return None
 
     def project_resolver(self):
         return None
+
+
+class _Extractor:
+    """One parse. Builds name registries first, then walks logic against them."""
+
+    def __init__(self, path: str, text: str, root):
+        self.path = path
+        self.lines = _Lines(text)
+        self.root = root
+        self.symbols: list[Symbol] = []
+        self.edges: list[Edge] = []
+        self.references: list[Reference] = []
+        self._seen_edges: set[tuple[str, str, str]] = set()
+
+        # Registries, all filled before any logic is walked.
+        self.controller_tags: dict[str, str] = {}          # name -> fqn
+        self.program_tags: dict[str, dict[str, str]] = {}  # prog -> name -> fqn
+        self.routines_by_program: dict[str, set[str]] = {}
+        self.aoi_scope: dict[str, dict[str, str]] = {}     # aoi -> name -> fqn
+        self.aoi_params: dict[str, list[dict]] = {}        # aoi -> ordered params
+        self.aoi_names: set[str] = set()
+        self.unknown_mnemonics: set[str] = set()
+
+    # -- emit ---------------------------------------------------------------
+
+    def _sym(self, fqn, kind, name, span, text="", class_context=None):
+        self.symbols.append(Symbol(
+            fqn=fqn, kind=kind, name=name, class_context=class_context,
+            start_line=span[0], end_line=span[1], text=text,
+        ))
+
+    def _edge(self, source, target, kind, resolved=None):
+        key = (source, target, kind)
+        if key in self._seen_edges:
+            return
+        self._seen_edges.add(key)
+        self.edges.append(Edge(
+            source_fqn=source, target=target, kind=kind,
+            resolved_target=resolved,
+        ))
+
+    # -- run ----------------------------------------------------------------
+
+    def run(self) -> ParseResult:
+        controller = self.root.find("Controller")
+        if controller is None:
+            log.warning("l5x: %s has no Controller element", self.path)
+            return ParseResult([], [], [], [])
+
+        self._collect_modules(controller)
+        self._collect_controller_tags(controller)
+        self._collect_aois(controller)
+        self._collect_programs(controller)
+
+        self._walk_aois(controller)
+        self._walk_programs(controller)
+
+        if self.unknown_mnemonics:
+            log.info(
+                "l5x: %s used %d instruction(s) with no operand-role "
+                "signature; reads emitted, writes suppressed: %s",
+                self.path, len(self.unknown_mnemonics),
+                ", ".join(sorted(self.unknown_mnemonics)),
+            )
+
+        return ParseResult(self.symbols, self.edges, self.references, [])
+
+    # -- registries ----------------------------------------------------------
+
+    def _collect_modules(self, controller) -> None:
+        for mod in controller.iter("Module"):
+            name = mod.attrib.get("Name")
+            if not name:
+                continue
+            span = self.lines.of_element("Module", name)
+            self._sym(name, "module", name, span, _describe(mod))
+        # Parent edges in a second pass so both endpoints exist as symbols.
+        for mod in controller.iter("Module"):
+            name = mod.attrib.get("Name")
+            parent = mod.attrib.get("ParentModule")
+            if name and parent:
+                self._edge(parent, name, "owns")
+
+    def _tags_in(self, container, scope_fqn: str | None, owner: str | None):
+        """Emit tag symbols for one Tags container; return name -> fqn."""
+        found: dict[str, str] = {}
+        for tags_elem in container.findall("Tags"):
+            for tag in tags_elem.findall("Tag"):
+                name = tag.attrib.get("Name")
+                if not name:
+                    continue
+                fqn = f"{scope_fqn}.{name}" if scope_fqn else name
+                found[name] = fqn
+                span = self.lines.of_element("Tag", name)
+                self._sym(fqn, "tag", name, span, _describe(tag), scope_fqn)
+                if owner:
+                    self._edge(owner, fqn, "owns")
+                # An alias is a symbol-to-hardware mapping in this corpus: all
+                # 412 aliases pointed at module I/O and none at another tag.
+                alias_for = tag.attrib.get("AliasFor")
+                if alias_for:
+                    self._edge(fqn, alias_for, "alias_of")
+        return found
+
+    def _collect_controller_tags(self, controller) -> None:
+        self.controller_tags = self._tags_in(controller, None, None)
+
+    def _collect_programs(self, controller) -> None:
+        for prog in controller.iter("Program"):
+            pname = prog.attrib.get("Name")
+            if not pname:
+                continue
+            span = self.lines.of_element("Program", pname)
+            self._sym(pname, "program", pname, span, _describe(prog))
+            self.program_tags[pname] = self._tags_in(prog, pname, pname)
+
+            owned = self.routines_by_program.setdefault(pname, set())
+            for routine in prog.iter("Routine"):
+                rname = routine.attrib.get("Name")
+                if not rname:
+                    continue
+                owned.add(rname)
+                fqn = f"{pname}.{rname}"
+                rspan = self.lines.of_element("Routine", rname)
+                self._sym(fqn, "routine", rname,
+                          rspan, self._routine_text(routine, prog), pname)
+                self._edge(pname, fqn, "owns")
+
+    def _collect_aois(self, controller) -> None:
+        for aoi in controller.iter("AddOnInstructionDefinition"):
+            aname = aoi.attrib.get("Name")
+            if not aname:
+                continue
+            self.aoi_names.add(aname)
+            span = self.lines.of_element("AddOnInstructionDefinition", aname)
+            self._sym(aname, "aoi", aname, span, _describe(aoi))
+
+            scope: dict[str, str] = {}
+            ordered: list[dict] = []
+            for param in aoi.iter("Parameter"):
+                pname = param.attrib.get("Name")
+                if not pname:
+                    continue
+                fqn = f"{aname}.{pname}"
+                scope[pname] = fqn
+                if pname in _IMPLICIT_AOI_PARAMS:
+                    continue
+                ordered.append({
+                    "name": pname,
+                    "usage": param.attrib.get("Usage", "Input"),
+                    "required": param.attrib.get("Required") == "true",
+                })
+                pspan = self.lines.of_element("Parameter", pname)
+                self._sym(fqn, "parameter", pname, pspan, _describe(param), aname)
+                self._edge(aname, fqn, "owns")
+
+            for local in aoi.iter("LocalTag"):
+                lname = local.attrib.get("Name")
+                if not lname:
+                    continue
+                fqn = f"{aname}.{lname}"
+                scope[lname] = fqn
+                lspan = self.lines.of_element("LocalTag", lname)
+                self._sym(fqn, "local_tag", lname, lspan, _describe(local), aname)
+                self._edge(aname, fqn, "owns")
+
+            for routine in aoi.iter("Routine"):
+                rname = routine.attrib.get("Name")
+                if not rname:
+                    continue
+                fqn = f"{aname}.{rname}"
+                rspan = self.lines.of_element("Routine", rname)
+                self._sym(fqn, "routine", rname,
+                          rspan, self._routine_text(routine, aoi), aname)
+                self._edge(aname, fqn, "owns")
+
+            self.aoi_scope[aname] = scope
+            self.aoi_params[aname] = ordered
+
+    # -- embedded text --------------------------------------------------------
+
+    def _routine_text(self, routine, container) -> str:
+        """The embedding payload: names and prose, not neutral text.
+
+        Neutral text carries almost no natural language, so it is preserved in
+        the chunk body but is not what gets embedded. Rung comments and the
+        surrounding names are the only real language in an L5X file.
+        """
+        parts = [
+            container.attrib.get("Name", ""),
+            routine.attrib.get("Name", ""),
+            _describe(routine),
+        ]
+        for rung in routine.iter("Rung"):
+            comment = rung.find("Comment")
+            if comment is not None:
+                parts.append(" ".join(_text_of(comment).split()))
+        return "\n".join(p for p in parts if p)
+
+    # -- logic walk ------------------------------------------------------------
+
+    def _walk_programs(self, controller) -> None:
+        for prog in controller.iter("Program"):
+            pname = prog.attrib.get("Name")
+            if not pname:
+                continue
+            scope = dict(self.controller_tags)
+            scope.update(self.program_tags.get(pname, {}))
+            for routine in prog.iter("Routine"):
+                rname = routine.attrib.get("Name")
+                if rname:
+                    self._walk_routine(routine, f"{pname}.{rname}", scope,
+                                       owner_program=pname)
+
+    def _walk_aois(self, controller) -> None:
+        for aoi in controller.iter("AddOnInstructionDefinition"):
+            aname = aoi.attrib.get("Name")
+            if not aname:
+                continue
+            # AOI logic is hermetically encapsulated: across 2,156 AOI rungs in
+            # the survey corpus it produced zero references outside its own
+            # parameters and local tags. Resolve against AOI scope only, so a
+            # name collision with a controller tag cannot leak an edge outward.
+            scope = self.aoi_scope.get(aname, {})
+            for routine in aoi.iter("Routine"):
+                rname = routine.attrib.get("Name")
+                if rname:
+                    self._walk_routine(routine, f"{aname}.{rname}", scope,
+                                       owner_program=None)
+
+    def _walk_routine(self, routine, routine_fqn, scope, owner_program) -> None:
+        rtype = routine.attrib.get("Type", "RLL")
+        if rtype != "RLL":
+            # ST and FBD are declared unsupported rather than left ambiguous.
+            # The routine symbol is still emitted so the structure is visible.
+            return
+        for rung in routine.iter("Rung"):
+            body = _text_of(rung.find("Text"))
+            if body:
+                self._scan(body, routine_fqn, scope, owner_program)
+
+    def _scan(self, body, routine_fqn, scope, owner_program) -> None:
+        for raw_mnemonic, operands, _s, _e in scan_instructions(body):
+            operands = [o.strip() for o in operands if o.strip()]
+            mnemonic = canonical_mnemonic(raw_mnemonic)
+
+            if mnemonic in self.aoi_names:
+                self._bind_aoi_call(mnemonic, operands, routine_fqn, scope)
+                continue
+
+            sig = signature(mnemonic)
+            if sig is None:
+                self.unknown_mnemonics.add(mnemonic)
+            arity = len(operands)
+
+            for i, operand in enumerate(operands):
+                role = sig.role_at(i, arity) if sig else TAG
+                if role in (LITERAL, KEYWORD, LABEL):
+                    continue
+                if role == ROUTINE:
+                    self._bind_call(operand, routine_fqn, owner_program)
+                    continue
+                if role == EXPR:
+                    # Expression operands are free-form; every identifier in
+                    # them is a read. Nothing in an expression is written.
+                    for ident in _IDENT_RE.findall(operand):
+                        self._read(ident, routine_fqn, scope)
+                    continue
+
+                base, indices = split_operand(operand)
+                # An index expression is a genuine read: the controller reads
+                # Row and Col to compute the address of Recipe[Row,Col].
+                for ident in indices:
+                    self._read(ident, routine_fqn, scope)
+                if base is None:
+                    continue
+                writes = bool(sig) and sig.writes_at(i, arity)
+                both = bool(sig) and sig.both_at(i, arity)
+                if writes or both:
+                    self._write(base, routine_fqn, scope)
+                if both or not writes:
+                    self._read(base, routine_fqn, scope)
+
+    def _resolve(self, name, scope) -> str | None:
+        if is_module_io(name):
+            return name          # hardware endpoint, not a declared symbol
+        return scope.get(name)
+
+    def _read(self, name, routine_fqn, scope) -> None:
+        target = self._resolve(name, scope)
+        if target:
+            self._edge(routine_fqn, target, "reads")
+
+    def _write(self, name, routine_fqn, scope) -> None:
+        target = self._resolve(name, scope)
+        if target:
+            self._edge(routine_fqn, target, "writes")
+
+    def _bind_call(self, operand, routine_fqn, owner_program) -> None:
+        """A JSR target, resolved against the OWNING program's routines only.
+
+        JSR is program-local. Resolving against a flat whole-file set of
+        routine names makes two programs that each declare a routine of the
+        same name resolve each other's calls; the survey corpus had 12 such
+        names across its programs.
+        """
+        base, _ = split_operand(operand)
+        if not base or owner_program is None:
+            return
+        if base in self.routines_by_program.get(owner_program, ()):
+            self._edge(routine_fqn, f"{owner_program}.{base}", "call")
+
+    def _bind_aoi_call(self, aoi_name, operands, routine_fqn, scope) -> None:
+        """Bind an AOI invocation positionally.
+
+        The arity rule is `1 + count(Required parameters excluding EnableIn and
+        EnableOut)`, which held at 418 of 418 call sites in the survey corpus.
+        Operand 0 is the backing instance tag, always written; operands 1..n
+        bind in declaration order, with direction from Usage.
+        """
+        self._edge(routine_fqn, aoi_name, "call")
+        if not operands:
+            return
+
+        instance, _ = split_operand(operands[0])
+        if instance:
+            self._write(instance, routine_fqn, scope)
+
+        required = [p for p in self.aoi_params.get(aoi_name, []) if p["required"]]
+        actuals = operands[1:]
+        if len(actuals) != len(required):
+            # Arity disagreement means positional binding is not safe here.
+            # Emit the call edge and stop rather than bind to the wrong slots.
+            log.info(
+                "l5x: %s call site passed %d operand(s) for %d required "
+                "parameter(s); positional binding skipped",
+                aoi_name, len(actuals), len(required),
+            )
+            return
+
+        for param, actual in zip(required, actuals):
+            base, indices = split_operand(actual)
+            for ident in indices:
+                self._read(ident, routine_fqn, scope)
+            if not base:
+                continue
+            usage = param["usage"]
+            if usage == "Input":
+                self._read(base, routine_fqn, scope)
+            elif usage == "Output":
+                self._write(base, routine_fqn, scope)
+            else:                      # InOut is passed by reference: both
+                self._read(base, routine_fqn, scope)
+                self._write(base, routine_fqn, scope)
