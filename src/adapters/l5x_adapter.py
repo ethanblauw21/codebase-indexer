@@ -261,6 +261,7 @@ class _Extractor:
         self.aoi_params: dict[str, list[dict]] = {}        # aoi -> ordered params
         self.aoi_names: set[str] = set()
         self.unknown_mnemonics: set[str] = set()
+        self.unnamed_unkeyable = 0
 
     # -- emit ---------------------------------------------------------------
 
@@ -308,19 +309,50 @@ class _Extractor:
 
     # -- registries ----------------------------------------------------------
 
+    def _module_fqn(self, mod) -> str | None:
+        """Identity for one Module element, named or not.
+
+        A `Name` attribute is NOT guaranteed. In the survey corpus 22 of 83
+        modules (26.5%) carry none — they are sub-modules hanging off a parent
+        device (drive peripherals, embedded drive ports) identified by their
+        position in the hardware tree rather than by a name. Skipping them
+        drops a quarter of the module hierarchy and every `owns` edge into it.
+
+        Nameless modules are addressed by parent + port id + port address.
+        Parent and port id alone are not enough: that pair collides 6 times in
+        the corpus, while adding the port address is unique across all 22.
+        """
+        name = mod.attrib.get("Name")
+        if name:
+            return name
+        parent = mod.attrib.get("ParentModule")
+        port_id = mod.attrib.get("ParentModPortId")
+        address = next(
+            (p.attrib.get("Address") for p in mod.iter("Port")
+             if p.attrib.get("Address")),
+            None,
+        )
+        if not parent or port_id is None or address is None:
+            # Nothing stable to key on. Counted rather than silently dropped.
+            self.unnamed_unkeyable += 1
+            return None
+        return f"{parent}:{port_id}:{address}"
+
     def _collect_modules(self, controller) -> None:
         for mod in controller.iter("Module"):
-            name = mod.attrib.get("Name")
-            if not name:
+            fqn = self._module_fqn(mod)
+            if fqn is None:
                 continue
-            span = self.lines.of_element("Module", name)
-            self._sym(name, "module", name, span, _describe(mod))
+            name = mod.attrib.get("Name") or fqn
+            span = (self.lines.of_element("Module", name)
+                    if mod.attrib.get("Name") else (1, 1))
+            self._sym(fqn, "module", name, span, _describe(mod))
         # Parent edges in a second pass so both endpoints exist as symbols.
         for mod in controller.iter("Module"):
-            name = mod.attrib.get("Name")
+            fqn = self._module_fqn(mod)
             parent = mod.attrib.get("ParentModule")
-            if name and parent:
-                self._edge(parent, name, "owns")
+            if fqn and parent:
+                self._edge(parent, fqn, "owns")
 
     def _tags_in(self, container, scope_fqn: str | None, owner: str | None):
         """Emit tag symbols for one Tags container; return name -> fqn."""
@@ -421,21 +453,39 @@ class _Extractor:
     # -- embedded text --------------------------------------------------------
 
     def _routine_text(self, routine, container) -> str:
-        """The embedding payload: names and prose, not neutral text.
+        """Chunk body: assembled prose AND the neutral text verbatim.
 
-        Neutral text carries almost no natural language, so it is preserved in
-        the chunk body but is not what gets embedded. Rung comments and the
-        surrounding names are the only real language in an L5X file.
+        Both, not one or the other. The prose is what carries natural language
+        and is what makes the chunk embeddable — neutral text like
+        `XIC(a)XIO(b)OTE(c)` has almost none. But only about 30% of rungs carry
+        a comment, so a prose-only chunk leaves roughly 70% of the ladder
+        unreachable by any lexical query, and lexical matching is half of the
+        hybrid retrieval this index is built on. An engineer searching for the
+        instruction or tag they actually typed must find it.
+
+        Rung numbers are kept inline so a hit can be traced back to a specific
+        rung — the rung is the addressable sub-unit even though the routine is
+        the chunk.
         """
         parts = [
             container.attrib.get("Name", ""),
             routine.attrib.get("Name", ""),
             _describe(routine),
         ]
+        comments: list[str] = []
+        logic: list[str] = []
         for rung in routine.iter("Rung"):
+            number = rung.attrib.get("Number", "")
             comment = rung.find("Comment")
             if comment is not None:
-                parts.append(" ".join(_text_of(comment).split()))
+                text = " ".join(_text_of(comment).split())
+                if text:
+                    comments.append(f"[{number}] {text}")
+            body = " ".join(_text_of(rung.find("Text")).split())
+            if body:
+                logic.append(f"[{number}] {body}")
+        parts.extend(comments)
+        parts.extend(logic)
         return "\n".join(p for p in parts if p)
 
     # -- logic walk ------------------------------------------------------------

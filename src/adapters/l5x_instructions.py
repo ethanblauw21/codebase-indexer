@@ -84,15 +84,25 @@ class Signature:
     `both` holds indices that are read AND written (InOut-style semantics).
     """
 
-    __slots__ = ("roles", "writes", "both", "verified")
+    __slots__ = ("roles", "writes", "both", "verified", "last_role")
 
-    def __init__(self, roles, writes=(), both=(), verified=True):
+    def __init__(self, roles, writes=(), both=(), verified=True, last_role=None):
         self.roles = tuple(roles)
         self.writes = frozenset(writes)
         self.both = frozenset(both)
         self.verified = verified
+        # Role of the FINAL operand regardless of arity. Needed by instructions
+        # that appear in several arities with the meaningful operand last:
+        # GSV/SSV take (Class, Instance, Attribute, Tag) but also a 3-operand
+        # form, so a fixed-position role puts KEYWORD where the tag actually is.
+        # That is not cosmetic - the adapter skips KEYWORD operands before it
+        # ever consults `writes`, so a misplaced keyword silently suppresses a
+        # write edge rather than merely mislabelling it.
+        self.last_role = last_role
 
     def role_at(self, index: int, arity: int) -> str:
+        if self.last_role is not None and index == arity - 1:
+            return self.last_role
         if index < len(self.roles):
             role = self.roles[index]
             if role != _REPEAT:
@@ -106,8 +116,8 @@ class Signature:
         return index in self.both or (-1 in self.both and index == arity - 1)
 
 
-def _sig(roles, writes=(), both=(), verified=True):
-    return Signature(roles, writes, both, verified)
+def _sig(roles, writes=(), both=(), verified=True, last_role=None):
+    return Signature(roles, writes, both, verified, last_role)
 
 
 INSTRUCTIONS: dict[str, Signature] = {
@@ -197,11 +207,17 @@ INSTRUCTIONS: dict[str, Signature] = {
     # GSV(Class, Instance, Attribute, Dest) - but the corpus carries 3-operand
     # forms too, and the destination is the LAST operand in both. A fixed index
     # wrote the short-form call sites to the wrong position.
-    "GSV": _sig((KEYWORD, KEYWORD, KEYWORD, TAG), writes=(-1,)),
+    # Position 1 is the object Instance, which is a keyword for singleton
+    # objects but names a real tag in 6 of 29 four-operand corpus occurrences.
+    # It is typed TAG rather than KEYWORD because the failure modes are not
+    # symmetric: a keyword string typed as TAG simply fails to resolve and
+    # emits nothing, whereas a tag typed as KEYWORD is skipped and silently
+    # loses a real read edge.
+    "GSV": _sig((KEYWORD, TAG, KEYWORD, TAG), writes=(-1,), last_role=TAG),
     # SSV(Class, Instance, Attribute, Source) writes the system object, NOT a
     # tag. Its last operand is read. Giving it a write position would emit
     # false write edges - deliberately none.
-    "SSV": _sig((KEYWORD, KEYWORD, KEYWORD, TAG)),
+    "SSV": _sig((KEYWORD, KEYWORD, KEYWORD, TAG), last_role=TAG),
     "MSG": _sig((TAG,), writes=(0,)),
     "PID": _sig((TAG, TAG, TAG, TAG), writes=(0, 3), verified=False),
 
