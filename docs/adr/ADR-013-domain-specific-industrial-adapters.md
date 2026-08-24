@@ -1,6 +1,6 @@
 # ADR-013: Domain-Specific / Industrial Language Adapters — Depth Where No Compiler Index Exists
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-06-18
 **Branch:** `feature/adr-013-domain-specific-industrial-adapters`
 **Reviewer:** @ethanblauw21
@@ -531,8 +531,11 @@ the `EQ(t,0)MOVE(1,t)` default-value idiom plus an operand-kind profile identica
 spelling split correlates with SoftwareRevision 36.04, but that is a sample of one file. One more v36
 export would settle it cheaply.
 
-**16 instruction signatures have no corpus evidence** and are labeled `verified=False`. All 16 have zero
-occurrences here, so they cost nothing in this corpus but would matter on a different controller.
+**14 instruction signatures have no corpus evidence** and are labeled `verified=False`
+(`CTD`, `FIND`, `JXR`, `MVM`, `NEG`, `NOT`, `OSF`, `OSR`, `PID`, `RET`, `SBR`, `SQR`, `STOR`, `XOR`,
+of 72 total). All 14 have zero occurrences here, so they cost nothing in this corpus but would
+matter on a different controller. *(Was written as 16; counted from the table 2026-08-24 via
+`unverified_mnemonics()`, which is the authority.)*
 
 **Nested instruction calls are scanned twice** — once inside the enclosing operand and once as their own
 match. Edges dedupe, so this is not a correctness problem, but it inflates operand counts and produced
