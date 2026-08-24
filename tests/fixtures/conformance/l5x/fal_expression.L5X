@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="FileArithFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 03 09:00:00 2026">
+<Controller Use="Target" Name="FileArithFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<Tags>
+<Tag Name="Ctrl" TagType="Base" DataType="CONTROL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Control structure sequencing the file operation]]></Description>
+</Tag>
+<Tag Name="Result" TagType="Base" DataType="REAL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Destination receiving the computed sum]]></Description>
+</Tag>
+<Tag Name="Source_A" TagType="Base" DataType="REAL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[First addend]]></Description>
+</Tag>
+<Tag Name="Source_B" TagType="Base" DataType="REAL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Second addend]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="MathProgram" TestEdits="false" MainRoutineName="FileMath" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="FileMath" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Sum the two sources across the file into the destination]]></Comment>
+<Text>
+<![CDATA[FAL(Ctrl,10,0,ALL,Result,Source_A+Source_B);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="MathProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

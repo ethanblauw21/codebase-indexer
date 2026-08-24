@@ -90,3 +90,14 @@ eval-args.txt
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# Customer control logic (ADR-013 L5X corpus). Live Egan project exports —
+# never committed, never read directly, only aggregated by scripts under
+# tools/l5x/. Both spellings are listed so a rename cannot silently unprotect it.
+Egan_LX_files/
+Egan_L5X_files/
+
+# Raw survey output from tools/l5x/ carries customer identifiers verbatim.
+# Only the redact_survey.py-reduced form is shareable, and even that is
+# regenerable — no survey artifact is committed.
+tools/l5x/survey*.json

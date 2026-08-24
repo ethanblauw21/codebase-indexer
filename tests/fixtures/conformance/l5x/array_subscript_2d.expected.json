@@ -1,0 +1,30 @@
+{
+  "feature": "l5x/array_subscript_2d",
+  "language": "l5x",
+  "tier": "A",
+  "note": "Regression fixture for the bracket-depth bug in the Phase 0 splitter. A comma inside an array subscript is not an operand separator, so MOV(Recipe[Row,Col],Active_Setpoint) is a two-operand MOV and not a three-operand one. Measured on the Egan corpus the bug affected 3 rung bodies and 36 operands across MOV (28) and COP (8); it never inflated the tag count, because the split produced one unresolvable tag plus one spurious literal. An index expression is asserted to produce a read edge on the index tag: the controller genuinely reads Row and Col to compute the address, and dropping those edges would hide a real data dependency. The base tag is the subscript target, so Recipe[Row,Col] resolves to the tag Recipe.",
+  "symbols": [
+    {"fqn": "RecipeProgram", "kind": "program"},
+    {"fqn": "RecipeProgram.Select", "kind": "routine"},
+    {"fqn": "Recipe", "kind": "tag"},
+    {"fqn": "Row", "kind": "tag"},
+    {"fqn": "Col", "kind": "tag"},
+    {"fqn": "Active_Setpoint", "kind": "tag"},
+    {"fqn": "Buffer", "kind": "tag"},
+    {"fqn": "Load_Req", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "RecipeProgram", "target": "RecipeProgram.Select", "kind": "owns"},
+
+    {"source": "RecipeProgram.Select", "target": "Load_Req", "kind": "reads"},
+    {"source": "RecipeProgram.Select", "target": "Recipe", "kind": "reads"},
+    {"source": "RecipeProgram.Select", "target": "Row", "kind": "reads"},
+    {"source": "RecipeProgram.Select", "target": "Col", "kind": "reads"},
+    {"source": "RecipeProgram.Select", "target": "Active_Setpoint", "kind": "writes"},
+
+    {"source": "RecipeProgram.Select", "target": "Buffer", "kind": "reads"},
+    {"source": "RecipeProgram.Select", "target": "Recipe", "kind": "writes"},
+
+    {"source": "RecipeProgram.Select", "target": "Buffer", "kind": "writes"}
+  ]
+}

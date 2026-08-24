@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="WritePositionFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 03 09:00:00 2026">
+<Controller Use="Target" Name="WritePositionFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<Tags>
+<Tag Name="Raw_Word" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Word as received from the network, wrong byte order]]></Description>
+</Tag>
+<Tag Name="Swapped_Word" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Byte-swapped copy of the raw word]]></Description>
+</Tag>
+<Tag Name="Source_Word" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Packed status word]]></Description>
+</Tag>
+<Tag Name="Dest_Word" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Word receiving the relocated bit field]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="ConvertProgram" TestEdits="false" MainRoutineName="Convert" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="Convert" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Correct the byte order of the incoming network word]]></Comment>
+<Text>
+<![CDATA[SWPB(Raw_Word,REVERSE,Swapped_Word);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[Relocate a four bit field into the destination word]]></Comment>
+<Text>
+<![CDATA[BTD(Source_Word,0,Dest_Word,8,4);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="ConvertProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

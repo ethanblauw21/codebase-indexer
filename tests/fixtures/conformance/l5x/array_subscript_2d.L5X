@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="SubscriptFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 03 09:00:00 2026">
+<Controller Use="Target" Name="SubscriptFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<Tags>
+<Tag Name="Recipe" TagType="Base" DataType="DINT" Dimensions="4 8" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Recipe table, four rows by eight columns]]></Description>
+</Tag>
+<Tag Name="Row" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Recipe row index]]></Description>
+</Tag>
+<Tag Name="Col" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Recipe column index]]></Description>
+</Tag>
+<Tag Name="Active_Setpoint" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Setpoint selected from the recipe table]]></Description>
+</Tag>
+<Tag Name="Buffer" TagType="Base" DataType="DINT" Dimensions="8" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Single dimension staging buffer]]></Description>
+</Tag>
+<Tag Name="Load_Req" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Request to load the selected recipe]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="RecipeProgram" TestEdits="false" MainRoutineName="Select" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="Select" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Two dimensional subscript - the comma inside the brackets is not an operand separator]]></Comment>
+<Text>
+<![CDATA[XIC(Load_Req)MOV(Recipe[Row,Col],Active_Setpoint);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[One dimensional subscript, and a subscript on the destination]]></Comment>
+<Text>
+<![CDATA[XIC(Load_Req)MOV(Buffer[Row],Recipe[Row,Col]);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment><![CDATA[Copy the whole recipe row into the staging buffer]]></Comment>
+<Text>
+<![CDATA[XIC(Load_Req)COP(Recipe[Row,0],Buffer[0],8);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="RecipeProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

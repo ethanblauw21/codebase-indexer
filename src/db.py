@@ -338,6 +338,15 @@ _EDGE_KIND_MAP: dict[str, str] = {
     "consumes_context": "CONSUMES_CONTEXT",
     "extends":          "EXTENDS",
     "implements":       "IMPLEMENTS",
+    # ADR-013 (L5X). Tag data flow is directional and the direction is the
+    # whole point: "where is this tag written" is the query an controls
+    # engineer actually asks, and it is not answerable from an undirected
+    # reference edge.
+    "reads":            "READS",
+    "writes":           "WRITES",
+    # A tag aliased onto a module I/O point. Distinct from OWNS because the
+    # target is a hardware endpoint, not a declared symbol.
+    "alias_of":         "ALIAS_OF",
 }
 
 
@@ -389,6 +398,11 @@ class CodeDB:
         self._migrate_edge_candidate()
         self._migrate_edge_confidence()
         self._migrate_edge_receiver_type()
+        # Must run LAST of the edges migrations: it rebuilds the table and
+        # copies every column forward, so all additive columns have to exist
+        # before it runs. Placing it earlier fails on databases old enough to
+        # predate candidate/confidence/receiver_type.
+        self._migrate_edge_kinds()
         self._migrate_symbol_locations()
         self._migrate_files_freshness()
         self._seed_index_meta()
@@ -521,6 +535,60 @@ class CodeDB:
             SELECT id, source_fqn, target, kind FROM edges;
         DROP TABLE edges;
         ALTER TABLE edges_v2 RENAME TO edges;
+        CREATE INDEX IF NOT EXISTS idx_edges_source      ON edges(source_fqn);
+        CREATE INDEX IF NOT EXISTS idx_edges_target      ON edges(target);
+        CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source_fqn, kind);
+        CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target, kind);
+        CREATE INDEX IF NOT EXISTS idx_edges_resolved    ON edges(resolved_target)
+            WHERE resolved_target IS NOT NULL;
+        PRAGMA optimize;
+        """)
+
+    def _migrate_edge_kinds(self) -> None:
+        """
+        Second expansion of the edges CHECK constraint, adding the ADR-013
+        L5X edge kinds READS / WRITES / ALIAS_OF.
+
+        This cannot ride along on `_migrate_edges`. That migration guards on
+        `"resolved_target" in cols`, which is already true for every database
+        built since the first expansion — so editing its DDL in place would
+        silently never run on an existing index, and inserts of the new kinds
+        would fail the CHECK constraint at runtime rather than at migration
+        time. Hence a separate guard keyed on the constraint text itself.
+
+        Idempotent: no-ops once the constraint already lists READS.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'"
+        ).fetchone()
+        if row and row[0] and "'READS'" in row[0]:
+            return
+
+        self._conn.executescript("""
+        DROP TABLE IF EXISTS edges_v3;
+        CREATE TABLE edges_v3 (
+            id              INTEGER PRIMARY KEY,
+            source_fqn      TEXT    NOT NULL,
+            target          TEXT    NOT NULL,
+            kind            TEXT    NOT NULL CHECK(kind IN (
+                'IMPORTS','CALLS','INSTANTIATES',
+                'OWNS','PROVIDES_CONTEXT','CONSUMES_CONTEXT',
+                'EXTENDS','IMPLEMENTS',
+                'READS','WRITES','ALIAS_OF'
+            )),
+            resolved_target TEXT,
+            candidate       INTEGER NOT NULL DEFAULT 0,
+            confidence      REAL,
+            receiver_type   TEXT,
+            UNIQUE(source_fqn, target, kind)
+        );
+        INSERT OR IGNORE INTO edges_v3(
+            id, source_fqn, target, kind, resolved_target,
+            candidate, confidence, receiver_type)
+            SELECT id, source_fqn, target, kind, resolved_target,
+                   candidate, confidence, receiver_type FROM edges;
+        DROP TABLE edges;
+        ALTER TABLE edges_v3 RENAME TO edges;
         CREATE INDEX IF NOT EXISTS idx_edges_source      ON edges(source_fqn);
         CREATE INDEX IF NOT EXISTS idx_edges_target      ON edges(target);
         CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source_fqn, kind);
