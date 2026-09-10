@@ -224,6 +224,23 @@ class ChunkSummarizer:
     # Public API
     # ------------------------------------------------------------------
 
+    def shutdown(self) -> None:
+        """Release the model and its GPU memory.
+
+        The in-process counterpart to IsolatedChunkSummarizer.shutdown(). This
+        class holds the pipeline in the indexer's own process, so releasing it
+        means dropping the reference and returning the cached blocks to the
+        driver; without the empty_cache() call the allocator keeps them and the
+        embedding model gains nothing.
+        """
+        self._pipe = None
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
     def summarize_batch(self, codes: list[str]) -> list[str]:
         """
         Return one extraction string per code chunk.
@@ -360,6 +377,16 @@ class IsolatedChunkSummarizer:
             self._failed = True
             self._shutdown()
             return [""] * len(codes)
+
+    def shutdown(self) -> None:
+        """Release the worker process and, with it, its GPU memory.
+
+        Called by the indexer between the summarization and embedding passes.
+        The model lives in a child process, so terminating it hands the memory
+        back to the driver outright rather than relying on allocator reuse.
+        Safe to call more than once, and safe when no worker ever started.
+        """
+        self._shutdown()
 
     def _shutdown(self) -> None:
         if self._executor is not None:

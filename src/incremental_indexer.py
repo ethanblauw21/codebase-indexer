@@ -523,6 +523,35 @@ def ingest_project_file(
 # Single-file ingest: parse → chunk → embed → add_with_ids → SQLite upsert
 # ---------------------------------------------------------------------------
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Chunking — single source of truth for both passes
+# ─────────────────────────────────────────────────────────────────────────────
+def chunk_all_tiers(rel_path: str, content: str) -> dict[str, list]:
+    """Produce the three-tier chunk sets for one file.
+
+    Both ingest_file() and run_summarization_pass() call this, and that is a
+    correctness requirement rather than a convenience. The summary cache is
+    keyed by an md5 of the chunk text, so if the two passes chunked even
+    slightly differently, every lookup in the embedding pass would miss, the
+    LLM would reload, and both models would be resident at once — precisely the
+    failure the two-pass split exists to prevent.
+    """
+    tier_chunks: dict[str, list] = {}
+    for tier_name, max_tokens, overlap in TIER_CONFIGS:
+        if tier_name == "tier1_surgical":
+            tier_chunks[tier_name] = chunk_file_ast(rel_path, content, max_tokens, overlap)
+        else:
+            tier_chunks[tier_name] = fallback_token_chunker(
+                content, rel_path, max_tokens, overlap, parent_scope="Full File"
+            )
+    return tier_chunks
+
+
+def chunk_text_hash(text: str) -> str:
+    """Cache key for one chunk's summary. Must agree across both passes."""
+    return hashlib.md5(text.encode()).hexdigest()
+
+
 def ingest_file(
     rel_path:      str,
     content:       str,
@@ -543,14 +572,7 @@ def ingest_file(
     """
 
     print(f"  [ingest:{rel_path}] chunking...", flush=True)
-    tier_chunks: dict[str, list] = {}
-    for tier_name, max_tokens, overlap in TIER_CONFIGS:
-        if tier_name == "tier1_surgical":
-            tier_chunks[tier_name] = chunk_file_ast(rel_path, content, max_tokens, overlap)
-        else:
-            tier_chunks[tier_name] = fallback_token_chunker(
-                content, rel_path, max_tokens, overlap, parent_scope="Full File"
-            )
+    tier_chunks: dict[str, list] = chunk_all_tiers(rel_path, content)
     print(f"  [ingest:{rel_path}] chunks: " +
           " | ".join(f"{n}={len(c)}" for n, c in tier_chunks.items()), flush=True)
 
@@ -596,9 +618,7 @@ def ingest_file(
         embed_texts = texts_to_embed
         if summarizer is not None:
             print(f"  [ingest:{rel_path}] {tier_name}: summarizing {len(texts_to_embed)} chunks...", flush=True)
-            text_hashes = [
-                hashlib.md5(t.encode()).hexdigest() for t in texts_to_embed
-            ]
+            text_hashes = [chunk_text_hash(t) for t in texts_to_embed]
             cached = db.get_cached_summaries(text_hashes)
 
             uncached_idx = [i for i, h in enumerate(text_hashes) if h not in cached]
@@ -664,6 +684,81 @@ def ingest_file(
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
+
+class _CacheOnlySummarizer:
+    """Stand-in for the summarizer during the embedding pass.
+
+    Presents the same duck-type but never starts a worker process, so the LLM
+    cannot become resident while the embedding model is loaded. A chunk the
+    pre-pass failed to cache yields an empty summary, which ingest_file already
+    handles by embedding the raw chunk text. Misses are counted rather than
+    ignored: a non-zero count means the two passes disagreed about chunking,
+    which is the one way this design can silently degrade.
+    """
+
+    def __init__(self) -> None:
+        self.misses = 0
+
+    def summarize_batch(self, codes: list[str]) -> list[str]:
+        self.misses += len(codes)
+        return [""] * len(codes)
+
+
+def run_summarization_pass(
+    to_index:   list[str],
+    repo_path:  str,
+    db:         CodeDB,
+    summarizer: object,
+) -> None:
+    """Summarize every chunk of every file before any embedding begins.
+
+    The summarizer (Qwen2.5-Coder-1.5B) and the embedder (bge-code-v1) do not
+    fit on an 8 GB card together. The main loop interleaves them per file and
+    per tier — roughly 350 alternations over a 118-file repository — so both end
+    up resident. Windows does not raise an out-of-memory error in that state:
+    the display driver pages GPU memory back through system RAM, and throughput
+    collapses by roughly fifty times with nothing in the log to show for it.
+    Measured on this repository, 77 chunks took 18 minutes instead of seconds,
+    with 4260 MiB spilled to system RAM.
+
+    Summaries persist in chunk_summaries keyed by content hash, so filling that
+    cache up front lets the embedding pass run with the LLM unloaded entirely.
+    Peak GPU memory becomes max(summarizer, embedder) instead of their sum.
+
+    Unloading between every tier instead would mean reloading a 3 GB model on
+    each alternation, which costs far more than the thrashing it avoids.
+    """
+    print("━━ Pass 1 of 2: summarization (embedding model not loaded) ━━", flush=True)
+    total_chunks = 0
+    total_new    = 0
+    for n, rel_path in enumerate(to_index, 1):
+        ext = Path(rel_path).suffix.lower()
+        if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
+            continue                      # descriptor files carry edges, never chunks
+        try:
+            with open(os.path.join(repo_path, rel_path), "r",
+                      encoding="utf-8", errors="ignore") as fh:
+                content = fh.read()
+        except OSError:
+            continue                      # pass 2 reports the read failure properly
+        for tier_name, chunks in chunk_all_tiers(rel_path, content).items():
+            texts = [c.text for c in chunks]
+            if not texts:
+                continue
+            total_chunks += len(texts)
+            hashes   = [chunk_text_hash(t) for t in texts]
+            cached   = db.get_cached_summaries(hashes)
+            uncached = [i for i, h in enumerate(hashes) if h not in cached]
+            if not uncached:
+                continue
+            summaries = summarizer.summarize_batch([texts[i] for i in uncached])
+            pairs     = [(hashes[i], sm) for i, sm in zip(uncached, summaries) if sm]
+            db.cache_summaries(pairs)
+            total_new += len(pairs)
+        print(f"  [summarize {n}/{len(to_index)}] {rel_path}", flush=True)
+    print(f"  Pass 1 done: {total_chunks} chunks seen, {total_new} newly summarized",
+          flush=True)
+
 
 def run_incremental(
     repo_path: str = REPO_PATH,
@@ -790,6 +885,14 @@ def run_incremental(
             changed = _run_now
         return changed, (author or None)
 
+    # Two-pass split: summarize everything, release the LLM, then embed. See
+    # run_summarization_pass() for why interleaving the two models does not fit.
+    if summarizer is not None:
+        run_summarization_pass(to_index, repo_path, db, summarizer)
+        summarizer.shutdown()          # child process exits; its GPU memory returns
+        summarizer = _CacheOnlySummarizer()
+        print("━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
+
     errors = 0
     for rel_path in to_index:
         full_path = os.path.join(repo_path, rel_path)
@@ -839,6 +942,11 @@ def run_incremental(
     # Traverse step has real neighbours to walk. Runs once here, over the now-complete
     # symbols table; precision-first (only provably-unique targets), recomputes every
     # run so a name that became ambiguous is demoted back to unresolved.
+    if isinstance(summarizer, _CacheOnlySummarizer) and summarizer.misses:
+        print(f"  WARNING: {summarizer.misses} chunks missed the summary cache in pass 2 "
+              "— the two passes disagree about chunking, and those chunks were "
+              "embedded without a summary.")
+
     res = resolve_call_edges(db)
     print(f"  Call resolution: {res['resolved']} resolved | "
           f"{res['typed']} typed | {res['ambiguous']} ambiguous | {res['external']} external")
