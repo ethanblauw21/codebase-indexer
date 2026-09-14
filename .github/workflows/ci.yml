@@ -162,7 +162,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install project
-        run: pip install -e .
+        run: pip install -e ".[dev]"
 
       # These two are CHECKS, not diagnostics. The distinction matters (ADR-013
       # §5.5): the surveys under tools/l5x/ are exploratory instruments and are
