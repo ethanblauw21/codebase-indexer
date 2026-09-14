@@ -518,8 +518,27 @@ run. Routine granularity is still reasoned from rung-length distributions and **
 against a query anyone actually asked**. Settling either on reasoning alone would repeat the mistake
 that produced the write-position table.
 
-**Gold queries do not exist.** They need controls engineers, not more parsing. Extraction proceeds
-without them; ranking, chunk assembly, and anything about the graph beyond emitting edges cannot.
+**Gold queries still do not exist, but the requirements behind them are now elicited.** Session 1 ran
+2026-08-26 and produced `docs/l5x-retrieval-requirements.md`. The raw responses name customer
+equipment and projects, so they live under `benchmarks/real_repo/private/` per the ADR-019 §6
+precedent. It was **n = 1 and a self-interview by this tool's author**, so it sets direction and
+settles nothing.
+
+Three findings bear on this ADR. **(a)** A query whose honest best answer is a controller-scoped `tag`
+declaration now exists — the first anyone has actually asked — which argues for, but does not measure,
+the chunkability question left open above. **(b)** The daily fault-tracing questions ("what activates
+this device", "what conditions set this alarm", "what advances this step") are **one-hop exact lookups
+over the write edges, not multi-hop traversals.** The elicitation plan had predicted they would be
+`graph-only` queries, unscorable under RRF per ADR-019; that conflated a ranked traversal with a
+deterministic filter over a relation already resolved at 11,379/11,379. Nothing is ranked, so
+hop-decay never applies — and engineers described pruning between hops by hand, which is also what
+keeps the 177-writes fan-out hazard out of reach. Multi-hop automatic slicing stays out of scope.
+**(c)** Silent AOI drift — the same AOI at the same declared revision carrying different logic across
+controllers — is a recurring real-world cost, detectable by hashing normalized definition bodies, and
+needs no gold queries at all.
+
+What stays gated is unchanged: ranking, chunk assembly, and anything about the graph beyond emitting
+edges still wait on a scored set. Extraction proceeds without one.
 
 **Incremental indexing granularity is mismatched.** One L5X file is one entire controller — the largest
 here is 7.9 MB and 131,940 XML elements. The incremental indexer diffs at file granularity with MD5, so
@@ -589,6 +608,51 @@ traffic against known tag values, so the tap is the prerequisite rather than the
 - The `GSV[1]` fix removed 6 false read edges and 29 spurious resolution failures. Deduplicated edge
   counts are unchanged, because all 6 duplicated edges that already existed — which is exactly why a
   deduplicated total is a poor place to look for this class of bug.
+
+### 2026-08-26 — rung-level provenance, and three consumers of it
+
+Driven by the elicitation recorded in `docs/l5x-retrieval-requirements.md`.
+
+- **Rung numbers were being read and thrown away.** `_routine_text` read `Rung/@Number` to build the
+  chunk body; the edge-emitting walk did not, so `_edge(routine_fqn, target, "writes")` could only ever
+  name a routine. `self.references` was initialized and returned **empty** — zero `Reference` sites in
+  the adapter. The scan now threads the rung through `_read` / `_write` / `_bind_call` /
+  `_bind_aoi_call`.
+- **16,703 references on the corpus** — 5,848 WRITE, 10,293 READ, 562 CALL. **Zero rungs lacked a
+  usable `Number`.** Deduped per (name, routine, rung, kind): a tag touched twice in one rung is one
+  place to look, and reference counts feed `get_reference_density`, so counting operand positions
+  there would overstate it.
+- **Symbols and edges are byte-identical across the change** — 6,011 and 13,316, with the same
+  per-kind split (3,639 owns / 412 alias_of / 5,148 reads / 3,868 writes / 249 call). That, not the
+  reference count, is what makes this a pure addition.
+- `symbol_references.line` carries a **rung number** for L5X. It is a positional coordinate that
+  renumbers when a rung is inserted — an addressing aid, never a stable-ID input. `ref_kind`
+  (`READ` / `WRITE` / `CALL`) is what distinguishes it from a source line.
+- New fixture `rung_addressing` (14 total, still 1.000/1.000 — 101 symbols, 109 edges). It exists for
+  a case the harness structurally cannot score: `Valve_Open` is written on rung 1 and rung 3, edges
+  dedupe to **one** `writes` edge, and the rung is unrecoverable from the edge alone. The reference
+  assertions live in `tests/test_l5x_adapter.py`, the same treatment the nested-call correction gets.
+- **`what_writes` MCP tool** over `get_edges_to` / `get_references_to`, served by the existing
+  `idx_edges_target_kind`. Deliberately **not** built on `trace_data_flow`, which is hardcoded to
+  Firebase/TypeScript idioms and detects producers by regex over ranked search output — the path
+  ADR-019 showed cannot reliably surface structural nodes. Nothing here is ranked, so RRF hop-decay
+  does not apply and the answer is complete rather than top-k. Covered model-free in
+  `tests/test_what_writes.py` by driving the real adapter → real `upsert_file` → tool.
+- `get_edges_to` normalises the kind spelling. Kinds are stored uppercase (`WRITES`); a caller passing
+  the adapter's `"writes"` would otherwise get a silent empty list. `get_edges_from` was added
+  alongside it because the alias edge runs tag → module I/O, so a tag's own hardware endpoint is an
+  **outbound** lookup — asking `get_edges_to` returns the tags aliased onto it, a different question
+  with an equally plausible-looking answer.
+- **`tools/l5x_controller_profile.py`** (F-3). Finding: pooled description coverage of 67.2% is an
+  average over controllers ranging **25.7% to 88.7%**. Retrieval quality will therefore vary by
+  controller more than by query, which the pooled figure hides.
+- **`tools/l5x_aoi_drift.py`** (F-4). Signature and logic hashed separately. Finding: **13 of 34
+  distinct AOI names carry drift across the 5 exports** — 11 logic, 2 signature; 2 consistent, 19
+  single. The worst case is declared at one revision in three controllers with **75 parameters in two
+  and 83 in the third.** Extraction is unaffected (binding is per-file, and 418/418 stands); what
+  breaks is *reuse*, since call sites bind positionally.
+- Both tools default to printing real names and take `--redact` for stable placeholders. Every figure
+  above was produced with `--redact`.
 
 <!-- 2026-06-18: Wave 3, best near-term differentiation. Default first target = IMPLEMENT the L5X stub (currently NotImplementedError, deferred ADR-003 §D4) + IEC 61131-3 ST parsing (no parser today). Reuses ADR-003 registry + ADR-017 tiers + ADR-008 conformance. Done when a new DSL adapter passes its conformance suite + tier table updated. Open: grammar availability per DSL. Effort M per DSL. -->
 

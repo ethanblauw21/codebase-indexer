@@ -1,0 +1,20 @@
+{
+  "feature": "l5x/expression_member_path",
+  "language": "l5x",
+  "tier": "A",
+  "note": "An expression operand is not a bag of identifiers. The first implementation swept every identifier inside a CPT/FAL expression and called each one a read, which made the member name in `Active_Recipe.Count` a tag reference of its own. Usually that just fails to resolve and costs nothing visible -- which is why it survived -- but a controller tag can share a name with a structure member, and here `Count` is a real, unrelated tag. The sweep therefore emitted a FALSE read edge to it. Expression interiors resolved at 68.6% against 99.95% for base operands for this reason, and the gap was the diagnostic that found it. Rung 1 adds the two other things the sweep got wrong: `ABS` is a function name, not a tag, and `AND` is a bare-word operator. Neither is declared here, so neither can produce an edge -- they are in the fixture as documentation of intent, and the guard that can actually fail is the `Count` collision. Only Active_Recipe is read; Total is written and not read.",
+  "symbols": [
+    {"fqn": "BatchProgram", "kind": "program"},
+    {"fqn": "BatchProgram.Compute", "kind": "routine"},
+    {"fqn": "Active_Recipe", "kind": "tag"},
+    {"fqn": "Count", "kind": "tag"},
+    {"fqn": "Total", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "BatchProgram", "target": "BatchProgram.Compute", "kind": "owns"},
+
+    {"source": "BatchProgram.Compute", "target": "Total", "kind": "writes"},
+
+    {"source": "BatchProgram.Compute", "target": "Active_Recipe", "kind": "reads"}
+  ]
+}

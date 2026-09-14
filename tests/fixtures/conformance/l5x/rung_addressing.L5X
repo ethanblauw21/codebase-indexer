@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="RungFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Wed Aug 26 09:00:00 2026">
+<Controller Use="Target" Name="RungFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<Tags>
+<Tag Name="Start_PB" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Operator start pushbutton]]></Description>
+</Tag>
+<Tag Name="Seq_Active" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Sequence is running]]></Description>
+</Tag>
+<Tag Name="Level_OK" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Vessel level is within band]]></Description>
+</Tag>
+<Tag Name="Valve_Open" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Fill valve commanded open]]></Description>
+</Tag>
+<Tag Name="Step" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Current sequence step number]]></Description>
+</Tag>
+<Tag Name="Step_Last" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Previous sequence step number]]></Description>
+</Tag>
+<Tag Name="Fill_Done" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Fill complete from the level probe]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="Filler" TestEdits="false" MainRoutineName="Sequence" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="Sequence" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Start the sequence on the operator pushbutton]]></Comment>
+<Text>
+<![CDATA[XIC(Start_PB)OTE(Seq_Active);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[Open the fill valve while the sequence runs and level is in band]]></Comment>
+<Text>
+<![CDATA[XIC(Seq_Active)XIC(Level_OK)OTE(Valve_Open);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment><![CDATA[Remember the step number we were on]]></Comment>
+<Text>
+<![CDATA[EQU(Step,3)MOV(Step,Step_Last);]]>
+</Text>
+</Rung>
+<Rung Number="3" Type="N">
+<Comment><![CDATA[Close the fill valve once the level probe reports done]]></Comment>
+<Text>
+<![CDATA[XIC(Fill_Done)OTU(Valve_Open);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="Filler"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

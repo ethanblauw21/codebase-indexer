@@ -144,13 +144,21 @@ Source files
 
 ### MCP Tools (MCPServer.py)
 
-Thirteen AI-facing tools grouped by intent:
+Fourteen AI-facing tools grouped by intent:
 
 - **Search**: `semantic_code_search`, `find_similar_code`
 - **Impact**: `analyze_blast_radius`, `detect_pattern_violations`
-- **Tracing**: `trace_data_flow`, `investigate_architecture`
+- **Tracing**: `trace_data_flow`, `investigate_architecture`, `what_writes`
 - **Discovery**: `find_test_coverage`, `find_dead_code`, `find_unabstracted_collection_reads`, `map_module_communities`, `verify_candidate_edges`
 - **Maintenance**: `reindex`, `index_status`
+
+**`what_writes` is the only tool here that does no retrieval at all** (ADR-013). Given a
+PLC tag it returns every routine that writes it, with rung numbers, straight out of the
+resolved `writes` edges — no embedder, no RRF, no reranker, and the answer is *complete*
+rather than top-k. It is grouped under Tracing but it is not `trace_data_flow`'s sibling:
+that tool detects producers by regex over ranked search results and is hardcoded to
+Firebase/TypeScript idioms. Do not "unify" them — routing an exactly-resolved relation
+through the ranked surface can only lose writers (ADR-019's hop-decay finding).
 
 `verify_candidate_edges` (ADR-023) reports edge-aware three-state verdicts over
 candidate (name-based / unresolved) call edges. `index_status` (ADR-025) reports

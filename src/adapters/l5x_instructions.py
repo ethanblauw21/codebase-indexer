@@ -62,6 +62,28 @@ def canonical_mnemonic(mnemonic: str) -> str:
     return MNEMONIC_ALIASES.get(mnemonic, mnemonic)
 
 
+# ----------------------------------------------------- expression vocabulary
+
+# Words that appear inside a CPT/FAL expression and are NOT tag references.
+#
+# An expression is free-form text, and the first implementation swept every
+# identifier in it as a read. That is why expression interiors resolved at 69%
+# against 99.95% for base operands (ADR-013 §8): the sweep counted operators,
+# function names and member paths as tags that then failed to resolve. These
+# are the bare-word operators. Function names need no list -- an identifier
+# followed by `(` is a call, and a tag reference never is.
+#
+# The comparison upper-cases, because a tag named `and` would still be the
+# operator here: this is about the word, not the casing.
+EXPRESSION_OPERATORS = frozenset({
+    "AND", "OR", "XOR", "NOT", "MOD",
+})
+
+
+def is_expression_operator(word: str) -> bool:
+    return word.upper() in EXPRESSION_OPERATORS
+
+
 # ------------------------------------------------------------------- roles
 
 TAG     = "tag"          # a tag reference; resolvable, and read unless written

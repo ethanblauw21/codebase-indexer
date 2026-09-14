@@ -18,6 +18,7 @@ than papered over, and is asserted at the scanner in tests/test_l5x_adapter.py.
 """
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -43,7 +44,8 @@ def score(feature):
 FEATURES = ["write_position_swpb_btd", "gsv_ssv_system", "fal_expression",
             "module_nameless", "whole_controller", "array_subscript_2d",
             "mnemonic_canonical", "mnemonic_alias", "aoi_definition",
-            "alias_module_io", "jsr_same_program"]
+            "alias_module_io", "jsr_same_program", "expression_member_path",
+            "subscript_member_path", "rung_addressing"]
 
 _ARGS = argparse.ArgumentParser(description=__doc__.split("\n")[0])
 _ARGS.add_argument("--check", action="store_true",
@@ -127,8 +129,8 @@ _orig_src = None
 
 
 def drop_empties():
-    def scan_dropping(text):
-        for mn, args, s, e in _scan(text):
+    def scan_dropping(text, on_nested=None):
+        for mn, args, s, e in _scan(text, on_nested):
             yield mn, [a for a in args if a.strip()], s, e
     A.scan_instructions = scan_dropping
 
@@ -173,6 +175,82 @@ teeth("nameless modules skipped entirely (the original bug)",
       drop_nameless,
       lambda: setattr(A._Extractor, "_module_fqn", _fqn),
       "module_nameless")
+
+
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_terms = A.expression_terms
+
+
+def sweep_identifiers():
+    """The pre-fix expression walk: every identifier is a tag reference."""
+    A.expression_terms = lambda expr: _IDENT.findall(expr)
+
+
+teeth("expression swept as bare identifiers (false read)",
+      sweep_identifiers,
+      lambda: setattr(A, "expression_terms", _terms),
+      "expression_member_path")
+
+_split = A.split_operand
+
+
+def sweep_subscripts():
+    """The pre-fix subscript walk: identifiers, not terms, inside a subscript."""
+    def split(operand):
+        base, _ = _split(operand)
+        idx = []
+        for chunk in re.findall(r"\[([^\]]*)\]", operand.strip()):
+            idx.extend(_IDENT.findall(chunk))
+        return base, idx
+    A.split_operand = split
+
+
+teeth("subscript swept as bare identifiers (false read)",
+      sweep_subscripts,
+      lambda: setattr(A, "split_operand", _split),
+      "subscript_member_path")
+
+
+def rescan_nested():
+    """The pre-fix scanner: a match inside another instruction is its own call."""
+    def scan_all(text, on_nested=None):
+        for m in A._MNEMONIC_RE.finditer(text):
+            i = m.end()
+            start, paren, brack, args = i, 1, 0, []
+            closed = False
+            while i < len(text):
+                c = text[i]
+                if c == "(":
+                    paren += 1
+                elif c == ")":
+                    paren -= 1
+                    if paren == 0:
+                        args.append(text[start:i])
+                        closed = True
+                        break
+                elif c == "[":
+                    brack += 1
+                elif c == "]":
+                    brack = max(0, brack - 1)
+                elif c == "," and paren == 1 and brack == 0:
+                    args.append(text[start:i])
+                    start = i + 1
+                i += 1
+            if not closed:
+                args.append(text[start:i])
+            if len(args) == 1 and not args[0].strip():
+                args = []
+            yield m.group(1), args, m.start(), i + 1
+    A.scan_instructions = scan_all
+
+
+teeth("nested calls rescanned as their own instructions",
+      rescan_nested,
+      lambda: setattr(A, "scan_instructions", _scan),
+      "expression_member_path",
+      unguardable_reason=("a rescanned nested call emits no EDGE, only phantom "
+                          "operand positions; asserted at the scanner in "
+                          "tests/test_l5x_adapter.py"))
 
 
 print(

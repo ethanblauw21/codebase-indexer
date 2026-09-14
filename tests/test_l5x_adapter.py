@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from adapters.l5x_adapter import L5xAdapter, scan_instructions
+from adapters.l5x_adapter import (
+    L5xAdapter,
+    expression_terms,
+    scan_instructions,
+    split_operand,
+)
 from ast_chunker import chunk_file_ast
 
 FIXTURES = Path(__file__).parent / "fixtures" / "conformance" / "l5x"
@@ -174,6 +179,71 @@ def test_two_dimensional_subscript_is_one_operand():
     assert operands == ["Recipe[Row,Col]", "Dest"]
 
 
+def test_nested_call_is_not_its_own_instruction():
+    """A mnemonic inside another instruction's operands is not an instruction.
+
+    `ABS(` matches the mnemonic regex like anything else, so the first scanner
+    yielded it separately and scanned the same text twice — once as an operand
+    of `CPT` and once as a call of its own.
+    """
+    found = list(scan_instructions("CPT(Dest,ABS(Src) + 1);"))
+    assert [m for m, _, _, _ in found] == ["CPT"]
+    assert found[0][1] == ["Dest", "ABS(Src) + 1"]
+
+
+def test_nested_calls_are_counted_not_silently_dropped():
+    """`on_nested` fires once per suppressed match, so an instrument can count."""
+    seen = []
+    list(scan_instructions("CPT(D,ABS(A) + SQR(B));", lambda: seen.append(1)))
+    assert len(seen) == 2
+
+
+def test_unterminated_call_does_not_swallow_what_follows():
+    """One malformed rung must not suppress every instruction after it.
+
+    The skip window only advances past a call that actually closed. Without
+    that, an unclosed paren runs to end of text and everything later looks
+    nested.
+    """
+    found = list(scan_instructions("MOV(A,B XIC(Run)OTE(Motor)"))
+    assert [m for m, _, _, _ in found] == ["MOV", "XIC", "OTE"]
+
+
+def test_expression_terms_drops_functions_operators_and_literals():
+    """An expression is not a bag of identifiers.
+
+    A function name is recognised structurally — an identifier followed by
+    `(` — so an uncatalogued function costs nothing. Bare-word operators come
+    from a short vendor list, and string and numeric literals never match.
+    """
+    terms = list(expression_terms("ABS(Level) + 3.5 * Rate AND Enable"))
+    assert terms == ["Level", "Rate", "Enable"]
+    assert list(expression_terms("'Batch ready' + Status")) == ["Status"]
+
+
+def test_expression_term_keeps_its_member_path_and_subscript():
+    """Terms stay operand-shaped so `split_operand` can take them apart.
+
+    Yielding bare identifiers is what made `Count` in `Recipe.Count` a tag
+    reference of its own, and a controller tag can share a name with a
+    structure member — see the expression_member_path fixture.
+    """
+    assert list(expression_terms("Recipe.Count * Buffer[Idx,2].Value")) == [
+        "Recipe.Count", "Buffer[Idx,2].Value",
+    ]
+
+
+def test_subscript_interior_is_read_as_a_term_not_an_identifier_sweep():
+    """`Buffer[Step.Index]` reads `Step`, not `Step` and a phantom `Index`.
+
+    A subscript is an expression too, and the identifier sweep made every
+    member name inside one a tag reference — 44 of the 72 unresolved subscript
+    reads in the survey corpus were exactly this.
+    """
+    assert split_operand("Buffer[Step.Index]") == ("Buffer", ["Step"])
+    assert split_operand("Recipe[Row,Col]") == ("Recipe", ["Row", "Col"])
+
+
 # ----------------------------------------------- operand-role table invariants
 
 def test_every_write_position_is_typed_as_a_tag():
@@ -225,8 +295,8 @@ def test_repeat_marker_only_appears_last():
 def test_unverified_entries_are_declared_not_implied():
     """Entries with no corpus evidence must carry `verified=False`.
 
-    16 of them do. The point is that the label was applied by someone going
-    and looking, not inferred from the table being plausible.
+    14 of 72 do. The point is that the label was applied by someone going and
+    looking, not inferred from the table being plausible.
     """
     from adapters.l5x_instructions import INSTRUCTIONS
 
@@ -236,3 +306,107 @@ def test_unverified_entries_are_declared_not_implied():
         assert isinstance(sig.verified, bool), (
             f"{mnemonic} has a non-boolean verified flag"
         )
+
+
+# ------------------------------------------------ rung-level write provenance
+
+def _refs(result, name=None, kind=None):
+    out = result.references
+    if name is not None:
+        out = [r for r in out if r.symbol_name == name]
+    if kind is not None:
+        out = [r for r in out if r.ref_kind == kind]
+    return out
+
+
+def test_one_write_edge_can_hide_two_rungs():
+    """The reason rung-level references exist at all.
+
+    `Valve_Open` is energised on rung 1 and unlatched on rung 3. Edges dedupe on
+    (source, target, kind), so both writes collapse into ONE `writes` edge and
+    the edge cannot say which rung. An engineer on the phone asking "what
+    activates this valve" needs both rungs, and rung 3 is the one that would be
+    lost.
+    """
+    result, _ = _parse("rung_addressing")
+
+    write_edges = [e for e in result.edges
+                   if e.target == "Valve_Open" and e.kind == "writes"]
+    assert len(write_edges) == 1, "edges dedupe; that is the premise here"
+
+    rungs = sorted(r.line for r in _refs(result, "Valve_Open", "WRITE"))
+    assert rungs == [1, 3]
+
+
+def test_reference_line_is_a_rung_number_not_a_source_line():
+    """`line` carries the RUNG number for L5X, and nothing else.
+
+    An L5X export is one XML document per controller — 7.9 MB in the survey
+    corpus — so its source line numbers are useless to a human, while `[12]` is
+    already how the chunk body addresses a rung. This asserts the two cannot be
+    confused: every reference here sits in rungs 0-3, while the fixture file
+    itself is dozens of lines long.
+    """
+    result, src = _parse("rung_addressing")
+
+    assert result.references, "the fixture must produce references at all"
+    assert max(r.line for r in result.references) == 3
+    assert len(src.read_text(encoding="utf-8").splitlines()) > 20
+
+
+def test_tag_touched_twice_in_one_rung_is_one_reference():
+    """`EQU(Step,3)MOV(Step,Step_Last)` reads Step twice in rung 2.
+
+    Two operand positions, one place to look. References are deduped per
+    (name, routine, rung, kind) because reference counts feed density scoring
+    (`db.get_reference_density`), and counting operand positions there would
+    overstate how referenced a tag is.
+    """
+    result, _ = _parse("rung_addressing")
+
+    step_reads = _refs(result, "Step", "READ")
+    assert len(step_reads) == 1
+    assert step_reads[0].line == 2
+
+
+def test_read_and_write_of_one_tag_are_distinguished_by_ref_kind():
+    """`Seq_Active` is written on rung 0 and read on rung 1.
+
+    Both directions are real and they are different answers to different
+    questions, so `ref_kind` — not the caller's guesswork — is what separates
+    "what sets this" from "what uses this".
+    """
+    result, _ = _parse("rung_addressing")
+
+    assert [r.line for r in _refs(result, "Seq_Active", "WRITE")] == [0]
+    assert [r.line for r in _refs(result, "Seq_Active", "READ")] == [1]
+
+
+def test_reference_carries_the_resolved_fqn_and_owning_routine():
+    """Unlike the tree-sitter adapters, this one already knows what it resolved.
+
+    Python/TS/C#/C++ emit `symbol_fqn=None` and leave resolution to a later
+    pass. The L5X scan resolves against the tag registry before emitting the
+    edge, so throwing that away here would make the reference weaker than the
+    edge beside it. `idx_refs_fqn` exists to serve exactly this lookup.
+    """
+    result, _ = _parse("rung_addressing")
+
+    ref = _refs(result, "Valve_Open", "WRITE")[0]
+    assert ref.symbol_fqn == "Valve_Open"
+    assert ref.context_fqn == "Filler.Sequence"
+
+
+def test_references_do_not_disturb_symbols_or_edges():
+    """Adding provenance must not change what was already extracted.
+
+    The corpus check that matters is recorded in ADR-013: symbols and edges
+    stayed at 6,011 / 13,316 across this change. This is the fixture-scale
+    version of the same assertion, so a regression fails in CI rather than only
+    against a corpus no CI runner can see.
+    """
+    result, _ = _parse("rung_addressing")
+
+    assert len(result.symbols) == 9
+    assert len(result.edges) == 9
+    assert sum(1 for e in result.edges if e.kind == "writes") == 3

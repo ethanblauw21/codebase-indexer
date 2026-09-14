@@ -55,7 +55,7 @@ from adapters.l5x_adapter import (  # noqa: E402
     is_module_io, scan_instructions, split_operand,
 )
 from adapters.l5x_instructions import (  # noqa: E402
-    EXPR, INSTRUCTIONS, KEYWORD, LABEL, LITERAL, ROUTINE, TAG,
+    EXPR, INSTRUCTIONS, KEYWORD, LABEL, LITERAL, TAG,
     canonical_mnemonic,
 )
 
@@ -209,10 +209,12 @@ def main() -> int:
 
     problems, positions = audit(obs, seen)
     never = sorted(m for m in INSTRUCTIONS if m not in seen)
+    unverified = sorted(m for m, s in INSTRUCTIONS.items() if not s.verified)
 
     print(f"table entries:        {len(INSTRUCTIONS)}")
     print(f"exercised by corpus:  {len(seen)}")
     print(f"never exercised:      {len(never)}")
+    print(f"carried unverified:   {len(unverified)}")
     print(f"positions checked:    {positions}")
     print()
 
@@ -223,9 +225,29 @@ def main() -> int:
     else:
         print("No prediction failed.")
 
+    # These two sets are NOT the same set, and an earlier version of this
+    # output implied they were -- it printed the never-exercised list under a
+    # "carried as verified=False" caption, and ADR-013 copied the wrong count
+    # out of it. They disagree in both directions, and each direction means
+    # something different.
     if never:
-        print(f"\nNo corpus evidence (inference only, carried as verified=False):")
+        print(f"\nNo corpus evidence ({len(never)}):")
         print("  " + ", ".join(never))
+    if unverified:
+        print(f"\nCarried as verified=False ({len(unverified)}):")
+        print("  " + ", ".join(unverified))
+
+    exercised_but_unverified = [m for m in unverified if m in seen]
+    unexercised_but_verified = [m for m in never if m not in unverified]
+    if exercised_but_unverified:
+        print("\nExercised by the corpus yet still marked unverified -- the "
+              "evidence to settle these is in hand:")
+        print("  " + ", ".join(sorted(exercised_but_unverified)))
+    if unexercised_but_verified:
+        print("\nNo corpus evidence yet marked verified -- justified only "
+              "where the entry makes no positional claim (a zero-operand "
+              "instruction cannot have its operand order be wrong):")
+        print("  " + ", ".join(sorted(unexercised_but_verified)))
 
     return 1 if problems else 0
 

@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="ExprMemberFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 24 09:00:00 2026">
+<Controller Use="Target" Name="ExprMemberFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes>
+<DataType Name="Batch_Recipe" Family="NoFamily" Class="User">
+<Description><![CDATA[One stored recipe: how many units, and the target the loop holds]]></Description>
+<Members>
+<Member Name="Count" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Units called for by this recipe]]></Description>
+</Member>
+<Member Name="Setpoint" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Target value the control loop holds for this recipe]]></Description>
+</Member>
+</Members>
+</DataType>
+</DataTypes>
+<Tags>
+<Tag Name="Active_Recipe" TagType="Base" DataType="Batch_Recipe" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Recipe the line is currently running]]></Description>
+</Tag>
+<Tag Name="Count" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Units produced since the last shift reset. Unrelated to the recipe member of the same name, and that collision is the point of this fixture]]></Description>
+</Tag>
+<Tag Name="Total" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Computed units remaining on the current order]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="BatchProgram" TestEdits="false" MainRoutineName="Compute" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="Compute" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Double the recipe count into the running total]]></Comment>
+<Text>
+<![CDATA[CPT(Total,Active_Recipe.Count * 2);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[Hold the setpoint through a magnitude and a bare-word operator]]></Comment>
+<Text>
+<![CDATA[CPT(Total,ABS(Active_Recipe.Setpoint) AND 1);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="BatchProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

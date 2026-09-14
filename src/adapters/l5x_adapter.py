@@ -57,6 +57,7 @@ from adapters.l5x_instructions import (
     ROUTINE,
     TAG,
     canonical_mnemonic,
+    is_expression_operator,
     signature,
 )
 
@@ -66,7 +67,6 @@ log = logging.getLogger(__name__)
 _MNEMONIC_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]{1,31})\(")
 
 # Identifiers inside an array subscript, which are themselves tag reads.
-_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 _LITERAL_START = frozenset("0123456789-+.$'\"")
 
@@ -89,8 +89,19 @@ def _describe(elem) -> str:
     return " ".join(_text_of(node).split()) if node is not None else ""
 
 
-def scan_instructions(text: str):
-    """Yield `(mnemonic, raw_operands, start, end)` from neutral text.
+def scan_instructions(text: str, on_nested=None):
+    """Yield `(mnemonic, raw_operands, start, end)` for each TOP-LEVEL call.
+
+    **A match inside another instruction's operands is not an instruction
+    here.** `CPT(Dest, ABS(A) + 1)` contains `ABS(`, which the mnemonic regex
+    matches like any other. Yielding it separately scanned the same text twice:
+    once as an operand of `CPT` and once as a call of its own, inflating
+    operand counts and — because a function name is not a tag — producing
+    unresolvable reads. `on_nested`, if given, is called once per skipped
+    match, so an instrument can count what was suppressed rather than infer it.
+
+    An unterminated call does not extend the skip window. Otherwise one
+    malformed rung would swallow every instruction after it.
 
     A comma separates operands only where paren depth is 1 and bracket depth is
     0. Tracking parens alone splits a two-dimensional subscript like
@@ -116,7 +127,12 @@ def scan_instructions(text: str):
     written with empty parens — `NOP()`, `TND()`, `AFI()`, 639 occurrences —
     which yields a single empty slot and is normalised to zero operands.
     """
+    top_level_end = 0
     for m in _MNEMONIC_RE.finditer(text):
+        if m.start() < top_level_end:
+            if on_nested is not None:
+                on_nested()
+            continue
         i = m.end()
         start, paren, brack, args = i, 1, 0, []
         closed = False
@@ -142,6 +158,8 @@ def scan_instructions(text: str):
             args.append(text[start:i])
         if len(args) == 1 and not args[0].strip():
             args = []          # `NOP()` — empty parens, not one empty operand
+        if closed:
+            top_level_end = i + 1
         yield m.group(1), args, m.start(), i + 1
 
 
@@ -159,7 +177,15 @@ def split_operand(operand: str) -> tuple[str | None, list[str]]:
 
     indices: list[str] = []
     for chunk in re.findall(r"\[([^\]]*)\]", s):
-        indices.extend(_IDENT_RE.findall(chunk))
+        # A subscript is an expression, not a bare name: `Recipe[Idx.ACC + 1]`
+        # reads `Idx`, not `Idx`, `ACC` and a phantom. Sweeping identifiers here
+        # is the same mistake `expression_terms` exists to correct, one level
+        # down — 44 of the 72 unresolved subscript reads were structure member
+        # names picked up this way.
+        for term in expression_terms(chunk):
+            base = term.split("[")[0].split(".")[0]
+            if base:
+                indices.append(base)
 
     stripped = re.sub(r"\[[^\]]*\]", "", s)
     if ":" in stripped:
@@ -168,6 +194,41 @@ def split_operand(operand: str) -> tuple[str | None, list[str]]:
 
     base = stripped.split(".")[0]
     return (base or None), indices
+
+
+# One term in an expression: an identifier, plus any member path and subscripts
+# hanging off it, optionally followed by `(` when it is a function call. String
+# literals are matched first so their contents are never mistaken for terms.
+_EXPR_TERM_RE = re.compile(r"""
+      '(?:[^']|'')*'
+    | (?P<term>[A-Za-z_][A-Za-z0-9_]*
+        (?:\[[^\]]*\]|\.[A-Za-z_][A-Za-z0-9_]*)*)
+      (?P<call>\s*\()?
+""", re.VERBOSE)
+
+
+def expression_terms(expr: str):
+    """Yield the operand-shaped value references inside a CPT/FAL expression.
+
+    Everything that is not a value reference is dropped: string literals,
+    numeric literals, bare-word operators (`AND`, `MOD`), and function names.
+    A function name is recognised structurally rather than from a list — an
+    identifier immediately followed by `(` is a call, and a tag reference never
+    is — so an uncatalogued function costs nothing.
+
+    The terms that survive keep their member path and subscripts, because
+    `split_operand` already knows how to take `Recipe[Row,Col].Member` apart
+    and its behaviour is pinned by fixtures. The earlier implementation swept
+    bare identifiers instead, which made `ACC` in `Timer.ACC` a tag reference
+    of its own — and it never resolved, because it is not one.
+    """
+    for m in _EXPR_TERM_RE.finditer(expr):
+        term = m.group("term")
+        if term is None or m.group("call") is not None:
+            continue
+        if is_expression_operator(term):
+            continue
+        yield term
 
 
 def is_module_io(name: str) -> bool:
@@ -262,7 +323,6 @@ class L5xAdapter:
 
         return _Extractor(path, text, root).run()
 
-
     def analyze_tags(
         self,
         path: str,
@@ -289,6 +349,7 @@ class _Extractor:
         self.edges: list[Edge] = []
         self.references: list[Reference] = []
         self._seen_edges: set[tuple[str, str, str]] = set()
+        self._seen_refs: set[tuple[str, str, int, str]] = set()
 
         # Registries, all filled before any logic is walked.
         self.controller_tags: dict[str, str] = {}          # name -> fqn
@@ -309,6 +370,28 @@ class _Extractor:
         # it, so it is the one unverified figure with consequences attached.
         self.aoi_calls_bound = 0
         self.aoi_calls_arity_mismatch = 0
+
+        # Read/write positions by origin, and how many resolved. The 100% tag
+        # resolution figure retracted in ADR-013 §5.0 was wrong because the
+        # script that produced it counted only base operands, while the adapter
+        # also emits reads from subscript interiors and expression interiors.
+        # Counting here, at the adapter's own resolution call sites, is what
+        # makes the rate a claim about the shipping code.
+        self.read_positions: dict[str, int] = {}
+        self.read_resolved: dict[str, int] = {}
+        self.write_positions = 0
+        self.write_resolved = 0
+
+        # Instruction matches, and how many were suppressed for sitting inside
+        # an enclosing instruction's operands (see `scan_instructions`).
+        self.instructions_scanned = 0
+        self.nested_instructions_skipped = 0
+
+        # Rungs whose Number attribute was absent or non-numeric. Their edges
+        # are emitted exactly as before; only the rung-level reference is lost,
+        # so this is a loss of addressability and not of extraction. Counted
+        # rather than logged per-rung because a controller has thousands.
+        self.rungs_unnumbered = 0
 
     # -- skipped elements ----------------------------------------------------
 
@@ -343,6 +426,39 @@ class _Extractor:
         self.edges.append(Edge(
             source_fqn=source, target=target, kind=kind,
             resolved_target=resolved,
+        ))
+
+    def _ref(self, name, fqn, routine_fqn, rung, kind) -> None:
+        """Record WHERE a resolved name was touched, at rung granularity.
+
+        A write edge names the ROUTINE. Routines in the survey corpus run to a
+        median of 4 rungs but p90 29 and max 68, so "it is written in this
+        routine" stops being an answer well before the tail. This is what makes
+        the rung recoverable.
+
+        `line` carries the RUNG NUMBER, not a source line. An L5X export is one
+        XML document per controller — the largest here is 7.9 MB — and its line
+        numbers mean nothing to an engineer, while `[12]` is exactly how the
+        chunk body already addresses a rung. `ref_kind` is what tells a consumer
+        which of the two it is holding.
+
+        The rung number is a POSITIONAL coordinate, not an identity: inserting a
+        rung renumbers every rung after it. Good for "go look here", never an
+        input to a stable ID.
+
+        Deduped per (name, routine, rung, kind). A tag read twice in one rung is
+        one place to look, and reference counts feed density scoring, so counting
+        operand positions there would overstate it.
+        """
+        if rung is None:
+            return
+        key = (name, routine_fqn, rung, kind)
+        if key in self._seen_refs:
+            return
+        self._seen_refs.add(key)
+        self.references.append(Reference(
+            symbol_name=name, symbol_fqn=fqn, line=rung,
+            ref_kind=kind, context_fqn=routine_fqn,
         ))
 
     # -- run ----------------------------------------------------------------
@@ -633,17 +749,39 @@ class _Extractor:
         for rung in routine.iter("Rung"):
             body = _text_of(rung.find("Text"))
             if body:
-                self._scan(body, routine_fqn, scope, owner_program)
+                self._scan(body, routine_fqn, scope, owner_program,
+                           rung=self._rung_number(rung))
 
-    def _scan(self, body, routine_fqn, scope, owner_program) -> None:
-        for raw_mnemonic, operands, _s, _e in scan_instructions(body):
+    def _rung_number(self, rung) -> int | None:
+        """The rung's own `Number`, or None when it has none usable.
+
+        Read here and threaded through the scan because the chunk-text builder
+        already reads the same attribute (`_routine_text`) while this path used
+        to discard it — which is why writes could only ever name a routine.
+        """
+        raw = rung.attrib.get("Number")
+        if raw is None:
+            self.rungs_unnumbered += 1
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            self.rungs_unnumbered += 1
+            return None
+
+    def _scan(self, body, routine_fqn, scope, owner_program, rung=None) -> None:
+        def _nested():
+            self.nested_instructions_skipped += 1
+
+        for raw_mnemonic, operands, _s, _e in scan_instructions(body, _nested):
+            self.instructions_scanned += 1
             # Positions are preserved, empties included: an omitted operand is
             # a hole, not an absent slot, and roles are assigned by position.
             operands = [o.strip() for o in operands]
             mnemonic = canonical_mnemonic(raw_mnemonic)
 
             if mnemonic in self.aoi_names:
-                self._bind_aoi_call(mnemonic, operands, routine_fqn, scope)
+                self._bind_aoi_call(mnemonic, operands, routine_fqn, scope, rung)
                 continue
 
             sig = signature(mnemonic)
@@ -658,45 +796,63 @@ class _Extractor:
                 if role in (LITERAL, KEYWORD, LABEL):
                     continue
                 if role == ROUTINE:
-                    self._bind_call(operand, routine_fqn, owner_program)
+                    self._bind_call(operand, routine_fqn, owner_program, rung)
                     continue
                 if role == EXPR:
-                    # Expression operands are free-form; every identifier in
-                    # them is a read. Nothing in an expression is written.
-                    for ident in _IDENT_RE.findall(operand):
-                        self._read(ident, routine_fqn, scope)
+                    # Expression operands are free-form, and nothing in one is
+                    # written. Each term is a value reference shaped like any
+                    # other operand, so it goes through `split_operand` rather
+                    # than a bare identifier sweep.
+                    for term in expression_terms(operand):
+                        ebase, eindices = split_operand(term)
+                        for ident in eindices:
+                            self._read(ident, routine_fqn, scope, rung, "subscript")
+                        if ebase:
+                            self._read(ebase, routine_fqn, scope, rung, "expression")
                     continue
 
                 base, indices = split_operand(operand)
                 # An index expression is a genuine read: the controller reads
                 # Row and Col to compute the address of Recipe[Row,Col].
                 for ident in indices:
-                    self._read(ident, routine_fqn, scope)
+                    self._read(ident, routine_fqn, scope, rung, "subscript")
                 if base is None:
                     continue
                 writes = bool(sig) and sig.writes_at(i, arity)
                 both = bool(sig) and sig.both_at(i, arity)
                 if writes or both:
-                    self._write(base, routine_fqn, scope)
+                    self._write(base, routine_fqn, scope, rung)
                 if both or not writes:
-                    self._read(base, routine_fqn, scope)
+                    self._read(base, routine_fqn, scope, rung)
 
     def _resolve(self, name, scope) -> str | None:
         if is_module_io(name):
             return name          # hardware endpoint, not a declared symbol
         return scope.get(name)
 
-    def _read(self, name, routine_fqn, scope) -> None:
+    def _read(self, name, routine_fqn, scope, rung=None, site="base") -> None:
+        """Emit a read edge. `site` records where the name came from.
+
+        `base` is the operand itself, `subscript` an identifier inside `[...]`,
+        `expression` an identifier inside a CPT/FAL expression. The three
+        resolve at very different rates and a single pooled number hides that.
+        """
         target = self._resolve(name, scope)
+        self.read_positions[site] = self.read_positions.get(site, 0) + 1
         if target:
+            self.read_resolved[site] = self.read_resolved.get(site, 0) + 1
             self._edge(routine_fqn, target, "reads")
+            self._ref(name, target, routine_fqn, rung, "READ")
 
-    def _write(self, name, routine_fqn, scope) -> None:
+    def _write(self, name, routine_fqn, scope, rung=None) -> None:
         target = self._resolve(name, scope)
+        self.write_positions += 1
         if target:
+            self.write_resolved += 1
             self._edge(routine_fqn, target, "writes")
+            self._ref(name, target, routine_fqn, rung, "WRITE")
 
-    def _bind_call(self, operand, routine_fqn, owner_program) -> None:
+    def _bind_call(self, operand, routine_fqn, owner_program, rung=None) -> None:
         """A JSR target, resolved against the OWNING program's routines only.
 
         JSR is program-local. Resolving against a flat whole-file set of
@@ -708,9 +864,11 @@ class _Extractor:
         if not base or owner_program is None:
             return
         if base in self.routines_by_program.get(owner_program, ()):
-            self._edge(routine_fqn, f"{owner_program}.{base}", "call")
+            target = f"{owner_program}.{base}"
+            self._edge(routine_fqn, target, "call")
+            self._ref(base, target, routine_fqn, rung, "CALL")
 
-    def _bind_aoi_call(self, aoi_name, operands, routine_fqn, scope) -> None:
+    def _bind_aoi_call(self, aoi_name, operands, routine_fqn, scope, rung=None) -> None:
         """Bind an AOI invocation positionally.
 
         The arity rule is `1 + count(Required parameters excluding EnableIn and
@@ -719,12 +877,13 @@ class _Extractor:
         bind in declaration order, with direction from Usage.
         """
         self._edge(routine_fqn, aoi_name, "call")
+        self._ref(aoi_name, aoi_name, routine_fqn, rung, "CALL")
         if not operands:
             return
 
         instance, _ = split_operand(operands[0])
         if instance:
-            self._write(instance, routine_fqn, scope)
+            self._write(instance, routine_fqn, scope, rung)
 
         required = [p for p in self.aoi_params.get(aoi_name, []) if p["required"]]
         actuals = operands[1:]
@@ -744,14 +903,14 @@ class _Extractor:
         for param, actual in zip(required, actuals):
             base, indices = split_operand(actual)
             for ident in indices:
-                self._read(ident, routine_fqn, scope)
+                self._read(ident, routine_fqn, scope, rung, "subscript")
             if not base:
                 continue
             usage = param["usage"]
             if usage == "Input":
-                self._read(base, routine_fqn, scope)
+                self._read(base, routine_fqn, scope, rung)
             elif usage == "Output":
-                self._write(base, routine_fqn, scope)
+                self._write(base, routine_fqn, scope, rung)
             else:                      # InOut is passed by reference: both
-                self._read(base, routine_fqn, scope)
-                self._write(base, routine_fqn, scope)
+                self._read(base, routine_fqn, scope, rung)
+                self._write(base, routine_fqn, scope, rung)
