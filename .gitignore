@@ -101,3 +101,5 @@ Egan_L5X_files/
 # Only the redact_survey.py-reduced form is shareable, and even that is
 # regenerable — no survey artifact is committed.
 tools/l5x/survey*.json
+# Local GPU crash diagnostics (system logs, service tag) - never commit
+gpu-crash-repro/
