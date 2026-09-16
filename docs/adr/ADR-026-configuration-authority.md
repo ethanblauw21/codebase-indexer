@@ -471,6 +471,29 @@ is refused outright if it is launched from a subdirectory of the config's own ro
 - [x] Read-back: the Decision text against the diff, section by section — below
 - [x] Resolve the downstream obligations listed in **Depended on by** — none, confirmed
 
+### Post-merge finding (2026-07-28) — §6 can refuse a legitimate programmatic scan
+
+Found while writing the session handoff, after PR #31 merged. **Not caught by CI, and CI cannot
+catch it.**
+
+`_check_anchor` raises when `scan_disk`'s root is not the directory holding `indexer.toml`. The only
+caller outside `src/` is `tools/real_repo_prepare.py:157`, which runs
+`ii.run_incremental(repo_path=corpus_dir)` over ADR-019 eval corpora. For the **public** repos that
+is safe: they are git clones, so the upward walk stops at the clone's own `.git`, `config_path` is
+`None`, and the anchor check returns early. That is why the retrieval tripwire is green on master.
+
+But `ensure_clone` has a second branch (`tools/real_repo_prepare.py:99-105`) for the **ADR-019 §6
+private slice** — a local directory resolved relative to the repo root, with no `.git` requirement.
+If that directory lives inside this repo and carries no `.git`, the walk reaches this repo's
+`indexer.toml`, the roots mismatch, and the scan is **refused**. Untestable here: the private slice
+is deliberately not in the repo.
+
+**Open, not decided.** The refusal is correct for a human running `code-indexer` from the wrong
+directory, and wrong for a caller that passed an explicit root it meant. The likely fix is to let a
+programmatic caller assert its own root (an explicit parameter, not a silent fallback), which keeps
+the §6 guarantee where it matters. Whoever picks this up should confirm the private slice is
+actually affected before changing anything.
+
 ### Read-back (2026-07-28)
 
 Every section of the Decision, checked against what shipped. Under branch-only `proposed`

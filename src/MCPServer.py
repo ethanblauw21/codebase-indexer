@@ -1603,6 +1603,132 @@ def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
 
 
 @mcp.tool()
+def what_writes(tag: str, include_readers: bool = False) -> str:
+    """
+    Given a PLC tag, reports EXACTLY which routines write it and at which rungs.
+
+    This is the question a controls engineer asks first on a support call: an alarm
+    will not clear, a valve will not open, a sequence will not advance — so what
+    sets that bit? Answer it one hop at a time and let the human prune: the next
+    question is `what_writes` on whichever condition looks wrong.
+
+    **This is a lookup, not a search.** It reads resolved `writes` edges straight
+    out of the graph — no embedding, no ranking, no reranker. Every result is a
+    real write position the extractor resolved, and the list is complete. Do not
+    reach for semantic_code_search or trace_data_flow for this question; both rank,
+    and a ranked answer to "what writes X" can silently omit a writer.
+
+    Inputs:
+      tag             — the tag as an engineer types it (e.g. 'Valve_Open'), or a
+                        scoped FQN ('Filler.Step') for a program-scoped tag
+      include_readers — also list where the tag is READ. Off by default because
+                        widely-read tags produce long lists; turn it on when you
+                        are asking "what uses this" rather than "what sets this"
+
+    Output: each writing routine with its rung numbers, plus alias/module-I/O
+    mapping when the tag is an alias.
+
+    What this CANNOT tell you: which of several conditions is *currently* true.
+    That needs a live connection to the controller. This enumerates the candidates
+    — which is the half you can do from the phone without going online.
+    """
+    print(f"\n[MCP] what_writes: tag='{tag}' readers={include_readers}")
+    _ensure_indexes()
+    db = _db()
+
+    writers = db.get_edges_to(tag, "writes")
+    readers = db.get_edges_to(tag, "reads")
+    # Outbound: the alias edge runs tag -> module I/O, so this tag's own hardware
+    # endpoint is what leaves it. Asking which tags alias ONTO it is a different
+    # question that would answer just as plausibly and be wrong.
+    aliases = db.get_edges_from(tag, "alias_of")
+
+    if not writers and not readers and not aliases:
+        known = [s.fqn for s in db.search_symbols(tag)][:8]
+        out = f"No read or write edge targets '{tag}'.\n\n"
+        if known:
+            out += "Symbols matching that name:\n"
+            out += "".join(f"- {f}\n" for f in known)
+            out += "\nIf one of these is the tag you meant, re-run with its full FQN.\n"
+        else:
+            out += (
+                "Nothing in the index carries that name. Either the controller is "
+                "not indexed, or the tag is spelled differently in the program than "
+                "on the HMI — try the abbreviated form.\n"
+            )
+        return out
+
+    def _sites(routine_fqns: list[str], kind: str) -> dict[str, list[int]]:
+        """routine -> sorted rung numbers, from the reference table."""
+        by_routine: dict[str, list[int]] = {f: [] for f in routine_fqns}
+        for r in db.get_references_to(tag, kind):
+            ctx = r["context_fqn"]
+            if ctx in by_routine:
+                by_routine[ctx].append(r["line"])
+        return {f: sorted(v) for f, v in by_routine.items()}
+
+    out = f"WRITES TO '{tag}'\n{'=' * (len(tag) + 12)}\n\n"
+
+    if aliases:
+        out += (
+            "This tag is an ALIAS. It is a name for a hardware endpoint, so the\n"
+            "value is driven by the I/O module, not only by ladder logic:\n"
+        )
+        out += "".join(f"  {tag} -> {a}\n" for a in aliases) + "\n"
+
+    if not writers:
+        out += (
+            "No routine writes it.\n\n"
+            "For an alias that is expected — an input alias is written by the\n"
+            "module. Otherwise the tag is read-only in this controller, and\n"
+            "whatever sets it is outside this program: an HMI write, a message\n"
+            "from another controller, or a produced/consumed tag.\n"
+        )
+    else:
+        write_sites = _sites(writers, "WRITE")
+        n_rungs = sum(len(v) for v in write_sites.values())
+        out += (
+            f"{len(writers)} routine(s) write it"
+            + (f", at {n_rungs} rung(s):\n\n" if n_rungs else ":\n\n")
+        )
+        for fqn in writers:
+            rungs = write_sites.get(fqn) or []
+            if rungs:
+                where = "rung " + ", ".join(str(r) for r in rungs)
+            else:
+                where = "rung unknown (no rung-level reference recorded)"
+            out += f"- {fqn}\n  [{where}]\n"
+        out += "\n"
+
+        if len(writers) > 1:
+            out += (
+                "More than one routine writes this tag. On a scanning controller\n"
+                "the LAST write in scan order wins, so program execution order\n"
+                "decides the value — check the task and program scheduling before\n"
+                "assuming the rung you found is the one that took effect.\n\n"
+            )
+
+    if include_readers:
+        read_sites = _sites(readers, "READ")
+        n_rungs = sum(len(v) for v in read_sites.values())
+        out += f"READ BY {len(readers)} routine(s), at {n_rungs} rung(s):\n\n"
+        for fqn in readers:
+            rungs = read_sites.get(fqn) or []
+            where = ", ".join(str(r) for r in rungs) if rungs else "?"
+            out += f"- {fqn}\n  [rung {where}]\n"
+        out += "\n"
+    elif readers:
+        out += f"Read by {len(readers)} routine(s) — pass include_readers=True.\n\n"
+
+    out += (
+        "NEXT HOP: pick the condition that looks wrong in one of those rungs and\n"
+        "run what_writes on IT. Go one hop at a time — an automatic backward\n"
+        "trace fans out fast (the survey corpus has a tag written 177 times).\n"
+    )
+    return out
+
+
+@mcp.tool()
 def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_csv: str) -> str:
     """
     Given a Firestore collection name, finds every place it is READ without going through

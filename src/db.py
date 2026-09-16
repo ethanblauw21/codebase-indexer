@@ -338,6 +338,15 @@ _EDGE_KIND_MAP: dict[str, str] = {
     "consumes_context": "CONSUMES_CONTEXT",
     "extends":          "EXTENDS",
     "implements":       "IMPLEMENTS",
+    # ADR-013 (L5X). Tag data flow is directional and the direction is the
+    # whole point: "where is this tag written" is the query an controls
+    # engineer actually asks, and it is not answerable from an undirected
+    # reference edge.
+    "reads":            "READS",
+    "writes":           "WRITES",
+    # A tag aliased onto a module I/O point. Distinct from OWNS because the
+    # target is a hardware endpoint, not a declared symbol.
+    "alias_of":         "ALIAS_OF",
 }
 
 
@@ -389,6 +398,11 @@ class CodeDB:
         self._migrate_edge_candidate()
         self._migrate_edge_confidence()
         self._migrate_edge_receiver_type()
+        # Must run LAST of the edges migrations: it rebuilds the table and
+        # copies every column forward, so all additive columns have to exist
+        # before it runs. Placing it earlier fails on databases old enough to
+        # predate candidate/confidence/receiver_type.
+        self._migrate_edge_kinds()
         self._migrate_symbol_locations()
         self._migrate_files_freshness()
         self._seed_index_meta()
@@ -521,6 +535,60 @@ class CodeDB:
             SELECT id, source_fqn, target, kind FROM edges;
         DROP TABLE edges;
         ALTER TABLE edges_v2 RENAME TO edges;
+        CREATE INDEX IF NOT EXISTS idx_edges_source      ON edges(source_fqn);
+        CREATE INDEX IF NOT EXISTS idx_edges_target      ON edges(target);
+        CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source_fqn, kind);
+        CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target, kind);
+        CREATE INDEX IF NOT EXISTS idx_edges_resolved    ON edges(resolved_target)
+            WHERE resolved_target IS NOT NULL;
+        PRAGMA optimize;
+        """)
+
+    def _migrate_edge_kinds(self) -> None:
+        """
+        Second expansion of the edges CHECK constraint, adding the ADR-013
+        L5X edge kinds READS / WRITES / ALIAS_OF.
+
+        This cannot ride along on `_migrate_edges`. That migration guards on
+        `"resolved_target" in cols`, which is already true for every database
+        built since the first expansion — so editing its DDL in place would
+        silently never run on an existing index, and inserts of the new kinds
+        would fail the CHECK constraint at runtime rather than at migration
+        time. Hence a separate guard keyed on the constraint text itself.
+
+        Idempotent: no-ops once the constraint already lists READS.
+        """
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'"
+        ).fetchone()
+        if row and row[0] and "'READS'" in row[0]:
+            return
+
+        self._conn.executescript("""
+        DROP TABLE IF EXISTS edges_v3;
+        CREATE TABLE edges_v3 (
+            id              INTEGER PRIMARY KEY,
+            source_fqn      TEXT    NOT NULL,
+            target          TEXT    NOT NULL,
+            kind            TEXT    NOT NULL CHECK(kind IN (
+                'IMPORTS','CALLS','INSTANTIATES',
+                'OWNS','PROVIDES_CONTEXT','CONSUMES_CONTEXT',
+                'EXTENDS','IMPLEMENTS',
+                'READS','WRITES','ALIAS_OF'
+            )),
+            resolved_target TEXT,
+            candidate       INTEGER NOT NULL DEFAULT 0,
+            confidence      REAL,
+            receiver_type   TEXT,
+            UNIQUE(source_fqn, target, kind)
+        );
+        INSERT OR IGNORE INTO edges_v3(
+            id, source_fqn, target, kind, resolved_target,
+            candidate, confidence, receiver_type)
+            SELECT id, source_fqn, target, kind, resolved_target,
+                   candidate, confidence, receiver_type FROM edges;
+        DROP TABLE edges;
+        ALTER TABLE edges_v3 RENAME TO edges;
         CREATE INDEX IF NOT EXISTS idx_edges_source      ON edges(source_fqn);
         CREATE INDEX IF NOT EXISTS idx_edges_target      ON edges(target);
         CREATE INDEX IF NOT EXISTS idx_edges_source_kind ON edges(source_fqn, kind);
@@ -942,6 +1010,80 @@ class CodeDB:
             """,
             (symbol_name, limit),
         ).fetchall()
+        return [
+            {
+                "symbol_name": r["symbol_name"],
+                "symbol_fqn":  r["symbol_fqn"],
+                "line":        r["line"],
+                "ref_kind":    r["ref_kind"],
+                "context_fqn": r["context_fqn"],
+                "file":        r["path"],
+            }
+            for r in rows
+        ]
+
+    def get_edges_to(self, target: str, kind: str) -> list[str]:
+        """Source FQNs of every `kind` edge pointing at `target`, deduped+sorted.
+
+        Served by `idx_edges_target_kind`. This is a one-hop exact lookup over a
+        relation that is already resolved — deliberately NOT a ranked retrieval.
+        The L5X fault-tracing questions ("what activates this valve") are answered
+        here rather than through the RRF surface, because RRF hop-decay is what
+        stopped ADR-019's graph-only fixtures from ever registering a lift, and
+        nothing about this query needs to be scored.
+
+        `kind` takes either spelling. Kinds are stored normalised (`writes` is
+        written as `WRITES`), so a caller passing the adapter's spelling would
+        otherwise get a silent empty list rather than an error.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT source_fqn FROM edges "
+            "WHERE target = ? AND kind = ? ORDER BY source_fqn",
+            (target, _normalise_edge_kind(kind)),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_edges_from(self, source_fqn: str, kind: str) -> list[str]:
+        """Targets of every `kind` edge leaving `source_fqn`, deduped+sorted.
+
+        The outbound counterpart of `get_edges_to`. Direction is not cosmetic
+        here: an L5X alias edge runs tag → module I/O, so the tag's own hardware
+        endpoint is an OUTBOUND lookup, while asking `get_edges_to` about a tag
+        returns the other tags aliased onto it — a different question with a
+        plausible-looking answer.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT target FROM edges "
+            "WHERE source_fqn = ? AND kind = ? ORDER BY target",
+            (source_fqn, _normalise_edge_kind(kind)),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def get_references_to(
+        self, symbol_fqn: str, ref_kind: str = "", limit: int = 500,
+    ) -> list[dict]:
+        """Reference sites for a resolved FQN, optionally filtered by `ref_kind`.
+
+        The companion to `get_edges_to`: the edge says which routine, this says
+        where inside it. For L5X `line` is a RUNG NUMBER (see the adapter's
+        `_ref`), which is why callers should render it via `ref_kind` rather than
+        as a source line.
+        """
+        sql = [
+            "SELECT sr.symbol_name, sr.symbol_fqn, sr.line, sr.ref_kind,",
+            "       sr.context_fqn, f.path",
+            "FROM   symbol_references sr",
+            "JOIN   files f ON f.id = sr.file_id",
+            "WHERE  sr.symbol_fqn = ?",
+        ]
+        params: list = [symbol_fqn]
+        if ref_kind:
+            sql.append("AND sr.ref_kind = ?")
+            params.append(ref_kind)
+        sql.append("ORDER BY f.path, sr.context_fqn, sr.line LIMIT ?")
+        params.append(limit)
+
+        rows = self._conn.execute("\n".join(sql), params).fetchall()
         return [
             {
                 "symbol_name": r["symbol_name"],

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="SubscriptMemberFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 24 09:00:00 2026">
+<Controller Use="Target" Name="SubscriptMemberFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes>
+<DataType Name="Step_Pointer" Family="NoFamily" Class="User">
+<Description><![CDATA[Where the sequencer is: which step, and how long it has been there]]></Description>
+<Members>
+<Member Name="Index" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Zero-based position of the active step]]></Description>
+</Member>
+<Member Name="Elapsed" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Milliseconds spent in the active step]]></Description>
+</Member>
+</Members>
+</DataType>
+</DataTypes>
+<Tags>
+<Tag Name="Current_Step" TagType="Base" DataType="Step_Pointer" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Sequencer position for the running batch]]></Description>
+</Tag>
+<Tag Name="Index" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Loop counter used by the fault scan. Unrelated to the step-pointer member of the same name, and that collision is the point of this fixture]]></Description>
+</Tag>
+<Tag Name="Recipe_Buffer" TagType="Base" DataType="DINT" Dimensions="16" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Sixteen stored step values for the running recipe]]></Description>
+</Tag>
+<Tag Name="Step_Value" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Value of the step the sequencer is on]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="SequenceProgram" TestEdits="false" MainRoutineName="Advance" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="Advance" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Fetch the buffered value the sequencer is pointing at]]></Comment>
+<Text>
+<![CDATA[MOV(Recipe_Buffer[Current_Step.Index],Step_Value);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="SequenceProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

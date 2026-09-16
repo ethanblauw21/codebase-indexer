@@ -1,0 +1,33 @@
+{
+  "feature": "l5x/alias_module_io",
+  "language": "l5x",
+  "tier": "A",
+  "note": "Aliasing as symbol-to-hardware mapping. All 412 aliases in the Egan corpus point at module I/O and none point at another tag, so aliasing there is a tag-to-hardware edge rather than tag-to-tag indirection - the adapter must still handle a tag-to-tag alias if one ever appears, but this corpus gives no evidence it does. An alias tag is a symbol in its own right and carries the human-meaningful name, which is why it must not be collapsed into its target. Module I/O addresses are NOT symbols: they are hardware endpoints, not declarations, so alias_of edges point at the raw address string. Modules themselves are symbols because they are declared in the export. The second rung covers direct module references bypassing an alias, which the corpus showed 266 of alongside the 412 aliases.",
+  "symbols": [
+    {"fqn": "MainProgram", "kind": "program"},
+    {"fqn": "MainProgram.MainRoutine", "kind": "routine"},
+    {"fqn": "Local", "kind": "module"},
+    {"fqn": "DI_01", "kind": "module"},
+    {"fqn": "DO_01", "kind": "module"},
+    {"fqn": "Start_PB", "kind": "tag"},
+    {"fqn": "Estop_OK", "kind": "tag"},
+    {"fqn": "Motor_Out", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "MainProgram", "target": "MainProgram.MainRoutine", "kind": "owns"},
+
+    {"source": "Local", "target": "DI_01", "kind": "owns"},
+    {"source": "Local", "target": "DO_01", "kind": "owns"},
+
+    {"source": "Start_PB", "target": "DI_01:I.Data.0", "kind": "alias_of"},
+    {"source": "Estop_OK", "target": "DI_01:I.Data.1", "kind": "alias_of"},
+    {"source": "Motor_Out", "target": "DO_01:O.Data.0", "kind": "alias_of"},
+
+    {"source": "MainProgram.MainRoutine", "target": "Start_PB", "kind": "reads"},
+    {"source": "MainProgram.MainRoutine", "target": "Estop_OK", "kind": "reads"},
+    {"source": "MainProgram.MainRoutine", "target": "Motor_Out", "kind": "writes"},
+
+    {"source": "MainProgram.MainRoutine", "target": "DI_01:I.Data.2", "kind": "reads"},
+    {"source": "MainProgram.MainRoutine", "target": "DO_01:O.Data.1", "kind": "writes"}
+  ]
+}

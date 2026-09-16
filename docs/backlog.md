@@ -46,6 +46,10 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
+| [B-012](#b-012) | No interactive GPU for the *functional* gates — free notebook tiers (Colab, Kaggle) unevaluated | session question, 2026-07-28 | M | raw |
+| [B-013](#b-013) | The watchdog daemon's summarizer competes with foreground work on every save | NPU discussion, 2026-07-28 | S | shaped |
+| [B-014](#b-014) | The local GPU has never been benchmarked — baseline it before turning the watchdog daemon back on | session, 2026-09-16 | M | shaped |
+| [B-015](#b-015) | Apps Script `.gs` files are not indexed — no REGISTRY entry | session, 2026-09-16 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -439,3 +443,159 @@ this observation is from `BAAI/bge-code-v1` (dim 1536), reranker off, `fusion_mo
 98-file index of this repo. It is four queries on one small corpus — a real signal about the score
 *distribution*, not a measurement of retrieval quality. Anything that changes fusion needs the ADR-007
 harness, which needs the T4, which is GPU-gated.
+
+---
+
+<a id="b-012"></a>
+### B-012 — No interactive GPU for the *functional* gates; free notebook tiers unevaluated
+
+**Source:** session question, 2026-07-28 · **Status:** raw · **Size:** M
+
+**This is not a cost item.** `cloud/README.md` puts the spot-T4 harness at *"~pennies per run on
+spot; the whole eval program is a few dollars,"* and its expensive part — the GPU quota grant, called
+"the long pole" there — is already paid. Nothing here is trying to make that cheaper.
+
+The actual gap is **shape, not price**: the harness is fire-and-forget batch. It uploads a bundle,
+streams to a serial console, and self-deletes. There is no way to stand on a GPU and poke at a run
+that is misbehaving. Two open gates need exactly one unmeasured GPU pass over a repo and nothing more:
+
+- ADR-025's end-to-end reindex confirming the freshness timestamps, plus the segmem `codemap`
+  connector re-verify that sits behind it (it fails *silently*, per `roadmap.md`).
+- ADR-026's assumption that the new scan policy survives a real `run_incremental` — `scan_disk` has
+  been run repeatedly, the embedding half never has.
+
+**The dividing line, and it is the whole item: functional runs vs. measured runs.**
+
+| | Functional — "does it complete correctly?" | Measured — "what is the MRR@10?" |
+|---|---|---|
+| Needs a reproducible stack | no | **yes** — [`CONTRIBUTING.md` §4.2](../CONTRIBUTING.md#42-measurement-provenance--a-baseline-names-the-stack-it-was-measured-on) |
+| Survives a killed session | yes, rerun it | no |
+| Free notebook tier | plausible | **out of bounds** |
+
+A free notebook tier is a candidate for the left column only. Colab's own FAQ states the available
+GPU types *"vary over time"* and resources are *"not guaranteed"*; you can stamp `pip freeze` and
+`nvidia-smi` to satisfy §4.2's letter, but you cannot reproduce the run, which is its point. **No
+number from a free notebook tier goes into an ADR.**
+
+**Hard boundary — the ADR-019 §6 private slice never leaves your control.** Free tiers on community
+data-science platforms are the wrong venue for it regardless of what the quota allows. Public eval
+corpora are clones of public repos and carry no such constraint.
+
+**What was found on 2026-07-28** (all of it needs re-checking before anyone acts — these terms move):
+
+- **Colab free tier** — T4-class, ~15 GB VRAM, 12 h max session, ~90 min idle timeout, no persistent
+  storage, availability explicitly not guaranteed.
+- **Colab CLI** ([`googlecolab/google-colab-cli`](https://github.com/googlecolab/google-colab-cli)) —
+  `colab run` provisions a fresh VM, runs a local script, retrieves outputs, tears down. That is the
+  same shape as `cloud/launch_eval.ps1` + `startup.sh` + the GCS bucket, so it could in principle
+  collapse that plumbing. **Linux/macOS only — Windows unsupported**, so WSL2 or CI, not the dev
+  shell.
+- **`gcloud colab executions create`** is *Colab Enterprise* — billed GCP compute. It competes with
+  the spot T4 on price rather than undercutting it.
+- **Kaggle notebooks** — ~30 h/week GPU quota, P100 or T4, 12 h session cap. A separate quota pool
+  from Colab, and the two can reportedly be linked.
+
+**The open question that keeps this `raw`.** Whether the CLI's headless automation reaches the *free*
+tier at all is unresolved. The CLI exposes `colab pay` for managing compute units, and the free-tier
+FAQ separately prohibits *"remote control such as SSH shells"* and headless use of free managed
+runtimes — which is what the CLI advertises. That reads like a paid-tier feature, but it is an
+inference, not a quote.
+
+**What would make this `shaped`:** install the CLI under WSL2 with no subscription attached and run
+one `colab run` against a GPU runtime. It either provisions or refuses, and that single result
+decides whether this is a real option or a dead end. ~10 minutes.
+
+---
+
+<a id="b-013"></a>
+### B-013 — The watchdog daemon's summarizer competes with foreground work on every save
+
+**Source:** NPU discussion, 2026-07-28 · **Status:** shaped · **Size:** S
+
+`[summarization].enabled = true` in the shipped `indexer.toml`, so every debounced reindex the
+watchdog schedules runs `IsolatedChunkSummarizer` (`incremental_indexer.py:704`) and generates a
+summary per new chunk, per tier (`:607`). A 1.5B generative model is the daemon's dominant cost by a
+wide margin — the embedder is second and the per-query embed is nearly free.
+
+Generative decode at normal priority contends with whatever the developer is doing in the foreground.
+The daemon's problem is not throughput, it is **politeness**: it should yield, not finish first.
+
+**The want:** the summarizer already runs as a separate process, so drop *that subprocess's*
+scheduling priority at spawn — `psutil.Process.nice()`, or `subprocess` creation flags on Windows.
+Below-normal is enough; the work is background by definition and nothing waits on it.
+
+**Why it is worth recording rather than just doing:** this was the honest answer to "could an NPU
+help the background daemon?" The NPU would buy the same freed-CPU outcome at the cost of a second
+inference runtime (ONNX/OpenVINO), an export pipeline, and a quantized embedder that would need
+re-validation — while being *worst* at the generative decode that actually dominates. A priority nice
+buys most of the benefit for a few lines and no new dependency. Worth trying before anything exotic.
+
+**Note:** touches `src/summarizer.py`, so it is **Major** under
+[`CONTRIBUTING.md` §1](../CONTRIBUTING.md#1-change-classification) — branch, ADR, PR — despite being
+a few lines. Whether a scheduling-priority tweak genuinely earns an ADR is worth asking when it is
+picked up; backlog rule 1 says most work is just work.
+
+---
+
+<a id="b-014"></a>
+### B-014 — The local GPU has never been benchmarked; baseline it before turning the watchdog daemon back on
+
+**Source:** session, 2026-09-16 · **Status:** shaped · **Size:** M
+
+**The want.** Once the machine's hardware repair is done and the machine is proven stable, bring the
+code indexer back as a live tool **with the watchdog daemon on**. The main user works in TypeScript and
+Apps Script, and semantic search was most useful to agents exploring a codebase by meaning rather
+than by grep. The daemon should be cheap per save: drop the file's vectors by stable id, re-chunk
+and re-embed that one file, and insert the new vectors.
+
+**Why it needs a baseline first.** The dev machine's GPU (RTX PRO 1000, 8 GB) **has never been
+timed**. The one successful local run had the summarizer off and was not timed. Every summarizer-on
+attempt stalled or crashed the machine. The only real number is the 2026-07-07 T4 run in
+[ADR-009](./adr/ADR-009-retrieval-stack-modernization.md): the five pinned `benchmarks/real_repo`
+repos (494 files, 7,291 chunks) in **37.0 min**, about 3.3 chunks/s or ~4.5 s/file, with
+`bge-code-v1`, `max_seq_length` 512, and **no summarizer**. That per-file figure is a batch average,
+not a timed single save.
+
+**Two traps the daemon walks straight into.**
+
+- `[summarization].enabled = true` ships on, so every save runs the 1.5B summarizer as well (see
+  [B-013](#b-013)). Per save, it has never been timed.
+- On Windows, running out of video memory does not raise an error. The driver pages GPU memory into
+  system RAM and the job runs ~50x slower with nothing in the log. The summarizer and the embedder do
+  not fit in 8 GB together; the unmerged `fix/two-pass-summarization` branch, which loads one model at
+  a time, is the proposed fix and has never run on a GPU.
+
+**The baseline — run in this order:**
+
+0. **Preconditions.** Stability check passes, `nvidia-smi` lists the card, and torch sees CUDA. Stamp
+   every run with commit SHA, driver, model ids, precision, and `max_seq_length`
+   ([`CONTRIBUTING.md` §4.2](../CONTRIBUTING.md#42-measurement-provenance--a-baseline-names-the-stack-it-was-measured-on)).
+1. **Monitoring before load.** Sample GPU power draw and the `\GPU Process Memory(*)\Shared Usage`
+   counter, and run a stall detector on the log file's last-write time. Abort if shared usage rises
+   above ~0 or the log goes quiet.
+2. **Arm A: embed-only full index** of the five pinned repos, for a direct comparison with the T4's
+   37.0 min. Also index this repo and one real TypeScript/Apps Script project.
+3. **Arm B: summarizer on**, with two-pass loading. Passes only if shared usage stays ~0, nothing
+   stalls, and the `chunk_summaries` row count matches the chunk count. The `summarization done`
+   line prints on the failure path too, so it proves nothing.
+4. **Daemon per-save timing.** With the daemon warm, edit small, medium, and large TypeScript files
+   about ten times each, with the summarizer off and on. Measure save → updated rows.
+5. **Quality.** `tools/real_repo_tripwire.py` holds its MRR@10 floor (0.45).
+6. Record the results with their provenance, then decide the daemon's `[summarization]` default.
+
+The live `.code-index` is currently empty (a rebuild was killed on 2026-09-10), so step 2 doubles as
+the rebuild; confirm it by counting rows.
+
+---
+
+<a id="b-015"></a>
+### B-015 — Apps Script `.gs` files are not indexed
+
+**Source:** session, 2026-09-16 · **Status:** raw · **Size:** S
+
+`src/adapters/__init__.py` REGISTRY maps `.js`/`.jsx` to the JavaScript adapter but has no `.gs`
+entry, so Apps Script source is invisible unless it sits on disk as `.js`. That is clasp's default,
+but not when a project sets `fileExtension` to `gs`. The likely fix is one REGISTRY line pointing
+`.gs` at `JavaScriptAdapter`, plus a conformance fixture. Before adding it, check that the scan policy
+and the chunker accept the extension, and that Apps Script globals (no imports, everything in one
+shared global scope) don't mislead call resolution.

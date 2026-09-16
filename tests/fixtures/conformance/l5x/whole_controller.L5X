@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="FixtureController" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 03 09:00:00 2026" ExportOptions="References NoRawData L5KData DecoratedData Context Dependencies ForceProtectedEncoding AllProjDocTrans">
+<Controller Use="Target" Name="FixtureController" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<Tags>
+<Tag Name="Start_PB" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Operator start pushbutton]]></Description>
+</Tag>
+<Tag Name="Stop_PB" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Operator stop pushbutton, normally closed]]></Description>
+</Tag>
+<Tag Name="Motor_Cmd" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Motor run command to the starter]]></Description>
+</Tag>
+<Tag Name="Run_Seconds" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Accumulated motor runtime in seconds]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="MainProgram" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false">
+<Tags>
+<Tag Name="Scan_Count" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Program-scoped scan counter]]></Description>
+</Tag>
+</Tags>
+<Routines>
+<Routine Name="MainRoutine" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Seal-in rung for the motor start circuit]]></Comment>
+<Text>
+<![CDATA[XIC(Start_PB)XIO(Stop_PB)OTE(Motor_Cmd);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[Count scans while the motor is commanded on]]></Comment>
+<Text>
+<![CDATA[XIC(Motor_Cmd)ADD(Scan_Count,1,Scan_Count);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+<Routine Name="RuntimeTotals" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Copy the scan counter into the runtime total]]></Comment>
+<Text>
+<![CDATA[XIC(Motor_Cmd)MOV(Scan_Count,Run_Seconds);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500" DisableUpdateOutputs="false" InhibitTask="false">
+<ScheduledPrograms>
+<ScheduledProgram Name="MainProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

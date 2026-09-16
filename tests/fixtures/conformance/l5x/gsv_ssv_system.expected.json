@@ -1,0 +1,22 @@
+{
+  "feature": "l5x/gsv_ssv_system",
+  "language": "l5x",
+  "tier": "A",
+  "note": "GSV and SSV are the instructions this adapter has got wrong the most times, and every previous fix was verified against tools/l5x rather than against the adapter. Four separate facts are asserted here. (1) GSV writes its LAST operand, not a fixed index. (2) SSV writes a CIP system object, not a tag, so its last operand is a READ and it emits no write edge at all. (3) GSV operand 1 is the object instance name, a KEYWORD - rung 1 names it Conveyor_Drive, which is also a declared tag, exactly as in the corpus where every resolvable GSV instance name was a module and the tag matching it was that module's alias. Typing operand 1 as TAG emits a false read edge there, which is the failure ADR-013 section 7 rules out. (4) An omitted operand is a HOLE, not an absent slot: rung 0 writes GSV(WallClockTime,,DateTime,Dest) with an empty instance name, and dropping that slot renumbers every operand after it, silently retyping the rest of the instruction. Teeth: reverting any one of the four changes an edge here.",
+  "symbols": [
+    {"fqn": "SystemProgram", "kind": "program"},
+    {"fqn": "SystemProgram.SysMon", "kind": "routine"},
+    {"fqn": "Clock_Data", "kind": "tag"},
+    {"fqn": "Conveyor_Drive", "kind": "tag"},
+    {"fqn": "Drive_Status", "kind": "tag"},
+    {"fqn": "WD_Value", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "SystemProgram", "target": "SystemProgram.SysMon", "kind": "owns"},
+
+    {"source": "SystemProgram.SysMon", "target": "Clock_Data", "kind": "writes"},
+    {"source": "SystemProgram.SysMon", "target": "Drive_Status", "kind": "writes"},
+
+    {"source": "SystemProgram.SysMon", "target": "WD_Value", "kind": "reads"}
+  ]
+}

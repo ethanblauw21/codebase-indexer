@@ -1,0 +1,30 @@
+{
+  "feature": "l5x/jsr_same_program",
+  "language": "l5x",
+  "tier": "A",
+  "note": "JSR resolution scoped to the owning program. Both LineA and LineB declare a routine named Faults, and both call JSR(Faults,0) - so a resolver that matches call targets against a flat whole-file set of routine names would resolve each call ambiguously or to the wrong routine, while still reporting 100 percent resolution. That is the exact defect found in the Phase 0 survey. Each JSR here must bind to the Faults routine in its OWN program. Re-running the corrected survey on the Egan corpus showed 156 of 156 JSRs resolving program-locally with zero cross-program name matches, but 12 routine names were declared in more than one program, so the hazard is real in that corpus even though no call hit it. The JSR operand list is (RoutineName, ParamCount, ...), so operand 0 is the call target and the trailing count is not a tag reference.",
+  "symbols": [
+    {"fqn": "LineA", "kind": "program"},
+    {"fqn": "LineA.MainRoutine", "kind": "routine"},
+    {"fqn": "LineA.Faults", "kind": "routine"},
+    {"fqn": "LineB", "kind": "program"},
+    {"fqn": "LineB.MainRoutine", "kind": "routine"},
+    {"fqn": "LineB.Faults", "kind": "routine"},
+    {"fqn": "Fault_Present", "kind": "tag"},
+    {"fqn": "Line_Running", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "LineA", "target": "LineA.MainRoutine", "kind": "owns"},
+    {"source": "LineA", "target": "LineA.Faults", "kind": "owns"},
+    {"source": "LineB", "target": "LineB.MainRoutine", "kind": "owns"},
+    {"source": "LineB", "target": "LineB.Faults", "kind": "owns"},
+
+    {"source": "LineA.MainRoutine", "target": "LineA.Faults", "kind": "call"},
+    {"source": "LineB.MainRoutine", "target": "LineB.Faults", "kind": "call"},
+
+    {"source": "LineA.Faults", "target": "Line_Running", "kind": "reads"},
+    {"source": "LineA.Faults", "target": "Fault_Present", "kind": "writes"},
+    {"source": "LineB.Faults", "target": "Line_Running", "kind": "reads"},
+    {"source": "LineB.Faults", "target": "Fault_Present", "kind": "writes"}
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "feature": "l5x/whole_controller",
+  "language": "l5x",
+  "tier": "A",
+  "note": "Baseline shape of a whole-controller export (TargetType=Controller, ContainsContext=false). Establishes the FQN notation the other L5X fixtures assume: a program is its bare name, a routine is <Program>.<Routine>, a controller-scoped tag is its bare name, and a program-scoped tag is <Program>.<Tag>. Read and write edges are attributed to the owning routine, not to the rung, because the routine is the chunk unit (plcHandoff.md, 'What is decided'). Rungs stay addressable as sub-units but are not themselves symbols.",
+  "symbols": [
+    {"fqn": "MainProgram", "kind": "program"},
+    {"fqn": "MainProgram.MainRoutine", "kind": "routine"},
+    {"fqn": "MainProgram.RuntimeTotals", "kind": "routine"},
+    {"fqn": "Start_PB", "kind": "tag"},
+    {"fqn": "Stop_PB", "kind": "tag"},
+    {"fqn": "Motor_Cmd", "kind": "tag"},
+    {"fqn": "Run_Seconds", "kind": "tag"},
+    {"fqn": "MainProgram.Scan_Count", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "MainProgram", "target": "MainProgram.MainRoutine", "kind": "owns"},
+    {"source": "MainProgram", "target": "MainProgram.RuntimeTotals", "kind": "owns"},
+    {"source": "MainProgram", "target": "MainProgram.Scan_Count", "kind": "owns"},
+
+    {"source": "MainProgram.MainRoutine", "target": "Start_PB", "kind": "reads"},
+    {"source": "MainProgram.MainRoutine", "target": "Stop_PB", "kind": "reads"},
+    {"source": "MainProgram.MainRoutine", "target": "Motor_Cmd", "kind": "writes"},
+
+    {"source": "MainProgram.MainRoutine", "target": "Motor_Cmd", "kind": "reads"},
+    {"source": "MainProgram.MainRoutine", "target": "MainProgram.Scan_Count", "kind": "reads"},
+    {"source": "MainProgram.MainRoutine", "target": "MainProgram.Scan_Count", "kind": "writes"},
+
+    {"source": "MainProgram.RuntimeTotals", "target": "Motor_Cmd", "kind": "reads"},
+    {"source": "MainProgram.RuntimeTotals", "target": "MainProgram.Scan_Count", "kind": "reads"},
+    {"source": "MainProgram.RuntimeTotals", "target": "Run_Seconds", "kind": "writes"}
+  ]
+}
