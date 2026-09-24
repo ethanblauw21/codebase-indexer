@@ -37,7 +37,7 @@ A single local process, the model host, owns every GPU model: embedder, summariz
 
 - It starts on demand. The first client that cannot reach it starts it, and a lock file keeps it to one per machine.
 - It listens on `127.0.0.1` only, on a port written to a file in the user profile, and it requires a per-user token read from a file only the user can read. Any local process can open a loopback port, so loopback alone is not access control.
-- It unloads its models after `idle_unload_min` minutes with no requests (default 15), so the card is free for other work, and it exits after a longer idle period.
+- Each model is loaded only while it has work and unloaded when its queue is empty (§3), so an idle host holds no GPU memory. The host process itself exits after a longer idle period.
 - It never opens a project's FAISS or SQLite files. It turns text into vectors, summaries, and scores. Each project's own process still owns and writes its own index.
 
 ### §2. The client is a drop-in behind the same four functions
@@ -49,12 +49,15 @@ A single local process, the model host, owns every GPU model: embedder, summariz
 - **Embed queue:** small and urgent. Search queries go first, then save-time re-embeds. Always served before summaries.
 - **Summary queue:** large and deferrable. Jobs from every project collect here and run in batches through ADR-027's loop.
 
-How the two share the card depends on the stage-9 result:
+**One model on the card at a time, loaded only while it has work.** The two models are never resident together, even though stage 9 showed they can be (see the Implementation Log for why that is not worth using).
 
-- **If both models fit (resident mode):** both stay loaded. Summary batches run in the background, and embed requests are served between batches. With ADR-027 a batch takes seconds, so an embed waits at most one batch.
-- **If they do not fit (swap mode):** this is the "lock the door" pass. When the summary queue has work and the embed queue is empty, the host unloads the embedder, runs summaries for up to `summary_window_s`, reloads the embedder, and serves whatever embeds arrived. It repeats while summaries remain. The window has a cap because a search that arrives during a window cannot be answered until it ends. A model swap costs a few seconds, so the window has to be long enough that swapping is a small share of it.
+- **Embedder:** loaded when an embed request arrives. It stays loaded for `embed_idle_s` after the last request, because searches come in bursts and a reload per query would add seconds to each one. Then it is unloaded.
+- **Summarizer:** loaded only when the summary queue has work and the embed queue is empty. It drains the queue at whatever batch size ADR-027's loop reaches, with the whole card to itself, and is unloaded as soon as the queue is empty.
+- **When both have work** (the "lock the door" pass): embeds go first. Then the embedder is unloaded and the summarizer runs for up to `summary_window_s`, and is unloaded again so the embedder can serve whatever arrived. This repeats while summaries remain. The window has a cap because a search that arrives during a window cannot be answered until it ends.
 
-Queries that arrive during a swap-mode window are an open question, listed below.
+A swap looks cheap next to a window. On 2026-09-24 the summarizer took about 14 s from process start to loaded, including spawning the process, and the embedder reloaded in about 2 to 4 s with its weights in the OS file cache. These are readings from the monitor, not a timed benchmark, and the implementation should time them properly.
+
+Queries that arrive during a summary window are an open question, listed below.
 
 ### §4. Summaries are shared across projects
 
@@ -72,8 +75,8 @@ The host reports its mode, loaded models, memory in use, and each queue's depth,
 
 ### Open questions, to settle before implementation
 
-1. **Resident or swap mode:** stage 9 decides.
-2. **`summary_window_s`:** depends on ADR-027's full-pass throughput and the measured swap cost. Not guessed here.
+1. ~~Resident or swap mode.~~ Settled 2026-09-24: one model at a time, loaded on demand (§3).
+2. **`summary_window_s` and `embed_idle_s`:** depends on ADR-027's full-pass throughput and the measured swap cost. Not guessed here.
 3. **Queries during a swap window:** wait for the window to end, or answer from a CPU copy of the embedder. The CPU copy costs several GB of RAM and a slower query. Waiting costs up to one window.
 4. **Transport:** HTTP on loopback is the simplest to build and to test with ordinary tools. A named pipe avoids holding a port. Leaning HTTP.
 5. **Other GPU users:** the host's memory cap (ADR-027 §2) leaves a reserve, but a game or another ML job can still take the card. Whether the host should back off entirely when something else is using the GPU is unanswered.
@@ -109,7 +112,7 @@ To be completed once the open questions are settled. At minimum:
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] **Gate:** record the stage-9 single-pass fit result here and settle open question 1
+- [x] **Gate:** record the stage-9 single-pass fit result here and settle open question 1 (see Notes)
 - [ ] **Gate:** record ADR-027's full-pass throughput (stage 7) and the measured model swap cost; settle open question 2
 - [ ] Settle open questions 3 to 5
 - [ ] Implementation tasks, to be written once the gates are cleared
@@ -117,3 +120,6 @@ To be completed once the open questions are settled. At minimum:
 
 **Notes:**
 <!-- 2026-09-24: Written before the stage-9 result. Nothing is to be built until the gates above are recorded. -->
+
+- 2026-09-24, **stage 9, single-pass fit probe** (`master` at 18a7059, summarizer at batch size 1 through the pipeline, embedder bf16 via the stress-kit patch): both models loaded together and a 73-chunk embed batch completed. Dedicated memory reached 7,862 MiB of 8,151, and shared usage went from 64 to 128 MiB, under the 512 MiB abort line. So they fit, with about 290 MiB to spare, and only with the summarizer at batch size 1. With ADR-027 batching the summarizer peaked at 4.76 GB on its own, which with the embedder comes to about 8.7 GB, and it would also leave no room for ADR-027's 1 GB reserve.
+- 2026-09-24, **decision (@edb):** do not keep the models resident together. Load each on demand and unload it when its queue is empty (§3). Resident mode would give up batching's measured 3.03 times speed-up to save a swap of a few seconds, and it would leave nothing on the card for the desktop or a burst of searches.
