@@ -50,6 +50,12 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-013](#b-013) | The watchdog daemon's summarizer competes with foreground work on every save | NPU discussion, 2026-07-28 | S | shaped |
 | [B-014](#b-014) | The local GPU has never been benchmarked — baseline it before turning the watchdog daemon back on | session, 2026-09-16 | M | shaped |
 | [B-015](#b-015) | Apps Script `.gs` files are not indexed — no REGISTRY entry | session, 2026-09-16 | S | raw |
+| [B-016](#b-016) | No tool returns a single symbol's source; agents Read whole files to see one function | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | M | shaped |
+| [B-017](#b-017) | No file-outline tool (symbols, signatures and ranges without bodies) | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | shaped |
+| [B-018](#b-018) | Tool output is not secret-redacted: a key committed in an indexed repo is pasted into agent context | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | shaped |
+| [B-019](#b-019) | The MCP tool-schema context cost (14 tools) has never been measured | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | raw |
+| [B-020](#b-020) | No diff-scoped tools: "symbols changed since `<ref>`", blast radius over a diff | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | M | raw |
+| [B-021](#b-021) | Nothing steers the agent from native Read/Grep toward the index (opt-in hint, never a deny) | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -599,3 +605,91 @@ but not when a project sets `fileExtension` to `gs`. The likely fix is one REGIS
 `.gs` at `JavaScriptAdapter`, plus a conformance fixture. Before adding it, check that the scan policy
 and the chunker accept the extension, and that Apps Script globals (no imports, everything in one
 shared global scope) don't mislead call resolution.
+
+---
+
+<a id="b-016"></a>
+### B-016 — No tool returns a single symbol's source
+
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.1, 2026-09-24 · **Status:** shaped · **Size:** M
+
+When an agent needs one function, it reads the whole file. indexer already stores each symbol's
+`start_line`/`end_line` (`src/db.py:52-53`, emitted by `src/ast_chunker.py:188-189`) but has no MCP
+tool that returns just that span. A `get_symbol_source(symbol, file=None)` tool would answer from
+the stored span. When a name is ambiguous, it should list the candidates rather than guess.
+
+**The trap:** jCodeMunch's quiet failure is serving a **stale** stored copy when its watcher isn't
+running. indexer has the pieces to avoid that. ADR-025's per-file `content_changed_at` tells us
+whether the file changed after indexing. If it did, re-read the span from disk and say the line
+numbers may have shifted, or refuse loudly. Don't return old text as if it were current.
+**License:** re-implement from behavior; don't port jCodeMunch source (see the study's warning).
+
+---
+
+<a id="b-017"></a>
+### B-017 — No file-outline tool
+
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.2, 2026-09-24 · **Status:** shaped · **Size:** S
+
+"What's in this file" currently costs a full Read. A `get_file_outline(file)` tool would return each
+symbol's kind, name, signature and line range, with no bodies, straight from the symbols table. A
+file with no symbols should say so, not return an empty success. Pairs with B-016: outline first,
+then fetch the one symbol you need.
+
+---
+
+<a id="b-018"></a>
+### B-018 — Tool output is not secret-redacted
+
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.3, 2026-09-24 · **Status:** shaped · **Size:** S
+
+indexer returns raw chunk text. If a repo it indexes has a committed credential (a service-account
+JSON, a `.env` that slipped in, a hardcoded token), `semantic_code_search` and friends paste it into
+the agent's context, and from there into transcripts. That's the exact leak class @edb has rotated
+keys over four times; one incident was a recursive grep that printed a production private key.
+jCodeMunch redacts before output; indexer has no redaction anywhere in `src/` (checked 2026-09-24).
+
+Shape: one redaction pass at the MCP output boundary (not at index time, so the index stays faithful)
+covering private-key blocks, common token prefixes, and `"private_key":` JSON fields, with a visible
+`[REDACTED:<kind>]` marker so it fails loud. Also consider excluding `*key*.json`, `.env*` and
+`*credentials*` from indexing in scan policy, the same family as B-001.
+
+---
+
+<a id="b-019"></a>
+### B-019 — The MCP tool-schema context cost has never been measured
+
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.4, 2026-09-24 · **Status:** raw · **Size:** S
+
+Every session with `repo-indexer` connected pays for 14 tool descriptions and schemas before a single
+call. jCodeMunch ships a `tool_surface: "counter"` mode to cut this. Measure first:
+`npx @modelcontextprotocol/inspector@2.8.0 --cli <server> --method tools/list --format json` and
+count the characters per tool. The same check on segmem_mcp found one 2,892-char description. Then
+decide whether any description is worth trimming.
+
+---
+
+<a id="b-020"></a>
+### B-020 — No diff-scoped tools
+
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.5, 2026-09-24 · **Status:** raw · **Size:** M
+
+jCodeMunch answers "what symbols changed since `<ref>`" and "what's the risk of this PR". indexer
+has the ingredients (ADR-025 timestamps, `index_status`, `analyze_blast_radius`) but no tool that
+takes a git ref or diff as input. Useful for pre-merge review in the Egan repos. Needs a decision on
+whether to shell out to git or read `content_changed_at`.
+
+---
+
+<a id="b-021"></a>
+### B-021 — Nothing steers the agent from native Read/Grep toward the index
+
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.6, 2026-09-24 · **Status:** raw · **Size:** S
+
+jCodeMunch's optional PreToolUse hook nudges Read and Grep toward its tools, and in strict mode
+**denies** them. The deny is out: a stale index then blocks the fallback, the opposite of fail
+loud. A gentle version might be worth it: a project-scope hint when Read targets a large file that
+B-017 could outline. **Caveat that may kill it:** a PreToolUse hook on every Read and Grep adds a
+process spawn and injected text to every call. @edb's tool rule caps background Claude usage, and
+planning-with-files was rejected for exactly this. Prefer a CLAUDE.md line in each repo ("for a
+large file, call `get_file_outline` first") and only build a hook if that measurably fails.
