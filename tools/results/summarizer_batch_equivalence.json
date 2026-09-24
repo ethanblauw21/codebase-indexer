@@ -1,0 +1,120 @@
+{
+  "git_sha": "9f096a6",
+  "model_id": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
+  "device": "cuda",
+  "gpu": "NVIDIA RTX PRO 1000 Blackwell Generation Laptop GPU",
+  "dtype": "float16",
+  "max_new_tokens": 160,
+  "n": 200,
+  "seed": 27,
+  "max_batch": 16,
+  "reserve_mb": 1024,
+  "batch_1": {
+    "seconds": 482.0,
+    "stats": {
+      "summarized": 200,
+      "empty_output": 0,
+      "empty_oom": 0,
+      "empty_error": 0,
+      "oom_backoffs": 0,
+      "pauses": 0,
+      "pause_timeouts": 0,
+      "largest_batch": 1,
+      "peak_mb": 3510
+    }
+  },
+  "batched": {
+    "seconds": 159.1,
+    "stats": {
+      "summarized": 200,
+      "empty_output": 0,
+      "empty_oom": 0,
+      "empty_error": 0,
+      "oom_backoffs": 0,
+      "pauses": 0,
+      "pause_timeouts": 0,
+      "largest_batch": 8,
+      "peak_mb": 4762
+    }
+  },
+  "exact_match": 0.945,
+  "differing": [
+    {
+      "file": "tests/fixtures/src/sample.ts",
+      "tier": "tier1_surgical",
+      "text": "File: tests/fixtures/src/sample.ts\nEntity: tests/fixtures/src/sample.ts::DataService.constructor (method)\nLines: 14-14\nCode:\nconstructor(private readonly path: string) {}",
+      "batch_1": "Purpose: Initializes a DataService instance with a specified path.\nInputs: `path` (string): The directory path for data storage.\nOutputs: None; it initializes the service but does not return any value.\nKey operations: Sets up the private property `path` with the provided value.",
+      "batched": "Purpose: Initializes a DataService instance with a specified path.\nInputs: `path` (string): The path to the data source.\nOutputs: None.\nKey operations: Sets up the DataService with the given path for data retrieval."
+    },
+    {
+      "file": "src/graph_report.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/graph_report.py\nScope: src/graph_report.py::render_report (Part 2/3)\nCode:\n        (c for c in analysis.communities if len(c.members) >= min_community_size),\n        key=lambda c: len(c.members),\n        reverse=True,\n    )\n    hidden = len(analysis.communities) - len(shown)\n\n    lines += [\"## Module Communities\", \"\"]\n    if not shown:\n        lines += [\n            f\"_No community has ≥",
+      "batch_1": "1. This function renders a report about graph communities based on their size and cohesion.\n2. Input parameters include `analysis`, `min_community_size`, `god_fqns`, `max_members_shown`.\n3. Output includes a list of formatted strings representing the report content.\n4. Key operations involve filtering communities by size, sorting them by size, generating labels for each community, and listing its members.",
+      "batched": "Purpose: This function renders a report about graph communities and god-objects based on the given analysis object.\nInputs:\n- `analysis`: An object containing community and god-object data.\nOutputs:\n- A list of strings representing the rendered report.\nKey operations:\n- Filters communities based on minimum size.\n- Sorts communities by member count.\n- Generates labels for communities.\n- Displays community details including symbol labels and member previews.\n- Handles cases where no communities meet the minimum size threshold.\n- Lists god-objects with their properties and relationships."
+    },
+    {
+      "file": "tests/test_index_freshness.py",
+      "tier": "tier1_surgical",
+      "text": "File: tests/test_index_freshness.py\nEntity: tests/test_index_freshness.py::_fresh_db (function)\nTags: [CAT_PERSIST]\nLines: 31-32\nCode:\ndef _fresh_db(tmp_path) -> CodeDB:\n    return CodeDB(os.path.join(str(tmp_path), \"graph.db\"))",
+      "batch_1": "Purpose: This function creates a new instance of `CodeDB` using a temporary directory path.\nInputs: `tmp_path` (str): The path where the database file will be created.\nOutputs: `CodeDB`: An instance of `CodeDB` initialized with the specified database file path.\nKey operations: It constructs the full path for the database file by joining the temporary path with \"graph.db\" and then initializes a new `CodeDB` object with this path.",
+      "batched": "Purpose: This function creates a new instance of `CodeDB` using a temporary directory path.\nInputs: `tmp_path` (str): The path where the database file will be created.\nOutputs: A new instance of `CodeDB`.\nKey operations: It constructs the full path for the database file by joining the temporary path with \"graph.db\"."
+    },
+    {
+      "file": "src/ast_chunker.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/ast_chunker.py\nScope: src/ast_chunker.py::fallback_token_chunker (Part 2/2)\nCode:\n\n    total = len(raw_chunks)\n    result: list[Chunk] = []\n    for idx, code in enumerate(raw_chunks):\n        rich_text = (\n            f\"File: {file_path}\\n\"\n            f\"Scope: {parent_scope} (Part {idx + 1}/{total})\\n\"\n            f\"Code:\\n{code}\"\n        )\n        result.append(Chunk(\n            text ",
+      "batch_1": "Purpose: This function processes a list of raw chunks of code into a structured format, including details about each chunk's location within the source file and its scope.\nInputs:\n- `raw_chunks`: A list of strings representing the raw code chunks.\n- `file_path`: The path to the source file containing these chunks.\n- `parent_scope`: The parent scope context for the current chunk.\nOutputs:\n- A list of `Chunk` objects, each containing detailed information about the code chunk.\nKey Operations:\n- Iterates over each raw chunk, creating a `Chunk` object with relevant metadata such as file path, scope, and line numbers.\n- Constructs a rich text string that includes file path, scope, and code content for each chunk.\n- Appends each `Chunk` object to the result",
+      "batched": "Purpose: This function processes a list of raw chunks of code into a structured format, including details about each chunk's location within the source file and its scope.\nInputs:\n- `raw_chunks`: A list of strings representing the raw code chunks.\n- `file_path`: The path to the source file being processed.\n- `parent_scope`: The parent scope context for the current chunk.\nOutputs:\n- A list of `Chunk` objects, each containing detailed information about the code chunk.\nKey operations:\n- Iterates over each raw chunk, creating a `Chunk` object with relevant metadata such as file path, scope, and code content.\n- Appends each `Chunk` object to the result list."
+    },
+    {
+      "file": "src/incremental_indexer.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/incremental_indexer.py\nScope: src/incremental_indexer.py::run_summarization_pass (Part 1/2)\nCode:\ndef run_summarization_pass(\n    to_index:   list[str],\n    repo_path:  str,\n    db:         CodeDB,\n    summarizer: object,\n) -> None:\n    \"\"\"Summarize every chunk of every file before any embedding begins.\n\n    The summarizer (Qwen2.5-Coder-1.5B) and the embedder (bge-code-v1) do not\n    fi",
+      "batch_1": "Purpose: This function runs a summarization pass on a given repository, reading all files, summarizing each chunk, and storing summaries in a cache.\nInputs:\n- `to_index`: A list of relative paths to files in the repository.\n- `repo_path`: The path to the root directory of the repository.\n- `db`: An instance of `CodeDB` used for database operations.\n- `summarizer`: An object representing the summarization model.\nOutputs:\n- No explicit outputs are defined in this function.\nKey operations:\n- Reads files from the specified repository.\n- Splits files into tiers based on content.\n- Calls the summarizer to generate summaries for each chunk.\n- Stores summaries in a cache for later use.",
+      "batched": "Purpose: This function runs a summarization pass on a given set of files in a repository using a specified summarizer and embedder.\nInputs:\n- `to_index`: A list of relative paths to files in the repository.\n- `repo_path`: The path to the root directory of the repository.\n- `db`: An instance of `CodeDB` used for database operations.\n- `summarizer`: An object representing the summarizer to be used.\nOutputs:\n- No explicit outputs are defined in this function.\nKey Operations:\n- It iterates over each file in the repository, reads its content, and processes it into chunks based on tier names.\n- For each chunk, it uses the summarizer to generate a summary and updates the `chunk_summaries` dictionary.\n- The function prints"
+    },
+    {
+      "file": "tests/fixtures/src/sample.cpp",
+      "tier": "tier3_architectural",
+      "text": "File: tests/fixtures/src/sample.cpp\nScope: Full File (Part 1/1)\nCode:\n#include <string>\n#include <vector>\n#include \"core/config.h\"\n\nnamespace Core {\n\nenum class Status { Pending, Running, Done, Failed };\n\nstruct Config {\n    int maxRetries;\n    float timeout;\n};\n\ntypedef unsigned int uint32;\nusing StringVec = std::vector<std::string>;\n\nclass Logger {\npublic:\n    explicit Logger(int level);\n    voi",
+      "batch_1": "Purpose: This function provides a data service that interacts with a database using a configuration object.\nInputs: `Config` object for configuration settings, `int` ID for fetching data, `bool` flag for forcing refresh.\nOutputs: `std::string` representing the fetched data, `int` representing the number of items in the cache.\nKey operations: The function uses the `DataService` class to interact with the database and returns the fetched data. It also handles caching by checking the cache before making a new request.",
+      "batched": "Purpose: This function provides a data service that interacts with a database using a configuration object.\nInputs: `Config` object for configuration settings, `int` ID for fetching data, `bool` flag for forcing refresh.\nOutputs: `std::string` representing the fetched data, `int` representing the number of items in the cache.\nKey operations: The function uses the `DataService` class to interact with the database, handles retries based on the configuration, and formats the status of the operation."
+    },
+    {
+      "file": "src/graph_analytics.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/graph_analytics.py\nEntity: src/graph_analytics.py::graph_modularity (function)\nLines: 219-224\nCode:\ndef graph_modularity(G: nx.DiGraph, communities: list[set[str]]) -> float:\n    \"\"\"Newman modularity of the partition on the weighted undirected projection.\"\"\"\n    if G.number_of_nodes() == 0 or not communities:\n        return 0.0\n    U = to_weighted_undirected(G)\n    return nx_comm.modular",
+      "batch_1": "Purpose: Calculates the Newman modularity of a given directed graph partition based on its weighted undirected projection.\nInputs:\n- `G`: A directed graph object (`nx.DiGraph`).\n- `communities`: A list of sets containing node labels for each community.\nOutputs:\n- The Newman modularity score as a floating-point number.\nKey operations:\n- Converts the directed graph into a weighted undirected graph using `to_weighted_undirected`.\n- Computes the modularity score using `nx_comm.modularity` with the specified parameters.",
+      "batched": "Purpose: Calculates the Newman modularity of a given directed graph partition based on its weighted undirected projection.\nInputs:\n- `G`: A directed graph object (`nx.DiGraph`).\n- `communities`: A list of sets representing the partitions of nodes into communities.\nOutputs:\n- The Newman modularity score as a float.\nKey operations:\n- Converts the directed graph to a weighted undirected graph using `to_weighted_undirected`.\n- Computes the modularity score using `nx_comm.modularity` with the specified parameters."
+    },
+    {
+      "file": "tools/summarizer_batch_equivalence.py",
+      "tier": "tier1_surgical",
+      "text": "File: tools/summarizer_batch_equivalence.py\nEntity: tools/summarizer_batch_equivalence.py::sample_chunks (function)\nLines: 31-42\nCode:\ndef sample_chunks(n: int, seed: int) -> list[dict]:\n    chunks = []\n    for rel in sorted(scan_disk(os.getcwd())):\n        try:\n            with open(rel, encoding=\"utf-8\", errors=\"ignore\") as fh:\n                content = fh.read()\n        except OSError:\n        ",
+      "batch_1": "Purpose: This function reads files from a directory, splits them into tiers, and returns a list of dictionaries containing file information, tier, and text.\nInputs:\n- `n`: an integer specifying the number of chunks to return.\n- `seed`: an integer used to shuffle the chunks randomly.\nOutputs:\n- A list of dictionaries where each dictionary contains the file path, tier, and text of a chunk.\nKey operations:\n- Reads files from the specified directory.\n- Splits each file into tiers using `chunk_all_tiers`.\n- Constructs a list of dictionaries for each chunk.\n- Shuffles the list of dictionaries using `random.shuffle` with the given seed.\n- Returns the first `n` elements of the shuffled list.",
+      "batched": "Purpose: This function reads files from a directory, splits them into tiers, and returns a list of dictionaries containing file information, tier, and text.\nInputs:\n- `n`: an integer specifying the number of chunks to return.\n- `seed`: an integer used to shuffle the chunks randomly.\nOutputs:\n- A list of dictionaries where each dictionary contains the file path, tier, and text of a chunk.\nKey operations:\n- Reads files from the specified directory.\n- Splits each file into tiers using `chunk_all_tiers`.\n- Constructs a list of dictionaries for each chunk.\n- Shuffles the list of dictionaries based on the provided seed.\n- Returns the first `n` elements of the shuffled list."
+    },
+    {
+      "file": "tests/fixtures/conformance/typescript/arrow_functions.ts",
+      "tier": "tier1_surgical",
+      "text": "File: tests/fixtures/conformance/typescript/arrow_functions.ts\nEntity: tests/fixtures/conformance/typescript/arrow_functions.ts::double (arrow_function)\nType: number\nLines: 3-3\nCode:\nconst double = (x: number): number => x * 2;",
+      "batch_1": "Purpose: This function takes a single argument `x` of type `number`, doubles it, and returns the result.\nInputs: `x` - a number\nOutputs: The doubled value of `x`\nKey operations: It multiplies the input `x` by 2 using the arrow function syntax.",
+      "batched": "Purpose: This function takes a single argument `x` of type `number`, doubles it, and returns the result.\nInputs: `x` - a number\nOutputs: The doubled value of `x`\nKey operations: It multiplies the input `x` by 2 to produce the output."
+    },
+    {
+      "file": "tools/resolution_eval.py",
+      "tier": "tier1_surgical",
+      "text": "File: tools/resolution_eval.py\nEntity: tools/resolution_eval.py::run (function)\nTags: [CAT_TEST]\nLines: 238-240\nCode:\ndef run() -> dict:\n    fixture_results = [score_fixture(f) for f in discover_fixtures()]\n    return {\"fixtures\": fixture_results, \"by_language\": aggregate(fixture_results)}",
+      "batch_1": "Purpose: This function runs resolution evaluation tests by discovering fixtures and aggregating their results.\nInputs: `fixture_results` (list of dictionaries), `discover_fixtures()` (function that returns a list of fixtures).\nOutputs: A dictionary containing two keys: 'fixtures' (a list of fixture results) and 'by_language' (an aggregated result based on language).\nKey operations: It iterates over discovered fixtures, scores each using `score_fixture`, and aggregates these scores by language.",
+      "batched": "Purpose: This function runs resolution evaluation tests by discovering fixtures and aggregating their results.\nInputs: `fixture_results` (list of dictionaries), `discover_fixtures()` (function that returns a list of fixtures).\nOutputs: A dictionary containing two keys: 'fixtures' which is a list of fixture results, and 'by_language' which is an aggregated result based on language.\nKey operations: It iterates over discovered fixtures, scores each using `score_fixture`, and then aggregates these scores by language."
+    },
+    {
+      "file": "src/summarizer.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/summarizer.py\nScope: src/summarizer.py::run_adaptive_batches (Part 2/2)\nCode:\n        if free_mb is not None and free_mb() < reserve_mb:\n            stats.pauses += 1\n            started = clock()\n            while free_mb() < reserve_mb and clock() - started < pause_timeout_s:\n                sleep(pause_poll_s)\n            if free_mb() < reserve_mb:\n                stats.pause_timeouts",
+      "batch_1": "Purpose: This function runs adaptive batches of summaries based on available memory and error handling.\nInputs: `free_mb`, `reserve_mb`, `pause_timeout_s`, `pause_poll_s`, `order`, `pos`, `size`, `batch`, `out`, `exc`, `is_oom`, `on_oom`, `stats`, `results`, `max_batch`.\nOutputs: A tuple containing the summarized texts and statistics.\nKey operations: Checks available memory, retries batches if necessary, adjusts batch size and retry count based on performance.",
+      "batched": "Purpose: This function runs adaptive batches of summaries based on available memory and pauses when necessary.\nInputs:\n- `free_mb`: A function that returns the available memory in MB.\n- `reserve_mb`: The minimum amount of memory required per batch.\n- `pause_timeout_s`: The maximum time to wait before pausing.\n- `pause_poll_s`: The interval between checks for available memory.\n- `order`: The list of documents to summarize.\n- `size`: The current size of the batch.\n- `pos`: The starting index of the current batch.\n- `results`: A dictionary to store the summarized texts.\n- `stats`: An object containing statistics about the summarization process.\nOutputs:\n- `results`: A dictionary containing the summarized texts.\n- `stats`: An object containing updated statistics"
+    }
+  ]
+}

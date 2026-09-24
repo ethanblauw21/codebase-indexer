@@ -6,7 +6,7 @@
 **Reviewer:** @edb
 **Backlog:** [B-022](../backlog.md#b-022) — the summarizer runs one chunk at a time on the GPU. Related: [B-014](../backlog.md#b-014) (the local GPU baseline this was measured during) and [B-013](../backlog.md#b-013) (summarizer priority on the watchdog daemon).
 **Depends on:** the two-pass split on `fix/two-pass-summarization` (5f03798). That branch has no ADR of its own and has not been merged. This branch is cut from it and its PR carries both, so this ADR records the two-pass decision as §0 below rather than leaving it unowned.
-**Depended on by:** none yet.
+**Depended on by:** [ADR-028](./ADR-028-central-model-host.md) — the model host runs this batching loop and memory cap for its summary queue, and needs the full-pass throughput (Verification 3) to size its summary window.
 
 ## Context
 
@@ -99,7 +99,9 @@ The PR does not merge until all of these hold on the 8 GB card.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] Record the batch-size-1 baseline from the 2026-09-24 run: pass-1 time, chunk count, `chunk_summaries` rows, peak memory
+- [x] Record the batch-size-1 baseline from the 2026-09-24 run: pass-1 time, chunk count, `chunk_summaries` rows, peak memory (see Notes)
+- [x] Verification 1 on the GPU (see Notes)
+- [ ] Resolve the obligation to ADR-028: hand it the full-pass throughput once Verification 3 runs
 - [x] §1 worker generation loop on `model.generate` with left padding and length-sorted batches
 - [x] §2 per-batch memory cap from `mem_get_info`
 - [x] §3 adaptive batch size, and `max_batch_size = 1` reproduces today's behavior
@@ -117,4 +119,6 @@ The PR does not merge until all of these hold on the 8 GB card.
 - 2026-09-24: The batching loop is `run_adaptive_batches()` in `src/summarizer.py`. It takes the model call and the memory probe as arguments and imports no torch, which is what lets the unit tests drive OOM at chosen batch sizes with fakes.
 - 2026-09-24: Found while building §5. On a timeout the old code called `executor.shutdown(wait=False)`, which leaves the stuck worker running and still holding its GPU memory. A restarted worker would load a second copy of the model beside it. The retry path now kills the worker first (`kill_workers()` on Python 3.14, the pool's processes otherwise). The between-passes `shutdown()` now waits, so the summarizer's memory is back before the embedder loads.
 - 2026-09-24: The worker no longer uses the text-generation pipeline, so `pad_token_id` is the tokenizer's pad token rather than EOS. Generation settings are otherwise the same as before, including whatever the model's own generation config sets.
+- 2026-09-24, **batch-size-1 baseline** (`fix/two-pass-summarization` at 5f03798, driver 582.70, BIOS 1.19.2, AC power, Qwen2.5-Coder-1.5B fp16, embedder bf16 via stress-kit patch, fresh index): 104 files, 1,476 chunks, 1,414 distinct chunk texts. Pass 1 took 4,022 s (67.0 min), pass 2 took 90 s. All 1,414 distinct texts got a summary. Dedicated memory 3.67 GB average, 4.65 GB peak, no shared-memory growth, 0 PCIe replays, 0 WHEA. Telemetry: `gpu-crash-repro/telemetry/stress_20260924_144636`.
+- 2026-09-24, **Verification 1** (this branch at 9f096a6, same stack, 200 chunks, seed 27, max batch 16, reserve 1024 MiB): batch size 1 took 482 s, batched took 159 s, **3.03 times faster**. 200 of 200 summarized both ways, no OOM backoffs, no pauses, peak 4.76 GB. The batch only reached 8, because it grows one step per 8 clean batches and 200 chunks ran out first, so a full pass should do better than 3 times. **Exact match 94.5 percent (189/200).** All 11 differences read by hand: wording changes in one field, with no lost purpose, inputs, or outputs. Two batched summaries followed the requested format better than their batch-1 pair. One batched summary invented a detail ("using a specified summarizer and embedder" for pass 1, which has no embedder). Batch size 1 is not ground truth either, so the retrieval check (Verification 2) is the real gate. Results: `tools/results/summarizer_batch_equivalence.json`.
 - 2026-09-24: Full suite on CPU: 323 passed, 1 skipped, 6 failed. The 6 are `test_adapter_snapshots.py`, and they fail the same way on the base commit and on the L5X branch checkout, so they are not from this change. Likely `core.autocrlf=true` rewriting fixture line endings on this Windows checkout; CI on GitHub was green.
