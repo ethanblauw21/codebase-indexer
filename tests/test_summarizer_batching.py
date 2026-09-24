@@ -167,6 +167,30 @@ def test_no_probe_means_no_pause():
     assert stats.pauses == 0
 
 
+def test_growth_carries_across_calls():
+    """Each worker call is one group of at most 32 chunks. If every call started
+    over at the starting size, the batch could never grow; chained calls must
+    pick up the size and the clean streak where the last one stopped."""
+    size, streak, sizes = 4, 0, []
+    for _ in range(6):
+        model = FakeModel()
+        _results, stats = run([1] * 32, model, start_batch=size, start_streak=streak)
+        sizes.append(stats.largest_batch)
+        size, streak = stats.end_batch, stats.end_streak
+    assert sizes[0] == 4                              # 8 batches of 4: grows only as the call ends
+    assert sizes == sorted(sizes) and sizes[-1] >= 7, sizes
+
+
+def test_a_call_that_starts_over_the_ceiling_is_clamped():
+    _results, stats = run([1] * 4, FakeModel(), start_batch=40, max_batch=16)
+    assert stats.largest_batch == 4 and stats.end_batch == 16
+
+
+def test_an_oom_shrinks_the_size_the_next_call_starts_at():
+    _results, stats = run([1] * 8, FakeModel(fits=2), start_batch=8, max_batch=8)
+    assert stats.end_batch == 2 and stats.end_streak > 0
+
+
 # ---------------------------------------------------------------------------
 # BatchStats
 # ---------------------------------------------------------------------------
@@ -177,6 +201,14 @@ def test_stats_merge_adds_counts_and_keeps_maxima():
     assert total.summarized == 5 and total.empty_oom == 1
     assert total.largest_batch == 8 and total.peak_mb == 3000
     assert "5 summarized, 1 empty" in total.line()
+
+
+def test_stats_merge_keeps_the_latest_end_state():
+    total = BatchStats(end_batch=8, end_streak=3)
+    total.merge({"end_batch": 6, "end_streak": 1})
+    assert (total.end_batch, total.end_streak) == (6, 1)
+    total.merge({})                                   # a failed group reports nothing
+    assert (total.end_batch, total.end_streak) == (6, 1)
 
 
 # ---------------------------------------------------------------------------

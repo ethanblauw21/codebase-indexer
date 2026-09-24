@@ -46,10 +46,12 @@ class StubSummarizer:
     def __init__(self):
         self.calls = 0
         self.seen = 0
+        self.batches = []
 
     def summarize_batch(self, codes):
         self.calls += 1
         self.seen += len(codes)
+        self.batches.append(list(codes))
         return [f"summary-of-{len(c)}-chars" for c in codes]
 
 
@@ -136,3 +138,25 @@ def test_pre_pass_survives_an_unreadable_file(db, repo):
     stub = StubSummarizer()
     ii.run_summarization_pass(["mod.py", "does_not_exist.py"], str(repo), db, stub)
     assert stub.seen > 0
+
+
+def test_pass_one_batches_across_files_longest_first(db, repo):
+    """ADR-027: pass 1 gathers every file's chunks before summarizing, so the
+    batch can grow and each batch holds similar lengths. Per-file calls handed
+    the summarizer ~4 chunks at a time."""
+    stub = StubSummarizer()
+    ii.run_summarization_pass(["mod.py", "other.py"], str(repo), db, stub)
+    assert stub.calls == -(-stub.seen // ii._SUMMARY_SLICE), "one call per slice, not per file"
+    sent = [c for batch in stub.batches for c in batch]
+    assert [len(c) for c in sent] == sorted((len(c) for c in sent), reverse=True)
+    assert len(set(sent)) == len(sent), "a distinct text is summarized once"
+    assert any("mod.py" in c for c in stub.batches[0]) and any("other.py" in c for c in stub.batches[0])
+
+
+def test_pass_one_summarizes_a_repeated_text_once(db, tmp_path):
+    """Two tiers can produce the same text for a tiny file; one summary covers both."""
+    (tmp_path / "tiny.py").write_text("x = 1\n", encoding="utf-8")
+    stub = StubSummarizer()
+    ii.run_summarization_pass(["tiny.py"], str(tmp_path), db, stub)
+    texts = [c.text for chunks in ii.chunk_all_tiers("tiny.py", "x = 1\n").values() for c in chunks]
+    assert stub.seen == len(set(texts))

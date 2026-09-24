@@ -704,6 +704,10 @@ class _CacheOnlySummarizer:
         return [""] * len(codes)
 
 
+# Chunks per summarize_batch call in pass 1, and per cache write.
+_SUMMARY_SLICE = 64
+
+
 def run_summarization_pass(
     to_index:   list[str],
     repo_path:  str,
@@ -729,8 +733,12 @@ def run_summarization_pass(
     each alternation, which costs far more than the thrashing it avoids.
     """
     print("━━ Pass 1 of 2: summarization (embedding model not loaded) ━━", flush=True)
+    # ADR-027: collect every uncached chunk in the repository first, then
+    # summarize them together, longest first. Calling the summarizer per file
+    # and tier handed it ~4 chunks at a time, so the batch never grew past its
+    # starting size and each batch mixed short and long chunks.
     total_chunks = 0
-    total_new    = 0
+    pending: dict[str, str] = {}          # hash -> text; one entry per distinct text
     for n, rel_path in enumerate(to_index, 1):
         ext = Path(rel_path).suffix.lower()
         if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
@@ -746,16 +754,24 @@ def run_summarization_pass(
             if not texts:
                 continue
             total_chunks += len(texts)
-            hashes   = [chunk_text_hash(t) for t in texts]
-            cached   = db.get_cached_summaries(hashes)
-            uncached = [i for i, h in enumerate(hashes) if h not in cached]
-            if not uncached:
-                continue
-            summaries = summarizer.summarize_batch([texts[i] for i in uncached])
-            pairs     = [(hashes[i], sm) for i, sm in zip(uncached, summaries) if sm]
-            db.cache_summaries(pairs)
-            total_new += len(pairs)
-        print(f"  [summarize {n}/{len(to_index)}] {rel_path}", flush=True)
+            hashes = [chunk_text_hash(t) for t in texts]
+            cached = db.get_cached_summaries(hashes)
+            for h, t in zip(hashes, texts):
+                if h not in cached:
+                    pending.setdefault(h, t)
+    print(f"  [summarize] {total_chunks} chunks in {len(to_index)} files, "
+          f"{len(pending)} distinct texts to summarize", flush=True)
+
+    # Written to the cache one slice at a time, so a crash keeps what was done.
+    todo = sorted(pending.items(), key=lambda kv: len(kv[1]), reverse=True)
+    total_new = 0
+    for start in range(0, len(todo), _SUMMARY_SLICE):
+        part = todo[start:start + _SUMMARY_SLICE]
+        summaries = summarizer.summarize_batch([t for _h, t in part])
+        pairs = [(h, sm) for (h, _t), sm in zip(part, summaries) if sm]
+        db.cache_summaries(pairs)
+        total_new += len(pairs)
+        print(f"  [summarize {start + len(part)}/{len(todo)}]", flush=True)
     print(f"  Pass 1 done: {total_chunks} chunks seen, {total_new} newly summarized",
           flush=True)
     # ADR-027: empty summaries leave no cache row, so without this line a partly

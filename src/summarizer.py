@@ -92,6 +92,8 @@ class BatchStats:
     pause_timeouts: int = 0   # pauses that gave up and dropped to batch size 1
     largest_batch:  int = 0
     peak_mb:        int = 0   # peak memory the worker's allocator reserved
+    end_batch:      int = 0   # batch size and clean-batch streak when the call ended;
+    end_streak:     int = 0   # the worker's next call picks up from here
 
     def merge(self, other: "BatchStats | dict") -> None:
         other = other if isinstance(other, dict) else asdict(other)
@@ -99,6 +101,9 @@ class BatchStats:
             value = other.get(f.name, 0)
             if f.name in ("largest_batch", "peak_mb"):
                 setattr(self, f.name, max(getattr(self, f.name), value))
+            elif f.name in ("end_batch", "end_streak"):
+                if other.get("end_batch"):      # latest wins; a failed group reports none
+                    setattr(self, f.name, value)
             else:
                 setattr(self, f.name, getattr(self, f.name) + value)
 
@@ -125,6 +130,7 @@ def run_adaptive_batches(
     reserve_mb:   float = 0,
     on_oom:       Callable[[], None] = lambda: None,
     start_batch:  int = _START_BATCH_SIZE,
+    start_streak: int = 0,
     grow_after:   int = _GROW_AFTER,
     pause_poll_s: float = _PAUSE_POLL_S,
     pause_timeout_s: float = _PAUSE_TIMEOUT_S,
@@ -150,7 +156,7 @@ def run_adaptive_batches(
     order = sorted(range(n), key=lambda i: lengths[i], reverse=True)
     max_batch = max(1, max_batch)
     size = max(1, min(start_batch, max_batch))
-    streak = 0
+    streak = max(0, start_streak)
     pos = 0
 
     while pos < n:
@@ -191,6 +197,7 @@ def run_adaptive_batches(
         if streak >= grow_after and size < max_batch:
             size, streak = size + 1, 0
 
+    stats.end_batch, stats.end_streak = size, streak
     return results, stats
 
 
@@ -203,6 +210,11 @@ def run_adaptive_batches(
 _w_model  = None   # resident in the worker process after _worker_init runs
 _w_tok    = None
 _w_device = None
+# ADR-027: the batch size and clean-batch streak a call ended at. Each call is one group of at most
+# _GROUP_SIZE chunks, and growing takes _GROW_AFTER clean batches, so starting
+# every call over at _START_BATCH_SIZE kept the batch from ever growing.
+_w_next_batch  = _START_BATCH_SIZE
+_w_next_streak = 0
 
 
 def _worker_init(model_id: str, device: str, dtype_str: str) -> None:
@@ -305,6 +317,7 @@ def _worker_summarize(
     reserve_mb:     int,
 ) -> tuple[list[str], dict]:
     """Summarize one group of chunks inside the worker. Returns (summaries, stats)."""
+    global _w_next_batch, _w_next_streak
     if _w_model is None:
         return [""] * len(codes), asdict(BatchStats(empty_error=len(codes)))
 
@@ -329,7 +342,10 @@ def _worker_summarize(
             free_mb=_free_mb,
             reserve_mb=reserve_mb,
             on_oom=torch.cuda.empty_cache,
+            start_batch=_w_next_batch,
+            start_streak=_w_next_streak,
         )
+        _w_next_batch, _w_next_streak = stats.end_batch, stats.end_streak
         stats.peak_mb = int(torch.cuda.max_memory_reserved() / 2**20)
     else:
         # Batching buys little on CPU and the memory cap means nothing there.
