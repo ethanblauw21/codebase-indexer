@@ -46,6 +46,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
+| [B-022](#b-022) | The summarizer runs one chunk at a time on the GPU | GPU baseline session, 2026-09-24 | M | **promoted → ADR-027** |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -439,3 +440,21 @@ this observation is from `BAAI/bge-code-v1` (dim 1536), reranker off, `fusion_mo
 98-file index of this repo. It is four queries on one small corpus — a real signal about the score
 *distribution*, not a measurement of retrieval quality. Anything that changes fusion needs the ADR-007
 harness, which needs the T4, which is GPU-gated.
+
+---
+
+<a id="b-022"></a>
+### B-022 — The summarizer runs one chunk at a time on the GPU
+
+**Source:** GPU baseline session, 2026-09-24 · **Status:** promoted → [ADR-027](./adr/ADR-027-summarizer-adaptive-batching.md) · **Size:** M
+
+With the summarizer on, a full index of this repository is dominated by summarization. On the
+repaired 8 GB RTX PRO 1000, embedding 1,731 chunks took 106 s, while the summarization pass ran at
+about 3 s per chunk and used 3.65 GB of the card. The isolated worker hardcodes `batch_size=1`
+(`src/summarizer.py:116`), so most of the card and a good part of its compute sit idle.
+
+**The want:** a faster summarization pass that stays safe on memory. If there is not enough free
+memory, it should back off or pause rather than spill into system RAM, because on Windows that spill
+does not raise an error, it just runs about 50 times slower.
+
+Numbers 012 to 021 are used on other branches; this entry takes the next free number.
