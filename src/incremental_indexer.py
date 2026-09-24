@@ -758,6 +758,10 @@ def run_summarization_pass(
         print(f"  [summarize {n}/{len(to_index)}] {rel_path}", flush=True)
     print(f"  Pass 1 done: {total_chunks} chunks seen, {total_new} newly summarized",
           flush=True)
+    # ADR-027: empty summaries leave no cache row, so without this line a partly
+    # failed pass is only visible by counting chunk_summaries afterward.
+    if hasattr(summarizer, "stats_line"):
+        print(f"  Pass 1 summarizer: {summarizer.stats_line()}", flush=True)
 
 
 def run_incremental(

@@ -112,6 +112,16 @@ enabled = true
 #
 model_id = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 
+# ADR-027: on CUDA the summarizer batches chunks, starting at 4 and growing toward
+# this ceiling while batches keep fitting. 1 turns batching off (one chunk at a time).
+max_batch_size = 16
+
+# GPU memory, in MiB, the summarizer leaves free for the desktop and other programs.
+# The worker caps itself at (what it holds + what is free - this reserve), so running
+# short raises a catchable out-of-memory error and the batch shrinks. Without the cap,
+# Windows pages GPU memory into system RAM instead and the run slows ~50x with no error.
+vram_reserve_mb = 1024
+
 [eval]
 # ADR-007 — CoIR retrieval benchmark harness (Wave-0 baseline).
 # Data is materialized into benchmarks/coir/<subtask>/ by tools/coir_prepare.py;

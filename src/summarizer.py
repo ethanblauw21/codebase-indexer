@@ -56,11 +56,143 @@ from __future__ import annotations
 
 import atexit
 import logging
+import time
+from dataclasses import asdict, dataclass, fields
+from typing import Callable, Sequence
 
-from config import summarizer_model_id
+from config import (
+    summarizer_max_batch_size,
+    summarizer_model_id,
+    summarizer_vram_reserve_mb,
+)
 from device import resolve_device
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Adaptive batching (ADR-027) — pure Python, no torch, so it can be tested with
+# fakes. The worker supplies the model call and the memory probe.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_START_BATCH_SIZE = 4       # first batch; grows toward [summarization].max_batch_size
+_GROW_AFTER       = 8       # clean batches in a row before the batch grows by one
+_PAUSE_POLL_S     = 5.0     # how often a paused worker re-checks free memory
+_PAUSE_TIMEOUT_S  = 120.0   # after this, stop waiting and carry on at batch size 1
+
+
+@dataclass
+class BatchStats:
+    """What happened to the chunks a summarizer was given. Summed across groups."""
+    summarized:     int = 0   # chunks that came back with a non-empty summary
+    empty_output:   int = 0   # the model ran but produced nothing usable
+    empty_oom:      int = 0   # did not fit even at batch size 1
+    empty_error:    int = 0   # generation raised something other than OOM, or the worker died
+    oom_backoffs:   int = 0   # times a batch was halved and retried
+    pauses:         int = 0   # times the worker waited for free memory
+    pause_timeouts: int = 0   # pauses that gave up and dropped to batch size 1
+    largest_batch:  int = 0
+    peak_mb:        int = 0   # peak memory the worker's allocator reserved
+
+    def merge(self, other: "BatchStats | dict") -> None:
+        other = other if isinstance(other, dict) else asdict(other)
+        for f in fields(self):
+            value = other.get(f.name, 0)
+            if f.name in ("largest_batch", "peak_mb"):
+                setattr(self, f.name, max(getattr(self, f.name), value))
+            else:
+                setattr(self, f.name, getattr(self, f.name) + value)
+
+    @property
+    def empty(self) -> int:
+        return self.empty_output + self.empty_oom + self.empty_error
+
+    def line(self) -> str:
+        return (
+            f"{self.summarized} summarized, {self.empty} empty "
+            f"(oom {self.empty_oom}, error {self.empty_error}, blank {self.empty_output}) | "
+            f"largest batch {self.largest_batch}, {self.oom_backoffs} OOM backoffs, "
+            f"{self.pauses} pauses ({self.pause_timeouts} timed out), peak {self.peak_mb} MiB"
+        )
+
+
+def run_adaptive_batches(
+    lengths:      Sequence[int],
+    run_batch:    Callable[[list[int]], list[str]],
+    *,
+    is_oom:       Callable[[BaseException], bool],
+    max_batch:    int,
+    free_mb:      Callable[[], float] | None = None,
+    reserve_mb:   float = 0,
+    on_oom:       Callable[[], None] = lambda: None,
+    start_batch:  int = _START_BATCH_SIZE,
+    grow_after:   int = _GROW_AFTER,
+    pause_poll_s: float = _PAUSE_POLL_S,
+    pause_timeout_s: float = _PAUSE_TIMEOUT_S,
+    sleep:        Callable[[float], None] = time.sleep,
+    clock:        Callable[[], float] = time.monotonic,
+) -> tuple[list[str], BatchStats]:
+    """Summarize ``len(lengths)`` items in batches that shrink on OOM and grow back.
+
+    ``run_batch`` gets a list of item indices and returns one string per index.
+    Items go longest first, so each batch holds similar lengths (less padding)
+    and the batch size meets its hardest inputs while it is still small.
+
+    On OOM the same items are retried at half the batch size; nothing is
+    dropped until a single item fails alone. Before each batch, if ``free_mb``
+    reports less than ``reserve_mb``, another process has taken the memory: wait
+    for it to come back, and if it does not, carry on at batch size 1.
+
+    Returns results in the caller's original order, and what happened.
+    """
+    n = len(lengths)
+    results = [""] * n
+    stats = BatchStats()
+    order = sorted(range(n), key=lambda i: lengths[i], reverse=True)
+    max_batch = max(1, max_batch)
+    size = max(1, min(start_batch, max_batch))
+    streak = 0
+    pos = 0
+
+    while pos < n:
+        if free_mb is not None and free_mb() < reserve_mb:
+            stats.pauses += 1
+            started = clock()
+            while free_mb() < reserve_mb and clock() - started < pause_timeout_s:
+                sleep(pause_poll_s)
+            if free_mb() < reserve_mb:
+                stats.pause_timeouts += 1
+                size, streak = 1, 0
+
+        batch = order[pos:pos + size]
+        try:
+            out = run_batch(batch)
+        except Exception as exc:  # noqa: BLE001 — sorted into OOM vs everything else below
+            if is_oom(exc):
+                on_oom()
+                stats.oom_backoffs += 1
+                if size > 1:
+                    size, streak = max(1, size // 2), 0
+                    continue                    # retry the same items, smaller
+                stats.empty_oom += len(batch)
+            else:
+                logger.warning("summarizer batch failed: %s", exc)
+                stats.empty_error += len(batch)
+            pos += len(batch)
+            streak = 0
+            continue
+
+        for i, text in zip(batch, out):
+            results[i] = text
+        stats.summarized   += sum(1 for t in out if t)
+        stats.empty_output += sum(1 for t in out if not t)
+        stats.largest_batch = max(stats.largest_batch, len(batch))
+        pos += len(batch)
+        streak += 1
+        if streak >= grow_after and size < max_batch:
+            size, streak = size + 1, 0
+
+    return results, stats
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Subprocess worker — module-level so ProcessPoolExecutor can pickle them on
@@ -68,18 +200,25 @@ logger = logging.getLogger(__name__)
 # These functions run ONLY inside the worker process, never in the parent.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_w_pipe = None   # resident in the worker process after _worker_init runs
+_w_model  = None   # resident in the worker process after _worker_init runs
+_w_tok    = None
+_w_device = None
 
 
 def _worker_init(model_id: str, device: str, dtype_str: str) -> None:
     """
     ProcessPoolExecutor initializer — called once when the worker process
-    starts.  Loads the pipeline into _w_pipe so it stays resident for the
+    starts.  Loads the model into the worker so it stays resident for the
     lifetime of the worker (no per-batch reload cost).
+
+    ADR-027: the model and tokenizer are loaded directly rather than through the
+    text-generation pipeline, because batched decoding needs left padding and the
+    pipeline does not make that visible. Right padding does not raise; it just
+    produces worse summaries.
     """
-    global _w_pipe
+    global _w_model, _w_tok, _w_device
     import torch
-    from transformers import pipeline
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     dtype = torch.float16 if dtype_str == "float16" else torch.float32
     print(
@@ -87,46 +226,117 @@ def _worker_init(model_id: str, device: str, dtype_str: str) -> None:
         f"(device={device}, dtype={dtype}) — first run only ...",
         flush=True,
     )
-    _w_pipe = pipeline(
-        "text-generation",
-        model=model_id,
+    _w_tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    _w_tok.padding_side = "left"
+    if _w_tok.pad_token_id is None:
+        _w_tok.pad_token = _w_tok.eos_token
+    _w_model = AutoModelForCausalLM.from_pretrained(
+        model_id,
         device_map=device,
         torch_dtype=dtype,
         trust_remote_code=True,
     )
+    _w_model.eval()
+    _w_device = device
     print("  [Summarizer] Ready.", flush=True)
 
 
-def _worker_batch(messages_batch: list, max_new_tokens: int) -> list[str]:
+def _messages(code: str) -> list[dict]:
+    return [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user",   "content": _USER_TEMPLATE.format(code=code[:_MAX_CODE_CHARS])},
+    ]
+
+
+def _clean(text: str) -> str:
+    # Trim at the first blank line — prevents the model spilling into follow-on
+    # commentary or code examples beyond the extraction.
+    return text.strip().split("\n\n")[0].strip()
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    import torch
+    return isinstance(exc, torch.cuda.OutOfMemoryError) or "out of memory" in str(exc).lower()
+
+
+def _free_mb() -> float:
+    import torch
+    free, _total = torch.cuda.mem_get_info()
+    return free / 2**20
+
+
+def _apply_memory_cap(reserve_mb: int) -> None:
+    """Cap this process at what it holds plus what is free, minus the reserve.
+
+    On Windows the display driver pages GPU memory into system RAM instead of
+    failing an allocation, so CUDA never reports out-of-memory and throughput
+    drops ~50x with nothing in the log. Past this cap PyTorch raises
+    OutOfMemoryError itself, which run_adaptive_batches can back off from.
+    Recomputed per batch, because other processes grow and shrink.
     """
-    Run one summarization batch inside the worker process.
-    Returns a list of extraction strings (empty string on failure).
-    """
-    if _w_pipe is None:
-        return [""] * len(messages_batch)
-    try:
-        outputs = _w_pipe(
-            messages_batch,
+    import torch
+    free, total = torch.cuda.mem_get_info()
+    held = torch.cuda.memory_reserved()
+    budget = max(held, held + free - reserve_mb * 2**20)
+    torch.cuda.set_per_process_memory_fraction(min(1.0, budget / total))
+
+
+def _generate(prompts: list[str], max_new_tokens: int) -> list[str]:
+    import torch
+    enc = _w_tok(prompts, return_tensors="pt", padding=True).to(_w_model.device)
+    with torch.inference_mode():
+        out = _w_model.generate(
+            **enc,
             max_new_tokens=max_new_tokens,
             do_sample=False,
-            temperature=None,
+            temperature=None,   # must be None when do_sample=False in transformers ≥ 4.40
             top_p=None,
             top_k=None,
-            pad_token_id=_w_pipe.tokenizer.eos_token_id,
-            batch_size=1,
+            pad_token_id=_w_tok.pad_token_id,
         )
-    except Exception:
-        return [""] * len(messages_batch)
+    new_tokens = out[:, enc["input_ids"].shape[1]:]
+    return [_clean(t) for t in _w_tok.batch_decode(new_tokens, skip_special_tokens=True)]
 
-    results: list[str] = []
-    for out in outputs:
-        msg_list = out[0]["generated_text"]
-        if isinstance(msg_list, list):
-            text = msg_list[-1].get("content", "").strip()
-        else:
-            text = str(msg_list).strip()
-        results.append(text.split("\n\n")[0].strip())
-    return results
+
+def _worker_summarize(
+    codes:          list[str],
+    max_new_tokens: int,
+    max_batch_size: int,
+    reserve_mb:     int,
+) -> tuple[list[str], dict]:
+    """Summarize one group of chunks inside the worker. Returns (summaries, stats)."""
+    if _w_model is None:
+        return [""] * len(codes), asdict(BatchStats(empty_error=len(codes)))
+
+    prompts = [
+        _w_tok.apply_chat_template(_messages(c), tokenize=False, add_generation_prompt=True)
+        for c in codes
+    ]
+    lengths = [len(ids) for ids in _w_tok(prompts)["input_ids"]]
+    on_cuda = _w_device == "cuda"
+
+    def run_batch(idx: list[int]) -> list[str]:
+        if on_cuda:
+            _apply_memory_cap(reserve_mb)
+        return _generate([prompts[i] for i in idx], max_new_tokens)
+
+    if on_cuda:
+        import torch
+        results, stats = run_adaptive_batches(
+            lengths, run_batch,
+            is_oom=_is_cuda_oom,
+            max_batch=max_batch_size,
+            free_mb=_free_mb,
+            reserve_mb=reserve_mb,
+            on_oom=torch.cuda.empty_cache,
+        )
+        stats.peak_mb = int(torch.cuda.max_memory_reserved() / 2**20)
+    else:
+        # Batching buys little on CPU and the memory cap means nothing there.
+        results, stats = run_adaptive_batches(
+            lengths, run_batch, is_oom=lambda _e: False, max_batch=1,
+        )
+    return results, asdict(stats)
 
 _SYSTEM_PROMPT = (
     "You are a code extraction assistant. "
@@ -149,6 +359,15 @@ Code:
 _MAX_CODE_CHARS = 14_000
 # 4 bullet points × ~20 tokens each + overhead → hard ceiling prevents rambling
 _MAX_NEW_TOKENS = 160
+
+# ADR-027: chunks per worker job, and how long one job may take. A job of n chunks
+# at batch size 1 runs ~3 s a chunk on an 8 GB card, longer for tier-3 chunks, and
+# may first spend up to _PAUSE_TIMEOUT_S waiting for memory.
+_GROUP_SIZE = 32
+
+
+def _group_timeout_s(n: int) -> float:
+    return _PAUSE_TIMEOUT_S + 60.0 + 15.0 * n
 
 
 class ChunkSummarizer:
@@ -314,9 +533,12 @@ class IsolatedChunkSummarizer:
 
     def __init__(
         self,
-        model_id: str | None = None,
-        device:   str | None = None,
-        dtype:    str = "float16",
+        model_id:       str | None = None,
+        device:         str | None = None,
+        dtype:          str = "float16",
+        max_batch_size: int | None = None,
+        vram_reserve_mb: int | None = None,
+        executor_factory: Callable | None = None,
     ) -> None:
         # ADR-020: device resolves via resolve_device() (CODE_INDEXER_DEVICE-aware)
         # so the isolated-worker summarizer — the one the indexer actually uses —
@@ -329,12 +551,22 @@ class IsolatedChunkSummarizer:
         self._model_id = model_id if model_id is not None else summarizer_model_id()
         self._device   = device if device is not None else resolve_device()
         self._dtype    = dtype
+        # ADR-027: batching knobs, resolved through config like the model id.
+        self._max_batch_size = max(1, max_batch_size if max_batch_size is not None
+                                   else summarizer_max_batch_size())
+        self._reserve_mb = max(0, vram_reserve_mb if vram_reserve_mb is not None
+                               else summarizer_vram_reserve_mb())
+        self._executor_factory = executor_factory
         self._executor = None
         self._failed   = False
+        self.stats     = BatchStats()
         atexit.register(self._shutdown)
 
     def _ensure_executor(self) -> None:
         if self._executor is not None or self._failed:
+            return
+        if self._executor_factory is not None:
+            self._executor = self._executor_factory()
             return
         from concurrent.futures import ProcessPoolExecutor
         self._executor = ProcessPoolExecutor(
@@ -347,36 +579,58 @@ class IsolatedChunkSummarizer:
         """
         Return one extraction string per code chunk, same contract as
         ChunkSummarizer.summarize_batch.  Empty strings on any failure.
+
+        ADR-027: chunks go to the worker in groups of at most _GROUP_SIZE, each
+        with a timeout scaled to its size. The old single job per tier with a
+        flat 300 s timeout turned summarization off for the rest of the run on
+        any tier over ~100 chunks.
         """
         if self._failed or not codes:
             return [""] * len(codes)
+        results: list[str] = []
+        for start in range(0, len(codes), _GROUP_SIZE):
+            results.extend(self._summarize_group(codes[start:start + _GROUP_SIZE]))
+        return results
 
-        try:
-            print(f"  [summarizer] ensuring worker process ({len(codes)} chunks)...", flush=True)
-            self._ensure_executor()
-            print("  [summarizer] worker process ready, submitting batch...", flush=True)
-            messages_batch = [
-                [
-                    {"role": "system", "content": _SYSTEM_PROMPT},
-                    {"role": "user",   "content": _USER_TEMPLATE.format(code=c[:_MAX_CODE_CHARS])},
-                ]
-                for c in codes
-            ]
-            future = self._executor.submit(_worker_batch, messages_batch, _MAX_NEW_TOKENS)
-            print("  [summarizer] batch submitted, waiting for result (timeout=300s)...", flush=True)
-            result = future.result(timeout=300)
-            print(f"  [summarizer] result received ({len(result)} summaries)", flush=True)
-            return result
-        except Exception as exc:
-            print(
-                f"  [Summarizer] Worker process failed ({type(exc).__name__}: {exc})"
-                " — summarization disabled for remaining files.",
-                flush=True,
-            )
-            logger.warning("IsolatedChunkSummarizer worker failed: %s", exc)
-            self._failed = True
-            self._shutdown()
-            return [""] * len(codes)
+    def _summarize_group(self, group: list[str]) -> list[str]:
+        timeout = _group_timeout_s(len(group))
+        for attempt in (1, 2):
+            if self._failed:
+                break
+            try:
+                self._ensure_executor()
+                future = self._executor.submit(
+                    _worker_summarize, group, _MAX_NEW_TOKENS,
+                    self._max_batch_size, self._reserve_mb,
+                )
+                results, stats = future.result(timeout=timeout)
+                self.stats.merge(stats)
+                return results
+            except Exception as exc:  # noqa: BLE001 — timeout, dead worker, anything
+                # A worker that timed out is still generating and still holding its
+                # GPU memory. It has to be killed, not just shut down, or the restart
+                # loads a second copy of the model beside it and both spill.
+                self._kill_worker()
+                if attempt == 1:
+                    print(
+                        f"  [Summarizer] Worker failed on a group of {len(group)} "
+                        f"({type(exc).__name__}: {exc}) — restarting it and retrying once.",
+                        flush=True,
+                    )
+                    logger.warning("IsolatedChunkSummarizer worker failed, retrying: %s", exc)
+                else:
+                    print(
+                        f"  [Summarizer] Worker failed again ({type(exc).__name__}: {exc})"
+                        " — summarization disabled for remaining files.",
+                        flush=True,
+                    )
+                    logger.warning("IsolatedChunkSummarizer worker failed twice: %s", exc)
+                    self._failed = True
+        self.stats.empty_error += len(group)
+        return [""] * len(group)
+
+    def stats_line(self) -> str:
+        return self.stats.line()
 
     def shutdown(self) -> None:
         """Release the worker process and, with it, its GPU memory.
@@ -384,8 +638,29 @@ class IsolatedChunkSummarizer:
         Called by the indexer between the summarization and embedding passes.
         The model lives in a child process, so terminating it hands the memory
         back to the driver outright rather than relying on allocator reuse.
-        Safe to call more than once, and safe when no worker ever started.
+        Waits for the worker to exit, so the memory is back before the embedder
+        loads. Safe to call more than once, and safe when no worker ever started.
         """
+        if self._executor is not None:
+            try:
+                self._executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                pass
+            self._executor = None
+
+    def _kill_worker(self) -> None:
+        """Stop the worker process now, even mid-generation."""
+        if self._executor is None:
+            return
+        kill = getattr(self._executor, "kill_workers", None)   # Python 3.14+
+        try:
+            if kill is not None:
+                kill()
+            else:
+                for proc in list(getattr(self._executor, "_processes", {}).values()):
+                    proc.kill()
+        except Exception:
+            pass
         self._shutdown()
 
     def _shutdown(self) -> None:

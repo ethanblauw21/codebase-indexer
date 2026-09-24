@@ -100,15 +100,21 @@ The PR does not merge until all of these hold on the 8 GB card.
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
 - [ ] Record the batch-size-1 baseline from the 2026-09-24 run: pass-1 time, chunk count, `chunk_summaries` rows, peak memory
-- [ ] §1 worker generation loop on `model.generate` with left padding and length-sorted batches
-- [ ] §2 per-batch memory cap from `mem_get_info`
-- [ ] §3 adaptive batch size, and `max_batch_size = 1` reproduces today's behavior
-- [ ] §4 pause on low free memory
-- [ ] §5 bounded job groups, worker restart on timeout, end-of-pass counts
-- [ ] `[summarization].max_batch_size` and `vram_reserve_mb` in `indexer.toml`, `src/config.py`, and the drift test
-- [ ] Unit tests (Verification 6)
+- [x] §1 worker generation loop on `model.generate` with left padding and length-sorted batches
+- [x] §2 per-batch memory cap from `mem_get_info`
+- [x] §3 adaptive batch size, and `max_batch_size = 1` reproduces today's behavior
+- [x] §4 pause on low free memory
+- [x] §5 bounded job groups, worker restart on timeout, end-of-pass counts
+- [x] `[summarization].max_batch_size` and `vram_reserve_mb` in `indexer.toml`, `src/config.py`, and the drift test
+- [x] Unit tests (Verification 6): `tests/test_summarizer_batching.py`, 20 tests, no GPU
+- [x] `tools/summarizer_batch_equivalence.py` for Verification 1 (not run yet)
 - [ ] Verification 1 to 5 on the GPU, results recorded here with provenance
 - [ ] Set status to `accepted` in the PR
 
 **Notes:**
 <!-- 2026-09-24: Written while the batch-size-1 baseline was still running. The 3 s per chunk and 3.65 GB figures are from its first 10 minutes. -->
+
+- 2026-09-24: The batching loop is `run_adaptive_batches()` in `src/summarizer.py`. It takes the model call and the memory probe as arguments and imports no torch, which is what lets the unit tests drive OOM at chosen batch sizes with fakes.
+- 2026-09-24: Found while building §5. On a timeout the old code called `executor.shutdown(wait=False)`, which leaves the stuck worker running and still holding its GPU memory. A restarted worker would load a second copy of the model beside it. The retry path now kills the worker first (`kill_workers()` on Python 3.14, the pool's processes otherwise). The between-passes `shutdown()` now waits, so the summarizer's memory is back before the embedder loads.
+- 2026-09-24: The worker no longer uses the text-generation pipeline, so `pad_token_id` is the tokenizer's pad token rather than EOS. Generation settings are otherwise the same as before, including whatever the model's own generation config sets.
+- 2026-09-24: Full suite on CPU: 323 passed, 1 skipped, 6 failed. The 6 are `test_adapter_snapshots.py`, and they fail the same way on the base commit and on the L5X branch checkout, so they are not from this change. Likely `core.autocrlf=true` rewriting fixture line endings on this Windows checkout; CI on GitHub was green.
