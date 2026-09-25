@@ -214,8 +214,8 @@ Every criterion has a threshold. The final arm must pass all of them.
 - [x] Merge `feature/adr-030-summary-index` in, for the measurement stack
 - [x] §1 doc-move (TypeScript): adapter, `skeletonize`, tests (`tests/test_class_member_docs.py`)
 - [x] Arm 1 built and measured against `store031` (see notes)
-- [ ] §2 `#` members, call query and arrow fields: fixtures and tests
-- [ ] Arm 2 built and measured
+- [x] §2 `#` members, call query and arrow fields: tests (`tests/test_private_members.py`)
+- [x] Arm 2 built and measured (see notes)
 - [ ] §3 merge and §4 Python decorated stubs: fixtures and tests
 - [ ] Arm 3 built and measured
 - [ ] §5 skeleton header and body line range
