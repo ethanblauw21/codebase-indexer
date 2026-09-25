@@ -393,7 +393,9 @@ def _backfill_null_stamps(db: CodeDB, git_times: dict[str, tuple[str, str]]) -> 
 # an index silently mixes chunks from old and new code.
 #   (no marker)  built before ADR-033
 #   2            ADR-031: one chunk per (file, scope, tier), so one vector per row
-CHUNKER_VERSION = 2
+#   3            ADR-034: member docs moved to members, # members and function fields,
+#                same-FQN siblings merged, split skeleton parts carry header and lines
+CHUNKER_VERSION = 3
 CHUNKER_VERSION_KEY = "chunker_version"
 
 
