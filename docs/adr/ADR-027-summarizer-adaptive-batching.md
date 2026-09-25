@@ -157,7 +157,7 @@ The PR does not merge until all of these hold on the 8 GB card.
   - Found when the retrieval driver built three repos in one process and left the embedder from zustand resident while click summarized. Stage 13 crawled and was stopped by the stall guard after 20 min with no output.
   - The loop now carries on at batch size 1 without waiting again for the rest of the call, as §4 always said it should. There is a test for it.
   - The driver now frees the embedder between repos, and stage 13 was rerun from scratch.
-- 2026-09-24, **Verification 2, retrieval** (stages 13 to 16, 5bc3f60, telemetry `stress_20260924_202825`, `gpu-crash-repro/telemetry/retrieval/results.json`).
+- 2026-09-24, **Verification 2, retrieval** (stages 13 to 16, 5bc3f60, telemetry `stress_20260924_202823`, `gpu-crash-repro/telemetry/retrieval/results.json`).
   - Setup: three pinned eval repos (p-queue, zustand, click), 83 queries, the shipped arm (graph on, reranker off, RRF), and the embedder in bf16 for index and queries alike. Each variant has a fresh index: no summaries, batch size 1, and batched.
 
     | Variant | MRR@10 | nDCG@10 | p-queue MRR | zustand MRR | click MRR |
