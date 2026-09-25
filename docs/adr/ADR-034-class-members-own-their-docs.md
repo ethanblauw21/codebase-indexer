@@ -261,3 +261,21 @@ Every criterion has a threshold. The final arm must pass all of them.
 - **Harness:** `arm_gate.py` retrieves at depth 50, so its `store031` means differ slightly from
   `clean_sweep2.py`'s depth-10 means (0.635 / 0.674 / 0.867 / 0.500). The gate table uses the
   harness's own numbers, and both arms are always compared in the same harness.
+
+**2026-09-25, arm 2 (§2 `#` members and function-valued fields; `store034a2`).**
+- **What changed:** p-queue gains 22 tier-1 chunks (133 → 155), all `#` members. zustand and click
+  have none, so their chunks did not change.
+- **Against `store031`:** orig +0.045\*, intent +0.024, file any +0.004, file whole −0.010.
+  p-queue original is 0.709.
+- **Against arm 1:**
+  - Only one original query moved: `pq2-constructor` 1→2. The configuration question now puts
+    `options.ts::Options_part_1` first, which is a defensible answer.
+  - Intent moved on 4 queries, for a net −0.0005. `pq-intent-07` went 8→11. It asks whether raising
+    concurrency launches waiting jobs, and the newly indexed `#processQueue`, which does exactly that,
+    now ranks 6th.
+  - File queries did not move.
+- **Verdict:** arm 2 is retrieval-neutral within noise. Its value is completeness: 22 member bodies
+  that were not indexed anywhere, and call edges that keep `#` members out of `find_dead_code`
+  (`tests/test_private_members.py`).
+- **Gate:** `pq2-constructor` 1→2 fails the strict "no worse" criterion. The gate is judged on the
+  final arm.
