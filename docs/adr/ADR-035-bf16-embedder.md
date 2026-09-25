@@ -85,7 +85,6 @@ Verification 1 measures what that costs, and the log records it.
 - **Per-vector cosine, bf16 against fp32:**
   - Documents: mean 0.985, lowest 0.959.
   - Queries: mean 0.994, lowest 0.976.
-  - Longer inputs drift more.
 - **An fp32-built index queried in bf16** (the upgrade case):
   - The top result matches the all-fp32 ranking on 23 of 24 queries.
   - Top-5 overlap is 0.992.
