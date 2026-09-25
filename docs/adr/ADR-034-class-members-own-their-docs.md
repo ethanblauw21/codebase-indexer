@@ -150,7 +150,7 @@ Every criterion has a threshold. The final arm must pass all of them.
 
 | Criterion | Threshold |
 |---|---|
-| Named p-queue queries | Each ranks no worse than under `store031`, which covers the 23 queries with a rank today. `pq-concurrency` may stay not found. |
+| Named p-queue queries | Each ranks no worse than under `store031`, which covers the 23 queries with a rank today. `pq-concurrency` may stay not found. `pq2-on-error` and `pq2-enqueue` are exempt (@edb, 2026-09-25): ADR-030 Verification 6 attributes their loss to the fusion rule, not to chunk shape. |
 | p-queue original set | MRR@10 ≥ 0.554 (`store031`) |
 | Regressions per set | In each set, at most 2 queries lose 3 or more ranks against `store031` |
 | Set baselines (`store031`, arm B, `arm_gate.py` at depth 50) | original 0.641, intent 0.671, file "any" 0.873, file "whole" 0.467. The means are reported with the paired CI95 but not gated on it. |

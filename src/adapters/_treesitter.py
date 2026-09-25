@@ -61,6 +61,10 @@ def _whole_lines(src: bytes, start: int, end: int) -> tuple[int, int]:
     return line_start, line_end
 
 
+def _body_of(node: Node) -> Optional[Node]:
+    return next((c for c in node.children if c.type in ("block", "statement_block")), None)
+
+
 def skeletonize(
     node: Node,
     src: bytes,
@@ -91,9 +95,12 @@ def skeletonize(
             last = cut_end
             continue
         if child.type in stub_node_types:
-            body = next(
-                (c for c in child.children if c.type in ("block", "statement_block")), None
-            )
+            body = _body_of(child)
+            if body is None:
+                # A wrapper such as a field whose value is a function, or a decorated
+                # definition: the body is one level down (ADR-034 §2, §4).
+                inner = next((c for c in child.children if c.type in stub_node_types), None)
+                body = _body_of(inner) if inner is not None else None
             if body:
                 parts.append(src[last:body.start_byte].decode("utf-8", errors="replace"))
                 parts.append(" ...\n")

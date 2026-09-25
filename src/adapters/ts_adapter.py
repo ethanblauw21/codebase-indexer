@@ -61,6 +61,7 @@ _CALL_QUERY = """
   function: [
     (identifier) @name
     (member_expression property: (property_identifier) @name)
+    (member_expression property: (private_property_identifier) @name)
   ])
 """
 
@@ -98,8 +99,15 @@ _GEN_RE    = re.compile(r'function\s*\*|async\s*\*')
 # Internal node-type sets
 # ---------------------------------------------------------------------------
 
-_TS_NAME_TYPES = frozenset(("identifier", "type_identifier", "property_identifier"))
-_TS_STUB_TYPES: set[str] = {"method_definition", "function_declaration", "arrow_function"}
+# private_property_identifier: `#name` members keep the `#` in their name and FQN (ADR-034 §2).
+_TS_NAME_TYPES = frozenset(("identifier", "type_identifier", "property_identifier",
+                            "private_property_identifier"))
+# Field definitions are stubbed when their value is a function (ADR-034 §2): `skeletonize`
+# looks one level down for the body. TS says public_field_definition, JS field_definition.
+_TS_FIELD_TYPES = frozenset(("public_field_definition", "field_definition"))
+_TS_FUNCTION_VALUES = ("arrow_function", "function_expression")
+_TS_STUB_TYPES: set[str] = {"method_definition", "function_declaration", "arrow_function",
+                            "function_expression", *_TS_FIELD_TYPES}
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +385,15 @@ class _WebAdapter:
                 if name:
                     emit(node, "method", name, class_ctx, type_node=node)
                 return
+
+            if t in _TS_FIELD_TYPES and class_ctx:
+                # An arrow-function or function-expression field is a method in all but
+                # syntax, whatever its access modifier (ADR-034 §2).
+                value = next((c for c in node.children if c.type in _TS_FUNCTION_VALUES), None)
+                name = _ts_decl_name(node, src)
+                if value and name:
+                    emit(node, "arrow_function", name, class_ctx, call_scope=value, type_node=value)
+                    return
 
             if t == "lexical_declaration":
                 for decl in node.children:
