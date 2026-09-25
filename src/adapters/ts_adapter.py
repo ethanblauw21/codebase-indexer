@@ -18,7 +18,7 @@ import tree_sitter_typescript as tstypescript
 import tree_sitter_javascript as tsjavascript
 
 from adapters.base import Edge, ParseResult, Reference, Symbol, SymbolType, TestConventions, build_fqn
-from adapters._treesitter import node_text, run_query, skeletonize
+from adapters._treesitter import leading_doc, node_text, run_query, skeletonize
 from category_tagger import tag_symbol
 
 
@@ -249,6 +249,7 @@ class _WebAdapter:
         symbols:      list[Symbol]     = []
         edges:        list[Edge]       = []
         symbol_types: list[SymbolType] = []
+        moved_docs:   Optional[set[int]] = None   # doc comments moved out of the class being walked
 
         def emit(
             node: Node,
@@ -259,14 +260,20 @@ class _WebAdapter:
             type_node: Optional[Node]  = None,
         ) -> Symbol:
             fqn = build_fqn(file_path, class_ctx, name)
+            # A class member's leading JSDoc moves into the member's own chunk (ADR-034 §1);
+            # the class skeleton then leaves it out.
+            doc = leading_doc(node, src) if class_ctx and moved_docs is not None else None
+            start = doc or node
+            if doc:
+                moved_docs.add(doc.start_byte)
             sym = Symbol(
                 fqn           = fqn,
                 kind          = kind,
                 name          = name,
                 class_context = class_ctx,
-                start_line    = node.start_point[0] + 1,
+                start_line    = start.start_point[0] + 1,
                 end_line      = node.end_point[0] + 1,
-                text          = node_text(node, src),
+                text          = src[start.start_byte:node.end_byte].decode("utf-8", errors="replace"),
             )
             symbols.append(sym)
             scope_node = call_scope or node
@@ -282,6 +289,7 @@ class _WebAdapter:
             return sym
 
         def walk(node: Node, class_ctx: Optional[str]) -> None:
+            nonlocal moved_docs
             t = node.type
 
             if t == "export_statement":
@@ -300,7 +308,7 @@ class _WebAdapter:
                         class_context = None,
                         start_line    = node.start_point[0] + 1,
                         end_line      = node.end_point[0] + 1,
-                        text          = skeletonize(node, src, _TS_STUB_TYPES),
+                        text          = "",   # the skeleton, once the members have taken their docs
                     )
                     symbols.append(sym)
                     for child in node.children:
@@ -326,9 +334,12 @@ class _WebAdapter:
                     class_body = next(
                         (c for c in node.children if c.type == "class_body"), None
                     )
+                    outer, moved_docs = moved_docs, set()
                     if class_body:
                         for child in class_body.children:
                             walk(child, name)
+                    sym.text = skeletonize(node, src, _TS_STUB_TYPES, drop=moved_docs)
+                    moved_docs = outer
                 return
 
             if t == "interface_declaration":
