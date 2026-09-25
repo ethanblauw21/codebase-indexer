@@ -1,6 +1,6 @@
 # ADR-031: One FAISS Vector per Chunk Row
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-031-one-vector-per-chunk-row`
 **Reviewer:** @edb
