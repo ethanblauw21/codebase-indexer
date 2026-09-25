@@ -37,6 +37,9 @@ class Symbol:
     end_line: int
     text: str             # raw source text of the symbol
     shared: bool = False  # True for symbols that may span multiple files (C# partial classes)
+    # Class skeletons only (ADR-034 §5): the source line of each line of `text`, which stubbed
+    # bodies make non-contiguous, so a split skeleton part can report the lines it covers.
+    line_map: Optional[list[int]] = field(default=None, repr=False, compare=False)
 
 
 @dataclass

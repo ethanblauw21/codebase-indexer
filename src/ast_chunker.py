@@ -165,7 +165,8 @@ def chunk_file_ast(
 
         if jina_tokenizer.count_tokens(rich_text) > max_tokens:
             sub = fallback_token_chunker(
-                sym.text, file_path, max_tokens, overlap, parent_scope=sym.fqn
+                sym.text, file_path, max_tokens, overlap, parent_scope=sym.fqn,
+                line_map=sym.line_map,
             )
             if sub:
                 sub[0].edges   = sym_edges
@@ -197,9 +198,15 @@ def fallback_token_chunker(
     max_tokens: int = 1000,
     overlap: int = 100,
     parent_scope: str = "Global",
+    line_map: Optional[list[int]] = None,
 ) -> list[Chunk]:
     """
     Token-based line chunker with a monster-line shredder for huge inlined blobs.
+
+    For a split class skeleton (ADR-034 §5), `line_map` gives the source line of each line of
+    `text`, so each part records the source lines it covers. The class declaration is not
+    repeated atop later parts: measured in ADR-034 arm 4, it made the parts alike and cost
+    retrieval on every query set.
     """
     lines = text.split("\n")
     header_template = f"File: {file_path}\nScope: {parent_scope} (Part X)\nCode:\n"
@@ -207,24 +214,29 @@ def fallback_token_chunker(
     safe_max = max(1, max_tokens - header_tokens)
 
     raw_chunks: list[str] = []
+    spans: list[tuple[int, int]] = []    # (first, last) line index of each raw chunk
     current_lines: list[str] = []
+    current_first = 0
     current_tokens = 0
 
-    for line in lines:
+    for idx, line in enumerate(lines):
         line_tokens = jina_tokenizer.count_tokens(line + "\n")
 
         # Monster-line shredder: single line exceeds the whole budget
         if line_tokens > safe_max:
             if current_lines:
                 raw_chunks.append("\n".join(current_lines))
+                spans.append((current_first, idx - 1))
                 current_lines, current_tokens = [], 0
             raw = jina_tokenizer.tokenizer.encode(line, add_special_tokens=False)
             for i in range(0, len(raw), safe_max - overlap):
                 raw_chunks.append(jina_tokenizer.decode_tokens(raw[i : i + safe_max]))
+                spans.append((idx, idx))
             continue
 
         if current_tokens + line_tokens > safe_max and current_lines:
             raw_chunks.append("\n".join(current_lines))
+            spans.append((current_first, idx - 1))
             overlap_lines: list[str] = []
             overlap_tokens = 0
             for prev in reversed(current_lines):
@@ -235,13 +247,18 @@ def fallback_token_chunker(
                 overlap_tokens += t
             current_lines  = overlap_lines
             current_tokens = overlap_tokens
+            current_first  = idx - len(overlap_lines)
 
+        if not current_lines:
+            current_first = idx
         current_lines.append(line)
         current_tokens += line_tokens
 
     if current_lines:
         raw_chunks.append("\n".join(current_lines))
+        spans.append((current_first, len(lines) - 1))
 
+    mapped = line_map is not None and len(line_map) == len(lines)
     total = len(raw_chunks)
     result: list[Chunk] = []
     for idx, code in enumerate(raw_chunks):
@@ -250,11 +267,12 @@ def fallback_token_chunker(
             f"Scope: {parent_scope} (Part {idx + 1}/{total})\n"
             f"Code:\n{code}"
         )
+        first, last = spans[idx]
         result.append(Chunk(
             text       = rich_text,
             file       = file_path,
-            start_line = 0,
-            end_line   = 0,
+            start_line = line_map[first] if mapped else 0,
+            end_line   = line_map[last] if mapped else 0,
             scope      = f"{parent_scope}_part_{idx + 1}",
         ))
 
