@@ -2,125 +2,219 @@
 
 **Status:** proposed
 **Date:** 2026-09-24
-**Branch:** `feature/adr-028-central-model-host` (cut from `feature/adr-027-summarizer-adaptive-batching` at 9f096a6)
+**Branch:** `feature/adr-028-central-model-host` (rebased 2026-09-24 onto `feature/adr-027-summarizer-adaptive-batching` at 64a38be, the token-budget build)
 **Reviewer:** @edb
 **Backlog:** [B-023](../backlog.md#b-023) — several projects watched at once cannot share one 8 GB card.
 **Depends on:**
-- [ADR-027](./ADR-027-summarizer-adaptive-batching.md) — the host runs its batching loop and memory cap for summaries. Its full-pass speed-up (not measured yet) sets how long a summary window has to be.
-- [ADR-029](./ADR-029-position-independent-summary-key.md) — the shared summary cache in §4 is keyed with its position-independent key.
-- The single-pass fit probe (stage 9 of `gpu-crash-repro/run_stress.ps1`, 2026-09-24). **Whether the embedder and the summarizer fit on the card together decides §3.** Implementation does not start until that result is in this log.
+- [ADR-027](./ADR-027-summarizer-adaptive-batching.md) — the host runs its batching loop and memory cap for summaries, and this ADR adds one hook to that loop (`should_yield`, §3).
+- The bf16 embedder change (not written yet, its own branch). `src/core.py` loads `bge-code-v1` in fp32, about 6.2 GB. Even alone, that does not leave ADR-027's 1 GB reserve on an 8 GB card. **The host does not get turned on for real until that change lands.**
 
-**Depended on by:** none yet.
+**Depended on by:** the follow-up ADR for §4 and §5 below. It is not written yet, and it gets created on the branch that builds it.
 
 ## Context
 
 The indexer loads its models inside whatever process needs them. There are four entry points, and they are the whole surface:
 
-- `core.embed()`, one query at a time, from `hybrid_retriever.py:48`
-- `core.embed_batch()`, when indexing, from `incremental_indexer.py:653`
+- `core.embed()`, one query at a time, from `hybrid_retriever.py`
+- `core.embed_batch()`, when indexing, from `incremental_indexer.py`
 - `IsolatedChunkSummarizer.summarize_batch()`, in a child process of the indexer
 - the reranker (`src/reranker.py`), off by default
 
-That was fine for one project at a time. It stops working in the setup this machine is heading for: the watchdog daemon on for several projects, with several Claude sessions open. Three problems, in order of how soon they bite.
+That was fine for one project at a time. It stops working in the setup this machine is heading for: the watchdog daemon on for several projects, with several Claude sessions open. There are three problems, listed by how soon they cause trouble.
 
-**1. Every MCP server loads its own embedder.** The MCP server is a stdio process started per Claude session per project. Two projects already have `repo-indexer` configured (SOPCentral and InventoryApp-V2), and two indexer servers were running at once on 2026-09-24. They only fit because `CUDA_VISIBLE_DEVICES=-1` kept them on the CPU. On the GPU, `bge-code-v1` peaks at 3.9 GiB in bf16 and about 6.2 GB in fp32 (the current `src/` default). Two projects fill the card before any summary runs.
+**1. Every MCP server loads its own embedder.** The MCP server is a stdio process started per Claude session per project. Two projects already have `repo-indexer` configured (SOPCentral and InventoryApp-V2), and two indexer servers were running at once on 2026-09-24. They only fit because `CUDA_VISIBLE_DEVICES=-1` kept them on the CPU. On the GPU, `bge-code-v1` peaks at 3.9 GiB in bf16 and about 6.2 GB in fp32. Two projects fill the card before any summary runs.
 
-**2. Two-pass does not hold in the daemon.** Two-pass (5f03798) keeps the summarizer and the embedder apart within one full index. But the MCP server keeps its embedder loaded after the first search or reindex, and on each save the daemon starts a summarizer worker beside it. So on this card the daemon puts both models on the GPU at once on every save with a cache miss, which is exactly what two-pass exists to avoid.
+**2. Two-pass does not hold in the daemon.** Two-pass (5f03798) keeps the summarizer and the embedder apart within one full index. But the MCP server keeps its embedder loaded after the first search or reindex. On each save, the daemon then starts a summarizer worker beside it. So on every save with a cache miss, the daemon puts both models on the GPU at once, which is what two-pass exists to avoid. Stage 9 showed what that looks like:
+- both models fit only with the summarizer at batch size 1
+- dedicated memory stayed pinned at 7,843 of 8,151 MiB
+- shared usage spiked up to 384 MiB, which is the early shape of WDDM paging
 
-**3. Summaries are the cost, and they do not need to be immediate.** Measured on this repository on 2026-09-24: 67.0 min to summarize and 90 s to embed, at batch size 1. ADR-027's batching measured 3.03 times faster on a 200-chunk sample. Search needs an embedding right after a save. It does not need the summary right after a save, since a chunk embedded without its summary is still searchable, just less well for intent-style queries.
+**3. Summaries are the cost, and they do not need to be immediate.** Measured on this repository on 2026-09-24, pass 1 (summaries) against pass 2 (embed and write):
+
+| Build | Pass 1 | Pass 2 |
+|---|---|---|
+| batch size 1 | 67.0 min | ~1.5 min |
+| ADR-027 cross-file | 17.2 min | 96 s |
+| ADR-027 token budget (stage 7) | 16.3 min (975.5 s) | 98 s |
+
+Search needs an embedding right after a save. It does not need the summary right away. A chunk embedded without its summary can still be searched. It just matches intent-style queries less well.
 
 ## Decision
 
-### §1. One model host per machine
+### §1. One model host per user
 
-A single local process, the model host, owns every GPU model: embedder, summarizer, and reranker. Project processes (the MCP servers, the daemon, `code-indexer`) become its clients.
+A single local process, the model host (`src/model_host.py`), owns every GPU model. Project processes are its clients: the MCP servers, the watchdog and `code-indexer`.
 
-- It starts on demand. The first client that cannot reach it starts it, and a lock file keeps it to one per machine.
-- It listens on `127.0.0.1` only, on a port written to a file in the user profile, and it requires a per-user token read from a file only the user can read. Any local process can open a loopback port, so loopback alone is not access control.
-- Each model is loaded only while it has work and unloaded when its queue is empty (§3), so an idle host holds no GPU memory. The host process itself exits after a longer idle period.
-- It never opens a project's FAISS or SQLite files. It turns text into vectors, summaries, and scores. Each project's own process still owns and writes its own index.
+- **Started on demand.** The first client that cannot reach it starts it, detached, with its output in `host.log`.
+  - A lock file (`host.lock`, held with `msvcrt.locking` or `flock`) keeps it to one per user.
+  - The OS drops the lock when the process dies, so a crashed host leaves nothing stale behind.
+- **Found through files.** Everything lives in `%LOCALAPPDATA%\code-indexer\model-host\`. `CODE_INDEXER_HOST_DIR` overrides it, which is what the tests use. The files:
+  - `host.json`: the port and pid, written after the port is bound
+  - `token`
+  - `host.lock`
+  - `host.log`
+- **Loopback plus a token.** HTTP on `127.0.0.1` only, on a free port.
+  - Every request carries `Authorization: Bearer <token>`, compared in constant time. Any local process can open a loopback port, so loopback alone is not access control.
+  - The token file is created once with `secrets.token_urlsafe(32)`, and the directory's ACL already limits it to the user.
+  - Nothing logs or prints the value.
+- **Models in the host's own process.** The embedder loads through `core._get_embed_model()` and the summarizer through ADR-027's `_worker_init()`, so both behave exactly as they do in the indexer.
+  - Today the summarizer runs in a child process for crash isolation. In the host, the host process provides that isolation: if it dies, clients fall back (§2) and the next request starts a new one.
+  - Running the summarizer in-process is also what lets an embed stop it at a batch boundary (§3).
+- **Idle exit.** With no model loaded and nothing queued for `idle_exit_s`, the host exits.
+- **No index files.** It never opens a project's FAISS or SQLite files. It turns text into vectors and summaries, and each project's own process still writes its own index.
 
-### §2. The client is a drop-in behind the same four functions
+Endpoints:
 
-`src/model_client.py` provides `embed`, `embed_batch`, `summarize_batch`, and `rerank` with the signatures the callers use today. A config switch, `[model_host].enabled`, picks between the host and today's in-process loading. If the host is enabled but cannot be reached or started, the client falls back to in-process loading and says so in the log. It does not fail silently, and it does not fail the index.
+| Endpoint | Takes | Returns |
+|---|---|---|
+| `POST /v1/embed` | `texts`, `kind` (`query` or `index`), `project` | float32 vectors as base64, with their shape |
+| `POST /v1/summarize` | `codes`, `project` | one summary per code |
+| `GET /v1/status` | | the §6 state |
+| `POST /v1/shutdown` | | |
 
-### §3. Two queues, and how they share the card
+### §2. The client is a drop-in behind the same calls
 
-- **Embed queue:** small and urgent. Search queries go first, then save-time re-embeds. Always served before summaries.
-- **Summary queue:** large and deferrable. Jobs from every project collect here and run in batches through ADR-027's loop.
+`src/model_client.py` provides `embed`, `embed_batch` and `make_summarizer()` with the signatures the callers use today. `hybrid_retriever.py` and `incremental_indexer.py` import from it instead of from `core` and `summarizer`. `[model_host].enabled` picks between the host and today's in-process loading, and defaults to false.
 
-**One model on the card at a time, loaded only while it has work.** The two models are never resident together, even though stage 9 showed they can be (see the Implementation Log for why that is not worth using).
+- **Fallback.** If the host is enabled but cannot be reached or started within `spawn_timeout_s`, the call runs in-process.
+  - The client prints one line saying so. It does not fail silently, and it does not fail the index.
+  - After a failure it skips the host for 60 s, so a dead host costs one timeout rather than one per file.
+  - The first time the host fails, `HostSummarizer` switches to a real `IsolatedChunkSummarizer` for the rest of the run. That way one run never has the host and a worker loading models at the same time.
+- **Model check.** The host reads the `indexer.toml` of whichever project started it.
+  - A client compares the host's embedder id, dimension and summarizer id with its own config, and falls back if any of them differ.
+  - Without this check, vectors from another embedder would load into the index without error and be wrong.
+- **Reranker.** Stays in-process for now. It is off by default. Moving it to the host is a later task in the log.
 
-- **Embedder:** loaded when an embed request arrives. It stays loaded for `embed_idle_s` after the last request, because searches come in bursts and a reload per query would add seconds to each one. Then it is unloaded.
-- **Summarizer:** loaded only when the summary queue has work and the embed queue is empty. It drains the queue at whatever batch size ADR-027's loop reaches, with the whole card to itself, and is unloaded as soon as the queue is empty.
-- **When both have work** (the "lock the door" pass): embeds go first. Then the embedder is unloaded and the summarizer runs for up to `summary_window_s`, and is unloaded again so the embedder can serve whatever arrived. This repeats while summaries remain. The window has a cap because a search that arrives during a window cannot be answered until it ends.
+### §3. Two queues, one model on the card at a time
 
-A swap looks cheap next to a window. On 2026-09-24 the summarizer took about 14 s from process start to loaded, including spawning the process, and the embedder reloaded in about 2 to 4 s with its weights in the OS file cache. These are readings from the monitor, not a timed benchmark, and the implementation should time them properly.
+`HostScheduler` holds the policy, and it is plain Python so it can be tested with a fake backend. Clients submit from any thread. Only the scheduler's thread touches the models, so two models can never be loaded at once.
 
-Queries that arrive during a summary window are an open question, listed below.
+- **Embed queue.** Small and urgent.
+  - Always served before summaries.
+  - Queries go before save-time and indexing embeds. Within each kind, first come first served.
+  - Waiting requests of the same kind are combined into one model call.
+- **Summary queue.** Large and can wait. Every project's pending texts are merged into one run, deduplicated by text, and sent through ADR-027's loop longest first.
+- **Embedder lifetime.** Loaded when an embed arrives. It stays loaded for `embed_idle_s` after the last request, because searches come in bursts and a reload per query would add seconds to each one. Summaries wait during that time.
+- **Summarizer lifetime.** Loaded once the embedder is unloaded and summaries are waiting. It stays loaded for `_SUMMARY_LINGER_S` after its queue empties. The indexer sends pass 1 in slices of 192, and unloading between slices would reload the model for every slice.
+- **Preemption at the batch boundary** (settled 2026-09-24, @edb). `run_adaptive_batches` takes a `should_yield` callback and calls it before every batch after the first. The host's callback returns true when an embed is waiting. When it does:
+  - the run stops before the next batch
+  - every text not yet attempted comes back as `None`, not `""`, which means attempted and empty
+  - the embed is served, and the rest of the summaries run later, so nothing is summarized twice
+  - A search that arrives during a summary run waits for the batch in flight, then a summarizer unload, then an embedder load. **How long that takes has not been measured** (see the gaps table).
 
-### §4. Summaries are shared across projects
+The earlier draft had a `summary_window_s` setting that capped each summary run so searches could get in. Preemption makes it unnecessary, so it has been removed.
 
-The host keeps one summary cache in the user profile, keyed by ADR-029's position-independent key. The same chunk text gets the same summary in any project, so vendored or copied code is summarized once. Each project's own `chunk_summaries` table becomes a local copy that the client fills from the host.
+**Other GPU users** (open question 5 in the earlier draft). The host does not watch for other programs. ADR-027's memory cap and pause already handle another program taking memory: the summarizer backs off and waits, and drops to batch size 1 if the memory does not come back. Backing off entirely, for example while a game runs, is left until it is needed.
 
-### §5. Save path: embed now, summarize later
+### §4. Deferred: summaries shared across projects
 
-On a save, the project process re-chunks the file and embeds it straight away. It uses cached summaries where they exist and bare chunk text where they do not. Chunks embedded without a summary are marked pending, and their summary jobs go to the host. When a summary lands, the host tells the client, and the client re-embeds just those chunks with the summary appended. That re-embed goes through the embed queue at a lower priority than searches.
+This is a shared summary cache in the user profile, keyed by ADR-029's position-independent key, so vendored or copied code is summarized once across repos. It moved out of this ADR on 2026-09-24 (@edb), because it needs ADR-029 and can be reverted on its own. The host already deduplicates across projects within one run, which is the cheap half.
 
-Search stays current within seconds of a save. For the minutes until the summaries catch up, the chunks it searches are the bare ones.
+### §5. Deferred: embed now, summarize later on save
+
+On a save, the indexer would:
+1. embed at once, using cached summaries where they exist and bare text where they do not
+2. mark the rest pending
+3. re-embed each chunk when its summary lands
+
+This also moved out, because it changes the indexer's save path and adds a pending state to the index, and it can be built and reverted separately. Until it lands, a save through the host behaves as it does today, summaries first and then the embed. A search that arrives meanwhile preempts the summaries.
 
 ### §6. Visible state
 
-The host reports its mode, loaded models, memory in use, and each queue's depth, per project. `index_status` includes the host's view for its project, including how many chunks are pending a summary, so an agent can tell a stale index from a busy one.
+`GET /v1/status` reports:
+- the loaded model
+- each project's queued embed texts and pending summaries
+- counters: embeds, summaries, yields, loads, unloads
+- the last few load times per model
+- the device and the model ids
 
-### Open questions, to settle before implementation
+Surfacing this in `index_status` is a task in the log.
 
-1. ~~Resident or swap mode.~~ Settled 2026-09-24: one model at a time, loaded on demand (§3).
-2. **`summary_window_s` and `embed_idle_s`:** depends on ADR-027's full-pass throughput and the measured swap cost. Not guessed here.
-3. **Queries during a swap window:** wait for the window to end, or answer from a CPU copy of the embedder. The CPU copy costs several GB of RAM and a slower query. Waiting costs up to one window.
-4. **Transport:** HTTP on loopback is the simplest to build and to test with ordinary tools. A named pipe avoids holding a port. Leaning HTTP.
-5. **Other GPU users:** the host's memory cap (ADR-027 §2) leaves a reserve, but a game or another ML job can still take the card. Whether the host should back off entirely when something else is using the GPU is unanswered.
+## Measured values this ADR still needs
+
+These get filled in from stress-kit stages as they run. Nothing here is guessed. The provisional defaults are marked in `config.py` and `indexer.toml`.
+
+| Value | Used for | Source | Result |
+|---|---|---|---|
+| Embedder load time, bf16, weights in the OS file cache | `embed_idle_s` (provisional 60 s) | host `status.load_seconds` | _gap_ |
+| Summarizer load time in the host process | `_SUMMARY_LINGER_S` (provisional 15 s) | host `status.load_seconds` | _gap_ (about 14 s by eye, including a process spawn) |
+| Longest single batch at the token budget | worst-case search wait under preemption | per-batch timing, not logged yet | _gap_ |
+| Search latency during a summary run | Verification 3 | a host test run | _gap_ |
+| Memory after unloading each model | whether an idle host really holds nothing | `nvidia-smi` during a host run | _gap_ (the CUDA context stays while the process lives) |
+| Full pass 1 through the host vs in-process | whether the HTTP hop costs anything that matters | stage 7 through the host | _gap_ (in-process: 975.5 s) |
+| Whether summary batching changes retrieval | whether batched summaries are safe to share | ADR-027 stages 13 to 16 | _gap_ (running) |
 
 ## Consequences
 
-**Better:** one copy of each model on the card however many projects or sessions are open. Saves update search in seconds. Summaries batch across projects, which is where ADR-027's batching gains the most. The same code is summarized once across repos.
+**Better:**
+- One copy of each model on the card, however many projects or sessions are open.
+- Summaries batch across projects, which is where ADR-027's batching gains the most.
+- Identical texts are summarized once per run.
+- A search is never stuck behind a whole summary pass, only behind one batch.
 
-**Worse:** a long-running local service, with a lifecycle, a port, a token, and failure modes the per-process design does not have. Index freshness now has two parts, embedded and summarized, and both need to be visible. Debugging a slow search can now mean looking at another process.
+**Worse:**
+- A long-running local service, with a lifecycle, a port, a token, and failure modes the per-process design does not have.
+- The summarizer loses its own crash isolation inside the host. A native crash takes the host down with it, and every client falls back until the next start.
+- Debugging a slow search can now mean looking at another process.
+- The host takes the config of whichever project started it. Projects configured with different models cannot share it, and they fall back to in-process, with one log line saying so.
 
-**Neutral:** with `[model_host].enabled = false` the indexer behaves as it does today, which keeps CI, CPU-only machines, and single-project use unchanged.
+**Neutral:** with `[model_host].enabled = false` the indexer behaves as it does today. CI, CPU-only machines and single-project use are unchanged.
 
 ## Alternatives Considered
 
 | Option | Why rejected |
 |--------|-------------|
-| Keep per-process models, add a machine-wide GPU lock file | Serializes GPU use but still loads one embedder per process, so two projects still do not fit. No batching across projects and no shared cache. |
-| An existing serving runtime (Ollama, TEI, vLLM) as the host | A second inference stack. TEI and vLLM have no native Windows support, and none of them handle our summary queue, cache, or swap policy, which is most of the value. Possible later as the engine inside the host. |
-| Embed on the CPU and keep the GPU for summaries | A full index would go back to CPU embedding speeds, which is the thing that made this machine's GPU worth fixing. |
+| Keep per-process models, add a machine-wide GPU lock file | Serializes GPU use, but still loads one embedder per process, so two projects still do not fit. No batching across projects. |
+| Keep both models resident together | Fits only at summarizer batch size 1 (stage 9), with the card at its limit and early paging. Gives up batching's speed-up to save a swap of a few seconds. |
+| A fixed summary window instead of preemption | A search could wait a full window. Preemption limits the wait to one batch and needs no tuning setting. |
+| A CPU copy of the embedder for searches during a summary run | Several GB of RAM, 0.2 to 2.7 s per query on this CPU, and vectors from a different device and dtype. |
+| Named pipe instead of HTTP | No port held, but more code and harder to test by hand. |
+| An existing serving runtime (Ollama, TEI, vLLM) as the host | A second inference stack. TEI and vLLM have no native Windows support. None of them handle our summary queue or swap policy, which is most of the value. Possible later as the engine inside the host. |
+| Embed on the CPU and keep the GPU for summaries | A full index would go back to CPU embedding speed: about 32 min instead of about 1.5 on this repository. |
 | One daemon that indexes every project itself | Moves index ownership out of each project and duplicates the MCP server's work. The host only needs the models. |
 
 ## Verification
 
-To be completed once the open questions are settled. At minimum:
-
-1. Two projects watched and one search session each, on the GPU: only one embedder resident, measured with `nvidia-smi` and the WDDM shared-usage counter.
-2. A save in each project: search reflects the change within a few seconds, and pending summaries drain to zero.
-3. Swap mode, if chosen: a search during a window returns within the chosen bound.
-4. Host unreachable: the client falls back to in-process and logs it, and the index still completes.
-5. The token is required: a request without it is rejected.
+1. Two projects watched and one search session each, on the GPU: at most one embedder resident, measured with `nvidia-smi` and the WDDM shared-usage counter.
+2. A save in each project: the index completes through the host, and `status` shows both projects' summaries drain to zero.
+3. A search during a summary run returns within one batch plus a swap. The bound comes from the gaps table.
+4. Host unreachable: the client falls back to in-process, prints one line, and the index still completes. `tests/test_model_host.py` covers this with a host that never starts. Killing a real host mid-run is still to do.
+5. The token is required: a request without it gets a 401. Covered by `tests/test_model_host.py`.
+6. Retrieval through the host matches in-process on the real-repo eval. The vectors should be identical, since the same loader runs.
 
 ## Implementation Log
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
 - [x] **Gate:** record the stage-9 single-pass fit result here and settle open question 1 (see Notes)
-- [ ] **Gate:** record ADR-027's full-pass throughput (stage 7) and the measured model swap cost; settle open question 2
-- [ ] Settle open questions 3 to 5
-- [ ] Implementation tasks, to be written once the gates are cleared
+- [x] Settle open questions 3 to 5 (grill, 2026-09-24): preempt at the batch boundary, HTTP on loopback, no watching for other GPU users. §4 and §5 split out.
+- [x] `should_yield` hook in `run_adaptive_batches` and `_worker_summarize`, and `BatchStats.yielded`
+- [x] `src/model_host.py`: `HostScheduler`, `TorchBackend`, HTTP server, token, lock, `host.json`
+- [x] `src/model_client.py`: drop-ins, spawn, fallback, model check, `HostSummarizer`
+- [x] Callers switched: `hybrid_retriever.py` (`embed`), `incremental_indexer.py` (`embed_batch`, `make_summarizer`)
+- [x] `[model_host]` config (`enabled`, `embed_idle_s`, `idle_exit_s`, `spawn_timeout_s`) and the drift test
+- [x] `tests/test_model_host.py`: policy with a fake backend and clock, HTTP with the token, client fallback and model check. Suite: 346 passed, plus the 6 snapshot failures that were already failing.
+- [ ] **Gate:** bf16 embedder landed (its own branch)
+- [ ] First real run on the GPU: fill the gaps table (load times, memory after unload, pass 1 through the host)
+- [ ] Per-batch timing in `BatchStats` (the longest batch's seconds), for the preemption bound
+- [ ] Watchdog: confirm the MCP server's save path goes through the client end to end. It calls `run_incremental`, so it should.
+- [ ] `index_status` shows the host's view for its project
+- [ ] Reranker through the host
+- [ ] MCP Inspector run on the MCP server with the host enabled (the global CLAUDE.md rule for a changed MCP server)
+- [ ] Verification 1 to 6
 - [ ] Set status to `accepted` in the PR
 
 **Notes:**
-<!-- 2026-09-24: Written before the stage-9 result. Nothing is to be built until the gates above are recorded. -->
 
 - 2026-09-24, **stage 9, single-pass fit probe** (`master` at 18a7059, summarizer at batch size 1 through the pipeline, embedder bf16 via the stress-kit patch): both models loaded together and a 73-chunk embed batch completed. Dedicated memory reached 7,862 MiB of 8,151, and shared usage went from 64 to 128 MiB, under the 512 MiB abort line. So they fit, with about 290 MiB to spare, and only with the summarizer at batch size 1. With ADR-027 batching the summarizer peaked at 4.76 GB on its own, which with the embedder comes to about 8.7 GB, and it would also leave no room for ADR-027's 1 GB reserve.
 - 2026-09-24, stage 9 over its full 10 min: with both models loaded, dedicated memory stayed pinned at 7,843 MiB while shared usage kept jumping between 64 and 384 MiB and back. That is the early shape of WDDM paging, short spills that return. It never crossed the 512 MiB abort line, but the card was at its limit the whole time. No PCIe replays, no WHEA events. Telemetry: `gpu-crash-repro/telemetry/stress_20260924_155718`.
 - 2026-09-24, **decision (@edb):** do not keep the models resident together. Load each on demand and unload it when its queue is empty (§3). Resident mode would give up batching's measured 3.03 times speed-up to save a swap of a few seconds, and it would leave nothing on the card for the desktop or a burst of searches.
+- 2026-09-24, **grill (@edb):** building now.
+  - A search that arrives during a summary run preempts it at the next batch boundary, which removes `summary_window_s`.
+  - HTTP on loopback.
+  - The shared cache (§4) and the save path (§5) go to a follow-up ADR, so this one can be reverted on its own.
+  - The branch was first rebased onto ADR-027's token-budget tip (64a38be).
+- 2026-09-24, **deviation:** the summarizer runs inside the host process instead of a child process. The child existed to protect the indexer from a native crash, and the host process now provides that protection. Running in-process also allows a batch-boundary yield without a second protocol between the host and a worker.
+- 2026-09-24, **stage 7 on the token budget** (ADR-027 at 64a38be): pass 1 975.5 s for 1,496 distinct texts, largest batch 48, 0 OOM, peak 5,898 MiB, no paging (shared usage flat at 64 MiB). That is only 5% faster than cross-file (1,030 s).
+  - From 19:26 to the end, the card sat in P4 at about 1,200 MHz and 30 W while reporting 95% utilization. That looks like the short-chunk tail being limited by kernel launches rather than by the GPU.
+  - Not investigated yet. It belongs in ADR-027's log. It matters here only because it sets how long the host's summary runs take.
