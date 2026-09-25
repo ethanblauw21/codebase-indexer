@@ -317,7 +317,7 @@ def git_change_times(repo_path: str) -> dict[str, tuple[str, str]]:
     try:
         out = subprocess.check_output(
             ["git", "log", "--format=@@@%cI|%aI", "--name-only", "--no-merges"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return {}
@@ -344,7 +344,7 @@ def git_dirty_paths(repo_path: str) -> set[str]:
     try:
         out = subprocess.check_output(
             ["git", "diff", "--name-only", "HEAD"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return set()
@@ -356,7 +356,7 @@ def git_head_commit(repo_path: str) -> Optional[str]:
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.SubprocessError):
         return None

@@ -68,4 +68,5 @@ whether to merge them instead.
 - [x] `tests/test_ghost_vectors.py` (the pre-fix ingest gives 3 tier-1 vectors for 2 rows)
 - [ ] Carry the dedupe into ADR-030's summary index (its `add_with_ids` for `summary.faiss`)
 - [ ] Rebuild the three eval indexes and re-measure ADR-030 `none` and `store`
-- [ ] MCP Inspector run of `index_status`
+- [x] MCP Inspector: `tools/list --strict` exits 0; `index_status` returns the per-tier check; a bad argument returns `isError: true`
+- [x] **Found on the way:** `index_status` never answered over stdio on Windows, on `master` too (Inspector timed out at 60 s; the same function called directly takes 0.1 s). Its `git` subprocesses inherited the MCP stdin pipe. All seven `git` calls in `MCPServer.py` and `incremental_indexer.py` now pass `stdin=subprocess.DEVNULL`; `reindex` had the same calls.

@@ -1234,12 +1234,12 @@ def reindex(changed_files_only: bool = False) -> str:
         if _last_hash:
             try:
                 _curr_hash = subprocess.check_output(
-                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
                 ).strip()
                 if _last_hash != _curr_hash:
                     _changed = subprocess.check_output(
                         ["git", "diff", "--name-only", _last_hash, "HEAD"],
-                        text=True, stderr=subprocess.DEVNULL
+                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
                     ).strip()
                     if _changed:
                         _stale_warning = (
@@ -1393,7 +1393,7 @@ def index_status(since: str = "1d") -> str:
     if last_commit:
         try:
             curr = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
             ).strip()
             if curr == last_commit:
                 lines.append(f"last_indexed_commit: {last_commit[:8]} (== HEAD; index current)")
@@ -1404,7 +1404,7 @@ def index_status(since: str = "1d") -> str:
                 try:
                     diverged = subprocess.check_output(
                         ["git", "diff", "--name-only", last_commit, "HEAD"],
-                        text=True, stderr=subprocess.DEVNULL,
+                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                     ).strip()
                     for f in diverged.splitlines():
                         if f:
