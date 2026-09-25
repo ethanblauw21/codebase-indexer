@@ -147,21 +147,6 @@ def skeleton_with_lines(
     return text, line_map[:n_lines]
 
 
-def class_header(node: Node, src: bytes) -> str:
-    """The class declaration up to its body, without decorators or doc: `class A<T> extends B`.
-
-    Repeated at the top of every split part of an oversized skeleton (ADR-034 §5).
-    """
-    class_body = next(
-        (c for c in node.children if c.type in ("class_body", "block", "statement_block")),
-        None,
-    )
-    start = next((c.start_byte for c in node.children if c.type not in ("decorator", "comment")),
-                 node.start_byte)
-    end = class_body.start_byte if class_body is not None else node.end_byte
-    return " ".join(src[start:end].decode("utf-8", errors="replace").split())
-
-
 def merge_adjacent_same_fqn(symbols: list, impl_rank, merge_top_level: bool = False) -> list[tuple]:
     """Merge consecutive class members that share an FQN into one symbol (ADR-034 §3).
 

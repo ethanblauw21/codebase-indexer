@@ -166,7 +166,7 @@ def chunk_file_ast(
         if jina_tokenizer.count_tokens(rich_text) > max_tokens:
             sub = fallback_token_chunker(
                 sym.text, file_path, max_tokens, overlap, parent_scope=sym.fqn,
-                header=sym.header, line_map=sym.line_map,
+                line_map=sym.line_map,
             )
             if sub:
                 sub[0].edges   = sym_edges
@@ -198,20 +198,18 @@ def fallback_token_chunker(
     max_tokens: int = 1000,
     overlap: int = 100,
     parent_scope: str = "Global",
-    header: Optional[str] = None,
     line_map: Optional[list[int]] = None,
 ) -> list[Chunk]:
     """
     Token-based line chunker with a monster-line shredder for huge inlined blobs.
 
-    For a split class skeleton (ADR-034 §5), `header` is the class declaration, repeated atop
-    every part after the first, and `line_map` gives the source line of each line of `text`,
-    so each part records the source lines it covers.
+    For a split class skeleton (ADR-034 §5), `line_map` gives the source line of each line of
+    `text`, so each part records the source lines it covers. The class declaration is not
+    repeated atop later parts: measured in ADR-034 arm 4, it made the parts alike and cost
+    retrieval on every query set.
     """
     lines = text.split("\n")
     header_template = f"File: {file_path}\nScope: {parent_scope} (Part X)\nCode:\n"
-    if header:
-        header_template += header + "\n"
     header_tokens = jina_tokenizer.count_tokens(header_template)
     safe_max = max(1, max_tokens - header_tokens)
 
@@ -264,8 +262,6 @@ def fallback_token_chunker(
     total = len(raw_chunks)
     result: list[Chunk] = []
     for idx, code in enumerate(raw_chunks):
-        if header and idx > 0:
-            code = f"{header}\n{code}"
         rich_text = (
             f"File: {file_path}\n"
             f"Scope: {parent_scope} (Part {idx + 1}/{total})\n"

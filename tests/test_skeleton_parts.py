@@ -1,4 +1,4 @@
-"""ADR-034 §5: split class skeleton parts carry the class header and their source lines."""
+"""ADR-034 §5: split class skeleton parts record the source lines they cover."""
 from ast_chunker import chunk_file_ast
 
 _FIELDS = "\n".join(
@@ -19,13 +19,12 @@ def _parts():
     return [c for c in chunk_file_ast("big.ts", TS) if c.scope.startswith("big.ts::Big_part_")]
 
 
-def test_later_parts_repeat_the_class_header_without_decorators():
+def test_later_parts_do_not_repeat_the_class_header():
+    """Measured and rejected in ADR-034 arm 4: a repeated header made the parts alike."""
     parts = _parts()
     assert len(parts) > 1
-    header = "class Big<T> extends Base<T> implements Thing"
     for p in parts[1:]:
-        assert p.text.split("Code:\n", 1)[1].startswith(header + "\n")
-    assert "@decorated" not in parts[1].text
+        assert not p.text.split("Code:\n", 1)[1].startswith("class Big")
 
 
 def test_parts_record_the_source_lines_they_cover():
@@ -33,7 +32,6 @@ def test_parts_record_the_source_lines_they_cover():
     for p in _parts():
         assert 0 < p.start_line <= p.end_line
         code = p.text.split("Code:\n", 1)[1].split("\n")
-        body = code[1:] if p.scope != "big.ts::Big_part_1" else code
-        # The first and last body lines are the source lines the part claims.
-        assert body[0].strip() in lines[p.start_line - 1]
-        assert body[-1].strip() in lines[p.end_line - 1]
+        # The first and last lines of the part are the source lines it claims.
+        assert code[0].strip() in lines[p.start_line - 1]
+        assert code[-1].strip() in lines[p.end_line - 1]

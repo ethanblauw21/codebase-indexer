@@ -10,7 +10,7 @@ import tree_sitter_python as tspython
 
 from adapters.base import Edge, ParseResult, Reference, Symbol, TestConventions, build_fqn
 from adapters._treesitter import (
-    class_header, merge_adjacent_same_fqn, node_text, run_query, skeleton_with_lines,
+    merge_adjacent_same_fqn, node_text, run_query, skeleton_with_lines,
 )
 from category_tagger import tag_symbol
 
@@ -129,7 +129,6 @@ class PythonAdapter:
                     )
                     sym.text, sym.line_map = skeleton_with_lines(
                         node, src, {"function_definition", "decorated_definition"})
-                    sym.header = class_header(node, src)
                     symbols.append(sym)
                     # Inheritance: `class Dog(Animal, base.Mixin):` -> extends edges.
                     # The superclass list is an `argument_list` child; each positional
