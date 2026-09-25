@@ -656,6 +656,16 @@ Measure on the file-level set, where 7 of the 15 gold files are tests or benchma
 fusion weight is ruled out, because it trades file questions against symbol ones (ADR-030
 Verification 3).
 
+**Measured 2026-09-25, on clean indexes (ADR-030 Verification 5, 40 file questions):**
+- **The 512-token window is not the limit.** Embedding tier-2/3 slices with a 4,096-token window
+  changed whole-file MRR by +0.001. The title's premise is wrong. Summaries are what carry
+  file-level retrieval (whole 0.259 → 0.500 with them).
+- **BM25 is a lead.** Convex BM25 fusion lifts whole-file MRR by +0.30 without summaries and
+  +0.13 with them, but costs symbol questions 0.12 to 0.28. A file-level-only sparse signal, or
+  routing by query type, may beat a new chunk shape.
+- `file_chunk_weight` 0.75 still trades +0.03 to +0.04 on symbol questions for −0.28 on file
+  whole, so the trade is confirmed with 40 file questions.
+
 **Depends on:** B-026 Stage 1 shipped and gated, with its numbers as the baseline, and B-029.
 Related: B-010.
 
