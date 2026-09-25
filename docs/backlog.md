@@ -48,7 +48,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
 | [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | Stage 1 promoted → ADR-034 |
 | [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L | raw |
-| [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | shaped · **do first** |
+| [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
 | [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | shaped |
 | [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | shaped |
 | [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
@@ -712,7 +712,7 @@ Related: B-010.
 
 ### B-028 — Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has
 
-**Source:** jury review of B-026, confirmed by counting, 2026-09-25 · **Status:** shaped · **Size:** S · **Do first** · line numbers at `feature/adr-030-summary-index` e1e9491
+**Source:** jury review of B-026, confirmed by counting, 2026-09-25 · **Status:** promoted → [ADR-031](adr/ADR-031-one-vector-per-chunk-row.md) · **Size:** S · **Do first** · line numbers at `feature/adr-030-summary-index` e1e9491
 
 Ingest adds one vector per chunk with `add_with_ids` and does not dedupe ids
 (`incremental_indexer.py:665`, and `:673` for the summary index). `IndexIDMap` accepts duplicate

@@ -317,7 +317,7 @@ def git_change_times(repo_path: str) -> dict[str, tuple[str, str]]:
     try:
         out = subprocess.check_output(
             ["git", "log", "--format=@@@%cI|%aI", "--name-only", "--no-merges"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return {}
@@ -344,7 +344,7 @@ def git_dirty_paths(repo_path: str) -> set[str]:
     try:
         out = subprocess.check_output(
             ["git", "diff", "--name-only", "HEAD"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return set()
@@ -356,7 +356,7 @@ def git_head_commit(repo_path: str) -> Optional[str]:
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.SubprocessError):
         return None
@@ -523,6 +523,16 @@ def ingest_project_file(
 # Single-file ingest: parse → chunk → embed → add_with_ids → SQLite upsert
 # ---------------------------------------------------------------------------
 
+def dedupe_chunks_by_scope(chunks: list) -> list:
+    """Keep one chunk per scope: the last, which is the row `INSERT OR REPLACE` keeps.
+
+    The kept chunk stays where the last occurrence was, so order otherwise follows
+    the chunker's.
+    """
+    last = {chunk.scope: i for i, chunk in enumerate(chunks)}
+    return [chunk for i, chunk in enumerate(chunks) if last[chunk.scope] == i]
+
+
 def ingest_file(
     rel_path:      str,
     content:       str,
@@ -551,6 +561,16 @@ def ingest_file(
             tier_chunks[tier_name] = fallback_token_chunker(
                 content, rel_path, max_tokens, overlap, parent_scope="Full File"
             )
+    # B-028: two symbols can share a scope (a getter/setter pair, an overload set, a
+    # redeclared test helper). They share a stable id, and SQLite keeps only the last
+    # row per (file, scope, tier), so embedding both would leave a FAISS vector whose
+    # text belongs to the other symbol.
+    for tier_name, chunks in tier_chunks.items():
+        kept = dedupe_chunks_by_scope(chunks)
+        if len(kept) != len(chunks):
+            print(f"  [ingest:{rel_path}] {tier_name}: dropped "
+                  f"{len(chunks) - len(kept)} chunk(s) with a duplicate scope", flush=True)
+            tier_chunks[tier_name] = kept
     print(f"  [ingest:{rel_path}] chunks: " +
           " | ".join(f"{n}={len(c)}" for n, c in tier_chunks.items()), flush=True)
 

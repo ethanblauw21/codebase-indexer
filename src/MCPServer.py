@@ -1234,12 +1234,12 @@ def reindex(changed_files_only: bool = False) -> str:
         if _last_hash:
             try:
                 _curr_hash = subprocess.check_output(
-                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
                 ).strip()
                 if _last_hash != _curr_hash:
                     _changed = subprocess.check_output(
                         ["git", "diff", "--name-only", _last_hash, "HEAD"],
-                        text=True, stderr=subprocess.DEVNULL
+                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
                     ).strip()
                     if _changed:
                         _stale_warning = (
@@ -1393,7 +1393,7 @@ def index_status(since: str = "1d") -> str:
     if last_commit:
         try:
             curr = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
             ).strip()
             if curr == last_commit:
                 lines.append(f"last_indexed_commit: {last_commit[:8]} (== HEAD; index current)")
@@ -1404,7 +1404,7 @@ def index_status(since: str = "1d") -> str:
                 try:
                     diverged = subprocess.check_output(
                         ["git", "diff", "--name-only", last_commit, "HEAD"],
-                        text=True, stderr=subprocess.DEVNULL,
+                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                     ).strip()
                     for f in diverged.splitlines():
                         if f:
@@ -1417,6 +1417,24 @@ def index_status(since: str = "1d") -> str:
             )
     else:
         lines.append("last_indexed_commit: (none recorded)")
+
+    # B-028: each FAISS index must hold exactly one vector per chunk row. A surplus
+    # means vectors whose text the database has since replaced; only a rebuild
+    # removes them.
+    _ensure_indexes()
+    with CodeDB(db_path) as db:
+        row_counts = dict(db._conn.execute(
+            "SELECT tier, COUNT(*) FROM chunks GROUP BY tier"
+        ).fetchall())
+    for tier_num, idx in ((1, t1_index), (2, t2_index), (3, t3_index)):
+        rows_n = row_counts.get(tier_num, 0)
+        if idx.ntotal == rows_n:
+            lines.append(f"tier{tier_num}_vectors:       {idx.ntotal} (== chunk rows)")
+        else:
+            lines.append(
+                f"tier{tier_num}_vectors:       {idx.ntotal}  chunk rows: {rows_n}  "
+                "⚠️ MISMATCH — rebuild the index"
+            )
 
     lines.append(f"\nfiles with content changed since {cutoff}  ({len(rows)}):")
     if rows:
