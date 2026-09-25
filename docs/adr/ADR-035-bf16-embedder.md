@@ -70,7 +70,7 @@ Verification 1 measures what that costs, and the log records it.
 - [x] `[embeddings].dtype` in `indexer.toml`, and the drift test
 - [x] Tests (`tests/test_embed_dtype.py`): auto picks bf16 on CUDA with support, fp32 on CPU and without support; explicit values; a bad value raises. Suite: 316 passed
 - [x] Verification 1 (GPU): see notes
-- [ ] MCP Inspector: the server starts and `semantic_code_search` answers with the bf16 embedder
+- [x] MCP Inspector: see notes
 - [ ] Resolve **Depended on by**: confirm to ADR-028 that its gate is met
 
 **Notes:**
@@ -98,3 +98,17 @@ Verification 1 measures what that costs, and the log records it.
 - **Gotcha:** in this Git Bash shell, `CUDA_VISIBLE_DEVICES=` (an empty value) left
   `torch.cuda.device_count()` at 0 while `is_available()` said True. `env -u CUDA_VISIBLE_DEVICES`
   exposes the card. The user-scope `-1` is unchanged.
+
+**2026-09-25, MCP Inspector** (`gpu-crash-repro/telemetry/inspector_035/`).
+- **Setup:** the server ran as shipped on this branch, with no embedder patch, against a scratch copy
+  of p-queue. The wrapper only sets the working directory and unsets `CUDA_VISIBLE_DEVICES`.
+- **Results:**
+  - `tools/list --strict` exits 0 with 13 tools.
+  - `semantic_code_search("pause the queue so no new tasks start")` answers with `PQueue.pause` first
+    (`isError: false`).
+  - Calling it without `query` returns `isError: true` (exit 5).
+- **`index_status` timed out after 60 s.** That is the stdio hang ADR-031 found and fixed (887fb3c:
+  `git` subprocesses inherited the MCP stdin pipe). It happens on `master` too, and this branch is cut
+  from `master`. It is not related to this ADR.
+- **The server does not log the load line to stderr.** So the dtype is shown by Verification 1's
+  production-path load (`dtype=torch.bfloat16`, 2,944 MiB), not by this run.
