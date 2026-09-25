@@ -34,9 +34,15 @@ Search already fuses the three tier indexes by RRF over FAISS ids (`HybridRetrie
 - Stale removal needs no new code. `purge_stale_vectors` already calls `remove_ids` on every index in the dict, and a chunk's id is the same in both.
 - Summaries are embedded in pass 2 with the code, per file and tier, so pass 2 does one more small embed per tier. Summaries are short, so the cost is expected to be small next to the code embed; see the gaps table.
 
-### §3. Search fuses it as one more RRF list
+### §3. Search fuses it with the finished ranking
 
-`_semantic_search` searches `summary.faiss` with the same query vector and adds `summary_weight / (k + rank)` to each id's fused score, next to the three tier lists. `[retrieval].summary_weight` defaults to 1.0 (settled 2026-09-25, @edb: 1.0 measured better on intent queries, 0.606 against 0.582 at 0.5). With the index missing or empty, search behaves exactly as it does today.
+`retrieve()` runs the whole pipeline as today (semantic search, graph expansion, final scoring) to a depth of 30. It then fuses that ranking by RRF with the top 30 of `summary.faiss` for the same query, in `_fuse_summaries`, and cuts the result to `top_n`.
+- A summary hit shares its chunk's id, so it lifts that chunk.
+- A chunk found only through its summary joins the list with `source = "summary"`.
+- `[retrieval].summary_weight` defaults to 0.5.
+- With the index missing or empty, or the weight at 0, `retrieve()` makes exactly today's calls.
+
+This replaced the first design, which added the summary list inside `_semantic_search`. That failed Verification 1; see the Notes.
 
 ### §4. Which tiers are summarized
 
@@ -54,10 +60,10 @@ An index built before this ADR has summaries appended inside its code vectors an
 
 | Value | Why | Source | Result |
 |---|---|---|---|
-| MRR@10 of a real build with this branch, both query sets | that the offline result holds through the real indexer and retriever | retrieval stages, variant `store` | _gap_ (offline: 0.613 / 0.606) |
-| Pass-2 time with summary embeds, this repository | the cost of §2 | stage 7 on this branch | _gap_ (today: 98 s) |
+| MRR@10 of a real build with this branch, both query sets | that the offline result holds through the real indexer and retriever | retrieval stages, variant `store` | **0.531 / 0.556** against 0.443 / 0.436 without summaries (see Notes) |
+| Pass-2 time with summary embeds, this repository | the cost of §2 | stage 7 on this branch | _gap_ (today: 98 s; on click, 106 s against 77 s without summaries) |
 | Tier-2/3 summaries: do they help find the right file | whether §4's default earns its GPU time | file-level query set, tiers [1] against [1, 2, 3] | _gap_ |
-| `summary_weight` on a third query set | 1.0 against 0.5 was split between the two sets | later | _gap_ |
+| `summary_weight` on a third query set | 0.5 won on both sets through the real build, but only narrowly on the original one | later | _gap_ |
 
 ## Consequences
 
@@ -98,18 +104,29 @@ An index built before this ADR has summaries appended inside its code vectors an
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] B-025 in `docs/backlog.md`
-- [ ] §1 code-only embeds in `ingest_file`
-- [ ] §2 `summary.faiss`: build in pass 2, loaded and saved with the tiers, stale removal
-- [ ] §3 fusion in `_semantic_search`, `[retrieval].summary_weight`
-- [ ] §4 `[summarization].tiers`, honored in pass 1 and pass 2
-- [ ] §5 `index_meta.embed_layout` and the re-index line
-- [ ] §6 `[summarization].enabled = true`
-- [ ] Config drift test for the new keys; unit tests
-- [ ] Verification 1 (retrieval stages, variant `store`)
+- [x] B-025 in `docs/backlog.md`
+- [x] §1 code-only embeds in `ingest_file`
+- [x] §2 `summary.faiss`: build in pass 2, loaded and saved with the tiers, stale removal
+- [x] §3 fusion, moved to the end of `retrieve()` (see Notes), `[retrieval].summary_weight`
+- [x] §4 `[summarization].tiers`, honored in pass 1 and pass 2
+- [x] §5 `index_meta.embed_layout` and the re-index line
+- [x] §6 `[summarization].enabled = true` (already true on the ADR-027 base)
+- [x] Config drift test for the new keys; `tests/test_summary_index.py` (10 tests). Suite: 341 passed.
+- [x] Verification 1 (variant `store`)
 - [ ] Verification 2 to 5
 - [ ] Set status to `accepted` in the PR
 
 **Notes:**
 
 - 2026-09-25, **grill (@edb):** building now. Code vectors become code only, all three tiers stay summarized behind a knob with a file-level check to follow, and summary weight 1.0 behind a knob.
+- 2026-09-25, **Verification 1, first design: failed.** Variant `store`, built from this branch with the summary cache seeded from the `batched` build, so no summarizer ran. The build itself was correct: 375 summary adds, and `summary.faiss` next to the tiers. Pass 2 on click took 106 s against 77 s without summary vectors.
+  - Scores with the summary list inside `_semantic_search`: 0.429 on intent queries (none: 0.436) and 0.453 on the original set (none: 0.443). The offline gain did not appear.
+  - Cause: inside the semantic step, the summary list was one of four, and `_rerank`'s category boost (+0.12, against RRF scores of about 0.02) outweighed it wherever it applied. Raising the weight to 3.0 made it worse (0.408).
+  - `gpu-crash-repro/summary_fusion_diag.py` tried the fusion at the end of the pipeline on the same index instead: 0.564 / 0.550 at weight 0.5, and 0.531 / 0.548 at 1.0.
+- 2026-09-25, **deviation from the grill:** the fusion moved to the end of `retrieve()`, and `summary_weight` changed from 1.0 to 0.5. @edb chose 1.0 on the offline numbers, where it won on intent queries. Through the real build, 0.5 won on both sets. This is recorded here for @edb to overrule.
+- 2026-09-25, **Verification 1, final design: passed** (`retrieval/results_intent030.json`, `results_orig030.json`).
+  - Intent: 0.556 against 0.436 without summaries. The mean gain is +0.120 (95 percent interval +0.044 to +0.195), with 28 queries up and 9 down. Against appended batch-size-1 summaries it is +0.175.
+  - Original: 0.531 against 0.443, a gain of +0.088 (interval +0.015 to +0.160), with 34 up and 12 down.
+  - By repo, zustand and click gained on both sets. p-queue on the original set lost, 0.550 to 0.494, which is not looked into yet.
+  - The result is below the offline 0.61. The offline run merged split `_part_N` chunks by name before fusing, and a real build cannot do that without a schema change.
+

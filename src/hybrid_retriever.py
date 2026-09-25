@@ -90,9 +90,10 @@ _DEFAULT_RERANKER_ENABLED  = False
 _DEFAULT_FUSION_MODE       = "rrf"
 _DEFAULT_DENSE_WEIGHT      = 0.7
 _DEFAULT_SPARSE_WEIGHT     = 0.3
-# ADR-030: RRF weight of the summary index next to the three code tiers.
-_DEFAULT_SUMMARY_WEIGHT    = 1.0
+# ADR-030: RRF weight of the summary ranking against the finished code ranking.
+_DEFAULT_SUMMARY_WEIGHT    = 0.5
 _SUMMARY_INDEX_NAME        = "summary"
+_SUMMARY_FUSE_DEPTH        = 30   # candidates from each side of the final fusion
 
 # ---------------------------------------------------------------------------
 # Return type
@@ -107,7 +108,7 @@ class RetrievedChunk:
     scope: str         # FQN for tier-1 AST chunks (contains "::"); positional label otherwise
     tier: str
     text: str
-    source: str        # "semantic" | "structural"
+    source: str        # "semantic" | "structural" | "summary" (found only through its summary, ADR-030)
     tags: list[str] = field(default_factory=list)
     corroborated: bool = True   # False when a CALLS edge lacks import-graph backing
 
@@ -295,13 +296,61 @@ class HybridRetriever:
         padding. Default calls are byte-for-byte unchanged (ADR-023 §1).
         """
         self._import_cache.clear()
-        semantic_hits = self._semantic_search(query, k=max(_SEMANTIC_K, top_n))
+        use_summaries = (self._summary is not None and self._summary.ntotal > 0
+                         and self._summary_weight > 0)
+        depth = max(top_n, _SUMMARY_FUSE_DEPTH) if use_summaries else top_n
+        semantic_hits = self._semantic_search(query, k=max(_SEMANTIC_K, depth))
         pool = (
-            self._expand_structurally_budgeted(semantic_hits, top_n=top_n)
+            self._expand_structurally_budgeted(semantic_hits, top_n=depth)
             if self._graph_enabled
             else semantic_hits
         )
-        return self._rerank(query, pool, top_n=top_n)
+        ranked = self._rerank(query, pool, top_n=depth)
+        if not use_summaries:
+            return ranked
+        return self._fuse_summaries(query, ranked, top_n)
+
+    def _fuse_summaries(self, query: str, ranked: list[RetrievedChunk],
+                        top_n: int) -> list[RetrievedChunk]:
+        """ADR-030: RRF of the finished ranking with a ranking of the summary index.
+
+        Fused at the end, not inside the semantic step. Inside it, the summary list
+        was one of four and the category boost (+0.12 against RRF scores of ~0.02)
+        drowned it: MRR@10 0.429 against 0.436 without summaries on intent queries.
+        At the end, with weight 0.5, it measured 0.564 (2026-09-25). A summary hit
+        shares its chunk's id, so it lifts that chunk; a chunk found only through
+        its summary joins the list.
+        """
+        vec = np.array([embed(query)], dtype=np.float32)
+        faiss.normalize_L2(vec)
+        _, ids = self._summary.search(vec, min(_SUMMARY_FUSE_DEPTH, self._summary.ntotal))
+        summary_ids = [int(i) for i in ids[0] if i != -1]
+
+        score: dict[int, float] = {}
+        for rank, chunk in enumerate(ranked):
+            score[chunk.faiss_id] = score.get(chunk.faiss_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+        for rank, fid in enumerate(summary_ids):
+            score[fid] = score.get(fid, 0.0) + self._summary_weight / (_RRF_K + rank + 1)
+
+        by_id = {c.faiss_id: c for c in ranked}
+        out: list[RetrievedChunk] = []
+        for fid in sorted(score, key=score.get, reverse=True):
+            chunk = by_id.get(fid)
+            if chunk is None:
+                meta = self._doc_store.get(fid)
+                if meta is None:
+                    continue
+                chunk = RetrievedChunk(
+                    faiss_id=fid, score=0.0, file=meta.get("file", ""),
+                    scope=meta.get("scope", ""), tier=meta.get("tier", _TIER1_NAME),
+                    text=meta.get("text", ""), source="summary",
+                    tags=meta.get("tags") or [], corroborated=True,
+                )
+            chunk.score = score[fid]
+            out.append(chunk)
+            if len(out) == top_n:
+                break
+        return out
 
     # ------------------------------------------------------------------
     # Step 1 — Semantic retrieval (multi-tier RRF)
@@ -332,17 +381,6 @@ class HybridRetriever:
                     continue
                 fid = int(fid)
                 fused[fid] = fused.get(fid, 0.0) + 1.0 / (_RRF_K + rank)
-
-        # ADR-030: the summary index shares its chunks' ids, so a summary hit adds
-        # to that chunk's code score. The three code tiers can never do that for
-        # each other, because the tier is part of the id (B-011).
-        if self._summary is not None and self._summary.ntotal and self._summary_weight > 0:
-            _, ids = self._summary.search(vec, min(k, self._summary.ntotal))
-            for rank, fid in enumerate(ids[0]):
-                if fid == -1:
-                    continue
-                fid = int(fid)
-                fused[fid] = fused.get(fid, 0.0) + self._summary_weight / (_RRF_K + rank)
 
         if not fused:
             return []

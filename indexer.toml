@@ -100,10 +100,11 @@ fusion_mode = "rrf"
 dense_weight = 0.7
 sparse_weight = 0.3
 
-# ADR-030: RRF weight of the summary index next to the three code tiers. Summaries
-# have their own vectors under their chunk's id; 0 turns them off at search time.
-# 1.0 measured 0.606 MRR@10 on intent queries against 0.582 at 0.5 (2026-09-25).
-summary_weight = 1.0
+# ADR-030: summaries have their own index, and its ranking is fused by RRF with the
+# finished code ranking, at this weight; 0 turns summaries off at search time.
+# Measured 2026-09-25 through a real build: 0.5 gave MRR@10 0.550 / 0.564 on the
+# original / intent queries, 1.0 gave 0.548 / 0.531, no summaries 0.443 / 0.436.
+summary_weight = 0.5
 
 [summarization]
 # Set to false to skip LLM chunk summarization (faster indexing, lower recall).

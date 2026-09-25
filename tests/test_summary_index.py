@@ -120,32 +120,48 @@ def test_summarizer_tiers_config(tmp_path, monkeypatch):
 
 # ── search ──────────────────────────────────────────────────────────────────
 
-def test_a_summary_hit_lifts_its_chunk(tmp_path, embedded, monkeypatch):
-    """A chunk whose summary matches the query outranks one whose code matches slightly better."""
+def _retriever(monkeypatch, weight):
     import hybrid_retriever as hr
-
     q = np.zeros(DIM, dtype=np.float32); q[0] = 1.0
-    near_code = np.array([0.9, 0.44, 0, 0, 0, 0, 0, 0], dtype=np.float32)
-    far_code = np.array([0.8, 0.6, 0, 0, 0, 0, 0, 0], dtype=np.float32)
-
     r = hr.HybridRetriever.__new__(hr.HybridRetriever)
-    t1 = faiss.IndexIDMap(faiss.IndexFlatIP(DIM))
-    t1.add_with_ids(np.stack([near_code, far_code]), np.array([1, 2], dtype=np.int64))
-    empty = faiss.IndexIDMap(faiss.IndexFlatIP(DIM))
-    r._tier1, r._tier2, r._tier3 = t1, empty, empty
-    r._fusion_mode, r._bm25 = "rrf", None
     r._summary = faiss.IndexIDMap(faiss.IndexFlatIP(DIM))
-    r._summary.add_with_ids(q[None, :], np.array([2], dtype=np.int64))
-    r._summary_weight = 1.0
+    # chunk 3's summary matches the query best, then chunk 2's
+    r._summary.add_with_ids(np.stack([q, np.array([0.6, 0.8, 0, 0, 0, 0, 0, 0], np.float32)]),
+                            np.array([3, 2], dtype=np.int64))
+    r._summary_weight = weight
 
     class Store:
         def get(self, fid):
             return {"file": "f.py", "scope": f"f.py::s{fid}", "tier": "tier1_surgical", "text": ""}
     r._doc_store = Store()
     monkeypatch.setattr(hr, "embed", lambda text: q)
+    ranked = [hr.RetrievedChunk(faiss_id=i, score=1.0, file="f.py", scope=f"f.py::s{i}",
+                                tier="tier1_surgical", text="", source="semantic") for i in (1, 2)]
+    return r, ranked
 
-    assert [c.faiss_id for c in r._semantic_search("q", 10)] == [2, 1]
-    r._summary_weight = 0.0
-    assert [c.faiss_id for c in r._semantic_search("q", 10)] == [1, 2]
-    r._summary = None
-    assert [c.faiss_id for c in r._semantic_search("q", 10)] == [1, 2]
+
+def test_a_summary_hit_lifts_its_chunk_and_adds_a_summary_only_chunk(monkeypatch):
+    r, ranked = _retriever(monkeypatch, 1.0)
+    out = r._fuse_summaries("q", ranked, 10)
+    # 2 is in both lists; 1 is code-only at rank 1; 3 is summary-only at rank 1
+    assert [c.faiss_id for c in out][0] == 2
+    assert {c.faiss_id for c in out} == {1, 2, 3}
+    assert next(c for c in out if c.faiss_id == 3).source == "summary"
+
+
+def test_fusion_respects_top_n_and_a_low_weight_keeps_code_first(monkeypatch):
+    r, ranked = _retriever(monkeypatch, 0.5)
+    out = r._fuse_summaries("q", ranked, 2)
+    assert len(out) == 2 and out[0].faiss_id == 2
+
+
+def test_retrieve_skips_fusion_without_a_summary_index(monkeypatch):
+    import hybrid_retriever as hr
+    r = hr.HybridRetriever.__new__(hr.HybridRetriever)
+    r._summary, r._summary_weight, r._graph_enabled = None, 0.5, False
+    r._import_cache = {}
+    called = {}
+    monkeypatch.setattr(r, "_semantic_search", lambda q, k: called.setdefault("k", k) and [])
+    monkeypatch.setattr(r, "_rerank", lambda q, pool, top_n: called.setdefault("top_n", top_n) and [])
+    r.retrieve("q")
+    assert called == {"k": hr._SEMANTIC_K, "top_n": hr._RERANK_TOP_N}   # byte-for-byte today's call
