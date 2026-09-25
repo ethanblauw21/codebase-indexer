@@ -534,6 +534,46 @@ context with it.
   summary rebuild.
 - **Write down the rules below:** scope, merge, doc-move and gate.
 
+**Prerequisites measured, 2026-09-25** (pinned: `none031` / `store031`, ADR-030 + ADR-031 at
+`feature/adr-030-summary-index` 56ea132, arm B, shipped weights, bge-code-v1 bf16; script
+`pq_mechanism.py`, results `gpu-crash-repro/telemetry/retrieval/results_pq_mechanism.json`). The
+numbers at the top of this item carried ghost vectors; these replace them.
+- **Per-query baseline, 24 original p-queue queries:** MRR@10 0.555 without summaries, 0.554 with.
+  9 queries improve with summaries, 4 get worse (`pq-add` 11→12, `pq-running-tasks` 6→13,
+  `pq2-on-error` 1→9, `pq2-enqueue` 1→11), 10 stay at rank 1, and `pq-concurrency` is not found
+  by either.
+- **Probes** (tier-1 chunks of `index.ts` edited and re-embedded; summary vectors left as built;
+  skeleton parts stripped in place, not re-split):
+
+  | Probe | orig, no summaries | orig, summaries | intent (25), summaries | file (10) |
+  |---|---|---|---|---|
+  | as built | 0.555 | 0.554 | 0.619 | 0.883 |
+  | JSDoc removed from the skeleton | 0.587 | 0.578 | 0.634 | 0.883 |
+  | **+ each member's JSDoc in its own chunk** | **0.735** | **0.696** | **0.640** | 0.883 |
+  | + class declaration repeated in each member | 0.640 | 0.598 | 0.609 | 0.883 |
+  | getter and setter merged (alone) | 0.555 | 0.554 | 0.619 | 0.883 |
+
+- **Moving docs onto members is proven:** +0.18 and +0.14 on the original set. With summaries,
+  `pq-pause` goes 4→1, `pq-sizeby` 7→1, `pq2-is-rate-limited` 4→1, `pq-saturated` 2→1,
+  `pq2-on-pending-zero` 9→2 and `pq2-pending` 10→4. The skeleton shrank by 31% (11,545 → 7,996
+  characters).
+- **Do not embed a repeated class header.** It costs 0.10 against doc-move alone, because every
+  member then shares one long line. Stage 2's parent context stays display-only.
+- **Mechanism per losing query, and none of them is JSDoc:**
+  - `pq2-on-error` and `pq2-enqueue`: **fusion.** Each answer is rank 1 in the code list but
+    rank 40 or absent in the summary list (the query is one word, "enqueue", and the summary says
+    "adds a new item"). RRF sums credit, so chunks ranked moderately in *both* lists pass a
+    one-list rank 1. Doc-move leaves them at 10 and 10. This is a question for ADR-030's fusion
+    rule, not for chunk shape.
+  - `pq-concurrency`: **a vocabulary gap.** The answer is not in the top 50 in any probe. Neither
+    accessor has a doc comment; "limit how many tasks run at once" is written only in
+    `options.ts`. Merging the getter back changes nothing, so the accessor merge is correct
+    hygiene with no retrieval payoff here.
+  - `pq-running-tasks` (6→13) and `pq-add` (11→12): whole-file and `Global_part_N` chunks that
+    rank in both lists crowd them out. That is the same fusion effect, and part of B-027.
+- The measurement stays the same for Stage 1's real build, which re-summarizes the changed
+  chunks: the gate compares against these per-query ranks.
+
 **Stage 1: parser fixes** (TypeScript and Python adapters plus `ast_chunker.py`).
 - **Scope.** TypeScript and Python carry retrieval claims. C# and C++ are fixtures only: their
   forked skeletonizers keep docs inside the skeleton for now. Say so in the ADR, so the difference
