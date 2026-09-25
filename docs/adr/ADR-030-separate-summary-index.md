@@ -68,7 +68,7 @@ An index built before this ADR has summaries appended inside its code vectors an
 ## Consequences
 
 **Better:**
-- The measured +0.15 MRR on both query sets, the largest retrieval gain this project has recorded.
+- MRR@10 +0.120 on intent queries and +0.088 on the original set, measured through a real build with 95 percent intervals above zero. That is the largest retrieval gain this project has recorded.
 - Code vectors stop being pulled toward a summary's purpose, so body-level queries recover.
 - Tier-2 and tier-3 summaries become visible to search at all.
 - A summary can arrive after its chunk is embedded, as one added vector. That is the hard part of ADR-028 §5 done.
@@ -77,7 +77,7 @@ An index built before this ADR has summaries appended inside its code vectors an
 - A fourth index to keep consistent, and one more RRF list to reason about when ranking looks wrong.
 - Every existing index needs a full re-index to benefit, and until then it quietly keeps the old behavior. The warning line is the only signal.
 - Summarization goes back on by default, so a full index costs 16 minutes of GPU on this repository again, and much longer on CPU. The CPU case is already covered by the ADR-020 kill-switch and by `enabled = false`.
-- One weight measured on two query sets that disagreed about it.
+- One more setting (`summary_weight`), chosen on two query sets from the same three repos. p-queue got worse on the original set (0.550 to 0.494), and why is not known yet.
 
 **Neutral:** the summaries themselves, the summarizer, batching and the cache are unchanged.
 
