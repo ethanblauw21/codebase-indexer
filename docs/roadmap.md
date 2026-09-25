@@ -11,6 +11,34 @@ build kits in one document. It is now frozen; this file and `backlog.md` replace
 
 ---
 
+## Milestones (direction, for reference; added 2026-09-25)
+
+The three directions the project is heading in. They aren't scheduled; each points at what exists
+today and what would carry it further.
+
+1. **Language expansion stays gated by conformance.**
+   - A new language ships only once it scores against hand-authored extraction fixtures in
+     `tests/fixtures/conformance/` (ADR-008).
+   - Python, TypeScript, C# and C++ are covered today, and the four together cover a large share of
+     professional codebases.
+   - Depth before breadth: a language whose symbols and edges can't be shown correct doesn't get
+     indexed.
+2. **Test suites as first-class symbols** ([B-027](./backlog.md#b-027)).
+   - `describe`, `it` and `test` blocks become symbols in their own right.
+   - Today most test files have no named symbols at tier 1 and fall back to token slices
+     (`Global_part_N`). Test code is where plain AST parsers struggle most, so this is where the
+     indexer can do best.
+   - It also gives redeclared test helpers distinct names (B-026).
+3. **Graph-augmented retrieval.** Keep growing what the call-edge graph can answer.
+   - The graph tools today are `trace_data_flow`, `analyze_blast_radius`, `find_dead_code` and
+     `verify_candidate_edges`.
+   - Search already expands its candidates along call edges. That measured small but positive:
+     +0.015 on intent questions, +0.022 / +0.029 on file questions (ADR-030 Verification 5).
+   - Vector search joined with explicit call-graph traversal is what makes the MCP tools act like an
+     IDE assistant rather than a text search.
+
+---
+
 ## Where the work actually is (2026-07-27)
 
 **25 ADRs. 15 built, 10 never started.** The retrieval stack, the resolver and the measurement
