@@ -1,6 +1,6 @@
 # ADR-027: Summarizer Batching With a Self-Imposed GPU Memory Cap
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-24
 **Branch:** `feature/adr-027-summarizer-adaptive-batching` (cut from `fix/two-pass-summarization` at 5f03798)
 **Reviewer:** @edb
