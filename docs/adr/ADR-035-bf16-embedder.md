@@ -1,6 +1,6 @@
 # ADR-035: The Embedder Loads in bf16 on a GPU That Supports It
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-035-bf16-embedder`
 **Reviewer:** @edb
