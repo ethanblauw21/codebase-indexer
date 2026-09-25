@@ -79,7 +79,7 @@ import numpy as np
 
 from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
 from call_resolver import resolve_call_edges
-from config import summarization_enabled, summarizer_model_id
+from config import summarization_enabled, summarizer_model_id, summarizer_tiers
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
@@ -92,6 +92,12 @@ from stable_id import stable_id, to_faiss_ids, TIER_CONFIGS, TIER_NUM, TIER_NAME
 
 REPO_PATH = os.getcwd()
 INDEX_DIR = ".code-index"
+
+# ADR-030: summaries have their own FAISS index, keyed by their chunk's id, and the
+# code vectors hold code only. index_meta records the layout so an index built
+# before it (summaries appended to the code) can be told apart.
+SUMMARY_INDEX = "summary"
+EMBED_LAYOUT = "code+summary-index"
 DB_PATH   = f"{INDEX_DIR}/graph.db"
 
 # Summarization is config-driven (ADR-026): the gate is [summarization].enabled in
@@ -661,8 +667,10 @@ def ingest_file(
             print(f"  [ingest:{rel_path}] {tier_name}: no chunks, skipping", flush=True)
             continue
 
-        embed_texts = texts_to_embed
-        if summarizer is not None:
+        # ADR-030: code vectors are code only. Summaries get their own vectors in
+        # the summary index, under the chunk's id, added below.
+        summary_pairs: list[tuple[int, str]] = []
+        if summarizer is not None and TIER_NUM[tier_name] in summarizer_tiers():
             print(f"  [ingest:{rel_path}] {tier_name}: summarizing {len(texts_to_embed)} chunks...", flush=True)
             text_hashes = [chunk_text_hash(t) for t in texts_to_embed]
             cached = db.get_cached_summaries(text_hashes)
@@ -684,20 +692,17 @@ def ingest_file(
                         cached[text_hashes[i]] = s
             print(f"  [ingest:{rel_path}] {tier_name}: summarization done", flush=True)
 
-            embed_texts = []
-            for fid, original, h in zip(all_ids, texts_to_embed, text_hashes):
+            for fid, h in zip(all_ids, text_hashes):
                 summary = cached.get(h, "")
                 if summary:
-                    embed_texts.append(f"{original}\n\n# Summary\n{summary}")
+                    summary_pairs.append((fid, summary))
                     entry = doc_store.get(fid)
                     if entry is not None:
                         entry["summary"] = summary
-                else:
-                    embed_texts.append(original)
 
-        print(f"  [ingest:{rel_path}] {tier_name}: embedding {len(embed_texts)} texts...", flush=True)
+        print(f"  [ingest:{rel_path}] {tier_name}: embedding {len(texts_to_embed)} texts...", flush=True)
         from core import embed_batch
-        vec_matrix: np.ndarray = embed_batch(embed_texts)
+        vec_matrix: np.ndarray = embed_batch(texts_to_embed)
         print(f"  [ingest:{rel_path}] {tier_name}: embedding done, shape={vec_matrix.shape}", flush=True)
 
         faiss.normalize_L2(vec_matrix)
@@ -706,6 +711,14 @@ def ingest_file(
         faiss_idx.add_with_ids(vec_matrix, id_array)
         del vec_matrix, id_array  # FAISS copied the data; free embedding matrix per tier
         print(f"  [ingest:{rel_path}] {tier_name}: FAISS add done", flush=True)
+
+        summary_idx = faiss_indexes.get(SUMMARY_INDEX)
+        if summary_pairs and summary_idx is not None:
+            svecs: np.ndarray = embed_batch([s for _fid, s in summary_pairs])
+            faiss.normalize_L2(svecs)
+            summary_idx.add_with_ids(svecs, to_faiss_ids([fid for fid, _s in summary_pairs]))
+            del svecs
+            print(f"  [ingest:{rel_path}] {tier_name}: {len(summary_pairs)} summary vectors added", flush=True)
 
     print(f"  [ingest:{rel_path}] writing SQLite...", flush=True)
     db.upsert_file(
@@ -797,7 +810,7 @@ def run_summarization_pass(
             continue                      # pass 2 reports the read failure properly
         for tier_name, chunks in chunk_all_tiers(rel_path, content).items():
             texts = [c.text for c in chunks]
-            if not texts:
+            if not texts or TIER_NUM[tier_name] not in summarizer_tiers():
                 continue
             total_chunks += len(texts)
             hashes = [chunk_text_hash(t) for t in texts]
@@ -873,6 +886,21 @@ def run_incremental(
         name: index_manager.load_or_create(name)
         for name, _, _ in TIER_CONFIGS
     }
+    # ADR-030: summaries in their own index, under their chunk's id. Being in this
+    # dict is what makes purge_stale_vectors and save_all cover it too.
+    faiss_indexes[SUMMARY_INDEX] = index_manager.load_or_create(SUMMARY_INDEX)
+
+    # ADR-030 §5: an index built before this layout has summaries inside its code
+    # vectors. It still works, but only a full re-index moves it over. A run that
+    # starts from an empty index writes the new layout.
+    _fresh_index = db._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+    if not _fresh_index and db.meta_get("embed_layout") != EMBED_LAYOUT:
+        print(f"  [index] This index was built before ADR-030, with summaries appended to "
+              f"the code vectors. Delete {INDEX_DIR} and re-index to get the separate "
+              f"summary index. Cached summaries are reused, so it costs an embed pass, "
+              f"not a summarizer pass.")
+    elif _fresh_index:
+        db.meta_set("embed_layout", EMBED_LAYOUT)
 
     print("Scanning files...")
     disk_hashes = scan_disk(repo_path)
