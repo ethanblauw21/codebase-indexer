@@ -1,6 +1,6 @@
 # ADR-033: The Index Records Which Chunker Built It, and Warns When That Is Stale
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-033-chunker-version` (stacked on `feature/adr-031-one-vector-per-chunk-row`)
 **Reviewer:** @edb
