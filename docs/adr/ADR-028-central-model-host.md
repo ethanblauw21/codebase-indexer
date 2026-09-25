@@ -136,12 +136,12 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
 
 | Value | Used for | Source | Result |
 |---|---|---|---|
-| Embedder load time, bf16, weights in the OS file cache | `embed_idle_s` (provisional 60 s) | host `status.load_seconds` | _gap_ |
-| Summarizer load time in the host process | `_SUMMARY_LINGER_S` (provisional 15 s) | host `status.load_seconds` | _gap_ (about 14 s by eye, including a process spawn) |
+| Embedder load time, bf16, weights in the OS file cache | `embed_idle_s` (provisional 60 s) | host `status.load_seconds` | 4.1–5.5 s warm, 9.6 s the first time (5 runs, 2026-09-25) |
+| Summarizer load time in the host process | `_SUMMARY_LINGER_S` (provisional 15 s) | host `status.load_seconds` | 2.6–4.3 s, one 6.2 s (5 runs) |
 | Longest single batch at the token budget | worst-case search wait under preemption | per-batch timing, not logged yet | _gap_ |
-| Search latency during a summary run | Verification 3 | a host test run | _gap_ |
-| Memory after unloading each model | whether an idle host really holds nothing | `nvidia-smi` during a host run | _gap_ (the CUDA context stays while the process lives) |
-| Full pass 1 through the host vs in-process | whether the HTTP hop costs anything that matters | stage 7 through the host | _gap_ (in-process: 975.5 s) |
+| Search latency during a summary run | Verification 3 | a host test run | 8.6–24.6 s (13 probes across 4 lru-cache runs and the two-project run); about 5 s of that is the swap, the rest the batch in flight |
+| Memory after unloading each model | whether an idle host really holds nothing | `nvidia-smi` during a host run | 119 MiB, the CUDA context, with torch reserving 0 (after 7508ead; 3,511 MiB before it, see Notes) |
+| Full pass 1 through the host vs in-process | whether the HTTP hop costs anything that matters | a whole lru-cache index, summaries on, a search every 90 s | 308.9 s through the host (after both fixes) against 284.6 s in-process: +8.5% |
 | Whether summary batching changes retrieval | whether batched summaries are safe to share | ADR-027 stages 13 to 16 | _gap_ (running) |
 
 ## Consequences
@@ -195,13 +195,14 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
 - [x] `[model_host]` config (`enabled`, `embed_idle_s`, `idle_exit_s`, `spawn_timeout_s`) and the drift test
 - [x] `tests/test_model_host.py`: policy with a fake backend and clock, HTTP with the token, client fallback and model check. Suite: 346 passed, plus the 6 snapshot failures that were already failing.
 - [x] **Gate:** bf16 embedder landed: ADR-035 (#39), merged to `master` 2026-09-25. The host loads the embedder through `core._get_embed_model()`, so it gets bf16 (2,944 MiB) with no change here
-- [ ] First real run on the GPU: fill the gaps table (load times, memory after unload, pass 1 through the host)
+- [x] First real run on the GPU: fill the gaps table (load times, memory after unload, pass 1 through the host). It found two bugs, both fixed: summaries starved by steady searches (db8dc77) and an idle host holding 3.5 GB (7508ead). See Notes
 - [ ] Per-batch timing in `BatchStats` (the longest batch's seconds), for the preemption bound
 - [ ] Watchdog: confirm the MCP server's save path goes through the client end to end. It calls `run_incremental`, so it should.
 - [ ] `index_status` shows the host's view for its project
 - [ ] Reranker through the host
 - [ ] MCP Inspector run on the MCP server with the host enabled (the global CLAUDE.md rule for a changed MCP server)
-- [ ] Verification 1 to 6
+- [x] Verification 1, 2 and 6 on the GPU; 3 measured (the bound it gives is in Notes); 4 and 5 by the unit tests
+- [ ] Verification 4 on a real host: kill it mid-run and check the index still completes
 - [ ] Set status to `accepted` in the PR
 
 **Notes:**
@@ -218,3 +219,12 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
 - 2026-09-24, **stage 7 on the token budget** (ADR-027 at 64a38be): pass 1 975.5 s for 1,496 distinct texts, largest batch 48, 0 OOM, peak 5,898 MiB, no paging (shared usage flat at 64 MiB). That is only 5% faster than cross-file (1,030 s).
   - From 19:26 to the end, the card sat in P4 at about 1,200 MHz and 30 W while reporting 95% utilization. That looks like the short-chunk tail being limited by kernel launches rather than by the GPU.
   - Not investigated yet. It belongs in ADR-027's log. It matters here only because it sets how long the host's summary runs take.
+- 2026-09-25, **first real GPU runs** (`gpu-crash-repro/host_run.py`; runs in `telemetry/host028_runs.jsonl`, logs `telemetry/host028*.log`). Setup: `master` merged in (cf52430), so bf16 embedder (ADR-035), ADR-030's summary index and ADR-034's chunks. Each run is a fresh index of lru-cache (v11.5.3) with summaries on. The host runs use a scratch `CODE_INDEXER_HOST_DIR`, and a probe thread embeds a search while the index builds.
+  - **Bug 1: summaries starved by steady searches.** The first run probed every 15 s. Each probe kept the embedder warm for another `embed_idle_s` (60 s), and summaries waited while it was warm, so they never ran. The GPU sat at 0% with the embedder loaded and the indexer blocked. Fix (db8dc77): a summary job waits behind a warm embedder for at most `embed_idle_s` from when it arrived. After that the summarizer loads, and later searches preempt it at a batch boundary as designed. New test: `test_steady_searches_cannot_hold_summaries_back_forever`, which fails on the old code.
+  - **Bug 2: an idle host held 3,511 MiB.** After both models unloaded, `nvidia-smi` still showed 3,511 MiB, all in the host (Windows' per-process GPU counter). torch reported 9 MiB allocated and 3,392 MiB reserved, and a census of live CUDA tensors found none. Unloading alone freed everything in isolation (`unload_check.py`, `unload_check2.py`, `unload_check3.py`: 139 MiB left), so something in a full build kept segments pinned. Cause: cuBLAS workspaces are allocated through the caching allocator and land inside the model's big segments, so `empty_cache` cannot release those segments. Fix (7508ead): `torch._C._cuda_clearCublasWorkspaces()` before `empty_cache`. After it: 119 MiB (the CUDA context), reserved 0.
+  - `/v1/status` now reports `cuda_allocated_mib` and `cuda_reserved_mib`. A debug census at `/v1/debug/cuda-tensors` (only with `CODE_INDEXER_HOST_DEBUG`) walks every object in the process. The first version sat inside `/v1/status` and made it slow enough that the client timed out, declared the host dead, and silently embedded in-process. So a slow status answer is an outage from the client's side; keep status cheap.
+  - **Wall time, lru-cache:** in-process 284.6 s (peak 5,629 MiB). Through the host: 336.4 s after fix 1, then 326.6 and 326.0, then **308.9 s after fix 2** (peak 5,691 MiB), which is +8.5%. The overhead is the design's own waits, not the HTTP hop: 8 loads at about 4–5 s each, plus summaries holding up to 60 s behind an embedder a probe just warmed. Real use with fewer searches during an index should see less.
+  - **Load times:** embedder 4.1–5.5 s warm (9.6 s the first time), summarizer 2.6–4.3 s (one 6.2 s). A swap costs about 5 s, far under the 60 s idle window, so `embed_idle_s` could come down if searches during indexing matter more than reload cost. Left at 60 s.
+  - **Verification 3, search during a summary run:** 8.6–24.6 s over 13 probes. About 5 s is the swap. The rest is the batch in flight, so the longest batch is up to about 20 s. The per-batch timing task stays open: it is what would let the host cap a batch's length when searches are waiting.
+  - **Verification 6, vectors:** the host-built index matches the in-process one bit for bit: tier 1 213/213 identical, tier 2 71/71, tier 3 48/48.
+  - **Verifications 1 and 2, two projects at once** (p-queue as `proj-pqueue`, zustand as `proj-zustand`, one host): both exit 0. GPU peak 5,783 MiB, so one model on the card at a time held. p-queue finished in 416.4 s and zustand in 508.9 s, while sharing the card. The host's status showed zustand's 94 pending summaries while p-queue finished, then both drained to zero. 5 yields, 12 loads.
