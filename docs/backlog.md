@@ -50,7 +50,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L | raw |
 | [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
 | [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | promoted → ADR-033 |
-| [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | shaped |
+| [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | promoted → ADR-032 |
 | [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
@@ -766,7 +766,7 @@ summaries forever, and edited files get new ones: a mixed-generation index that 
 
 ### B-030 — MCP search output stops at the first chunk that does not fit the token budget
 
-**Source:** jury review of B-026, confirmed in code, 2026-09-25 · **Status:** shaped · **Size:** S · line numbers at e1e9491
+**Source:** jury review of B-026, confirmed in code, 2026-09-25 · **Status:** promoted → [ADR-032](adr/ADR-032-search-budget-skips-oversized.md) · **Size:** S · line numbers at e1e9491
 
 `semantic_code_search` formats results into a 4,000-token budget and **`break`s** at the first chunk
 that does not fit (`MCPServer.py:100-111`). One large chunk, such as a big skeleton part or a

@@ -95,27 +95,38 @@ def semantic_code_search(query: str) -> str:
     # Context Packing (Protecting your 8GB Local Model's VRAM)
     # 8B models easily crash if you feed them more than 8k tokens.
     # We cap the returned context strictly at 4000 tokens to be safe.
-    context = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
+    header = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
     # B-029: say so when the index predates the current chunker. A warning, not an
     # error: the results are still the best this index has.
     from incremental_indexer import chunker_version_warning
     version_warning = chunker_version_warning(_db())
     if version_warning:
-        context = f"{version_warning}\n\n" + context
-    current_tokens = 0
-    MAX_TOKENS = 4000
+        header = f"{version_warning}\n\n" + header
+    return _pack_results(header, chunks, jina_tokenizer.count_tokens, max_tokens=4000)
 
+
+def _pack_results(header: str, chunks, count_tokens, max_tokens: int) -> str:
+    """Fill the token budget in rank order, skipping any chunk that does not fit.
+
+    B-030: this used to stop at the first chunk that did not fit, so one large
+    chunk hid every result ranked below it. Skipped chunks are listed by location
+    so the caller can still open them.
+    """
+    context = header
+    used = 0
+    skipped: list[str] = []
     for c in chunks:
         chunk_text = f"--- FILE: {c.file} | SCOPE: {c.scope} ---\n{c.text}\n\n"
-        tokens = jina_tokenizer.count_tokens(chunk_text)
-
-        if current_tokens + tokens < MAX_TOKENS:
+        tokens = count_tokens(chunk_text)
+        if used + tokens < max_tokens:
             context += chunk_text
-            current_tokens += tokens
+            used += tokens
         else:
-            context += "[Note: Further context truncated to protect token limits.]\n"
-            break
-
+            skipped.append(f"{c.file} | {c.scope}")
+    if skipped:
+        context += (f"[Note: {len(skipped)} result(s) did not fit the {max_tokens}-token "
+                    "budget and were left out:]\n")
+        context += "".join(f"  - {s}\n" for s in skipped)
     return context
 
 @mcp.tool()
