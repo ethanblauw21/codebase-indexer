@@ -46,11 +46,12 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
-| [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | shaped |
+| [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | Stage 1 promoted → ADR-034 |
 | [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L | raw |
 | [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
 | [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | promoted → ADR-033 |
 | [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | shaped |
+| [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -447,7 +448,7 @@ harness, which needs the T4, which is GPU-gated.
 
 ### B-026 — Class members lose their docs, private methods and getters from the index, and a method arrives without its class
 
-**Source:** ADR-030 p-queue diagnosis, a grill with @edb, and a five-reviewer jury, 2026-09-25 (`CHUNK_SHAPE_PLAN_REVIEW.md`) · **Status:** shaped · **Size:** L
+**Source:** ADR-030 p-queue diagnosis, a grill with @edb, and a five-reviewer jury, 2026-09-25 (`CHUNK_SHAPE_PLAN_REVIEW.md`) · **Status:** Stage 1 promoted → ADR-034 (`feature/adr-034-class-member-chunks`); Stage 2 shaped · **Size:** L
 
 **Where it came from.** Under ADR-030's summary fusion, p-queue's original query set (24 queries)
 scored 0.511 MRR@10, against 0.537 with no summaries. Three named queries lose: `pq-concurrency`,
@@ -533,6 +534,46 @@ context with it.
   a CPU probe on a hand-edited chunk set (docs moved, header repeated), before paying for a
   summary rebuild.
 - **Write down the rules below:** scope, merge, doc-move and gate.
+
+**Prerequisites measured, 2026-09-25** (pinned: `none031` / `store031`, ADR-030 + ADR-031 at
+`feature/adr-030-summary-index` 56ea132, arm B, shipped weights, bge-code-v1 bf16; script
+`pq_mechanism.py`, results `gpu-crash-repro/telemetry/retrieval/results_pq_mechanism.json`). The
+numbers at the top of this item carried ghost vectors; these replace them.
+- **Per-query baseline, 24 original p-queue queries:** MRR@10 0.555 without summaries, 0.554 with.
+  9 queries improve with summaries, 4 get worse (`pq-add` 11→12, `pq-running-tasks` 6→13,
+  `pq2-on-error` 1→9, `pq2-enqueue` 1→11), 10 stay at rank 1, and `pq-concurrency` is not found
+  by either.
+- **Probes** (tier-1 chunks of `index.ts` edited and re-embedded; summary vectors left as built;
+  skeleton parts stripped in place, not re-split):
+
+  | Probe | orig, no summaries | orig, summaries | intent (25), summaries | file (10) |
+  |---|---|---|---|---|
+  | as built | 0.555 | 0.554 | 0.619 | 0.883 |
+  | JSDoc removed from the skeleton | 0.587 | 0.578 | 0.634 | 0.883 |
+  | **+ each member's JSDoc in its own chunk** | **0.735** | **0.696** | **0.640** | 0.883 |
+  | + class declaration repeated in each member | 0.640 | 0.598 | 0.609 | 0.883 |
+  | getter and setter merged (alone) | 0.555 | 0.554 | 0.619 | 0.883 |
+
+- **Moving docs onto members is proven:** +0.18 and +0.14 on the original set. With summaries,
+  `pq-pause` goes 4→1, `pq-sizeby` 7→1, `pq2-is-rate-limited` 4→1, `pq-saturated` 2→1,
+  `pq2-on-pending-zero` 9→2 and `pq2-pending` 10→4. The skeleton shrank by 31% (11,545 → 7,996
+  characters).
+- **Do not embed a repeated class header.** It costs 0.10 against doc-move alone, because every
+  member then shares one long line. Stage 2's parent context stays display-only.
+- **Mechanism per losing query, and none of them is JSDoc:**
+  - `pq2-on-error` and `pq2-enqueue`: **fusion.** Each answer is rank 1 in the code list but
+    rank 40 or absent in the summary list (the query is one word, "enqueue", and the summary says
+    "adds a new item"). RRF sums credit, so chunks ranked moderately in *both* lists pass a
+    one-list rank 1. Doc-move leaves them at 10 and 10. This is a question for ADR-030's fusion
+    rule, not for chunk shape.
+  - `pq-concurrency`: **a vocabulary gap.** The answer is not in the top 50 in any probe. Neither
+    accessor has a doc comment; "limit how many tasks run at once" is written only in
+    `options.ts`. Merging the getter back changes nothing, so the accessor merge is correct
+    hygiene with no retrieval payoff here.
+  - `pq-running-tasks` (6→13) and `pq-add` (11→12): whole-file and `Global_part_N` chunks that
+    rank in both lists crowd them out. That is the same fusion effect, and part of B-027.
+- The measurement stays the same for Stage 1's real build, which re-summarizes the changed
+  chunks: the gate compares against these per-query ranks.
 
 **Stage 1: parser fixes** (TypeScript and Python adapters plus `ast_chunker.py`).
 - **Scope.** TypeScript and Python carry retrieval claims. C# and C++ are fixtures only: their
@@ -656,6 +697,16 @@ Measure on the file-level set, where 7 of the 15 gold files are tests or benchma
 fusion weight is ruled out, because it trades file questions against symbol ones (ADR-030
 Verification 3).
 
+**Measured 2026-09-25, on clean indexes (ADR-030 Verification 5, 40 file questions):**
+- **The 512-token window is not the limit.** Embedding tier-2/3 slices with a 4,096-token window
+  changed whole-file MRR by +0.001. The title's premise is wrong. Summaries are what carry
+  file-level retrieval (whole 0.259 → 0.500 with them).
+- **BM25 is a lead.** Convex BM25 fusion lifts whole-file MRR by +0.30 without summaries and
+  +0.13 with them, but costs symbol questions 0.12 to 0.28. A file-level-only sparse signal, or
+  routing by query type, may beat a new chunk shape.
+- `file_chunk_weight` 0.75 still trades +0.03 to +0.04 on symbol questions for −0.28 on file
+  whole, so the trade is confirmed with 40 file questions.
+
 **Depends on:** B-026 Stage 1 shipped and gated, with its numbers as the baseline, and B-029.
 Related: B-010.
 
@@ -728,3 +779,22 @@ oversized chunk to its header or signature rather than dropping it. Test: a resu
 oversized chunk in the middle still shows everything after it.
 
 **Depends on:** nothing. Blocks B-026 Stage 2.
+
+### B-031 — The embedder loads in fp32 and fills the 8 GB card on its own
+
+**Source:** ADR-028's gate and the GPU work of 2026-09-24/25 · **Status:** promoted → ADR-035 · **Size:** S
+
+`core._get_embed_model` (`core.py:66-84`) builds `SentenceTransformer(model_id, trust_remote_code=True,
+device=device)` with no dtype, so `bge-code-v1` (1.5B parameters) loads in fp32: about 6.2 GB of an
+8 GB card. That leaves no room for ADR-027's 1 GB reserve, let alone the summarizer, and WDDM pages
+to system RAM silently instead of raising an OOM.
+
+- **Every measurement since 2026-09-24 already embedded in bf16.** The eval kit patches
+  `core.SentenceTransformer` to pass `torch_dtype=bfloat16` for index and queries alike, and the MCP
+  Inspector wrapper does the same. Production is the one path that doesn't.
+- **ADR-028 is gated on this.** Its log says the host doesn't get turned on for real until it lands.
+- **CPU stays fp32.** bf16 matmuls on most CPUs are slower, not faster.
+- **Open question:** an index built in fp32 and queried in bf16 mixes precisions. How much that moves a
+  cosine should be measured, not assumed.
+
+**Depends on:** none. **Blocks:** ADR-028.
