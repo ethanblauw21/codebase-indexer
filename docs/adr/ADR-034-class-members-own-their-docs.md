@@ -238,7 +238,7 @@ Every criterion has a threshold. The final arm must pass all of them.
 - [x] `CHUNKER_VERSION` → 3 (16a5d02). It belonged in each chunk-changing commit; it landed after
   them, which only matters if the branch is split before merging
 - [x] MCP Inspector run saved: `gpu-crash-repro/telemetry/inspector_034/` (see notes)
-- [ ] Update B-026 in `docs/backlog.md` on `master`: Stage 1 promoted → ADR-034
+- [x] Update B-026 in `docs/backlog.md` on `master`: Stage 1 promoted → ADR-034
 - [ ] Resolve **Depended on by**: Stage 2 gets per-part source line ranges (not "body-only": no header is
   added, so a part's range is simply what it holds) and an unchanged `class_context`
 
