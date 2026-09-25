@@ -75,6 +75,7 @@ def _wired() -> dict[tuple[str, str], object]:
         # ADR-030.
         ("summarization", "tiers"):        config.DEFAULT_SUMMARIZER_TIERS,
         ("retrieval", "summary_weight"):   hybrid_retriever._DEFAULT_SUMMARY_WEIGHT,
+        ("retrieval", "file_chunk_weight"): hybrid_retriever._DEFAULT_FILE_CHUNK_WEIGHT,
     }
 
 

@@ -93,6 +93,9 @@ _DEFAULT_DENSE_WEIGHT      = 0.7
 _DEFAULT_SPARSE_WEIGHT     = 0.3
 # ADR-030: RRF weight of the summary ranking against the finished code ranking.
 _DEFAULT_SUMMARY_WEIGHT    = 0.5
+# ADR-030: how much a tier-2/3 (whole-file) chunk counts in the code ranking at that
+# fusion, against 1.0 for tier 1. Its summary still counts in full.
+_DEFAULT_FILE_CHUNK_WEIGHT = 0.5
 _SUMMARY_INDEX_NAME        = "summary"
 _SUMMARY_FUSE_DEPTH        = 30   # candidates from each side of the final fusion
 _PART_SUFFIX = re.compile(r"_part_\d+$")   # ast_chunker's split-chunk scope suffix
@@ -230,6 +233,8 @@ class HybridRetriever:
         self._dense_weight: float = float(ret_cfg.get("dense_weight", _DEFAULT_DENSE_WEIGHT))
         self._sparse_weight: float = float(ret_cfg.get("sparse_weight", _DEFAULT_SPARSE_WEIGHT))
         self._summary_weight: float = float(ret_cfg.get("summary_weight", _DEFAULT_SUMMARY_WEIGHT))
+        self._file_chunk_weight: float = float(ret_cfg.get("file_chunk_weight",
+                                                           _DEFAULT_FILE_CHUNK_WEIGHT))
         self._bm25: Optional[object] = None
         self._bm25_fids: list[int] = []
         self._bm25_pos: dict[int, int] = {}   # faiss_id → row in the BM25 corpus
@@ -329,8 +334,12 @@ class HybridRetriever:
         summary_ids = [int(i) for i in ids[0] if i != -1]
 
         score: dict[int, float] = {}
+        # A whole-file chunk is near every query of its file, in both lists, so at
+        # full weight it outranked the method that answers (p-queue, 2026-09-25).
+        # It counts less in the code ranking; its summary still counts in full.
         for rank, chunk in enumerate(ranked):
-            score[chunk.faiss_id] = score.get(chunk.faiss_id, 0.0) + 1.0 / (_RRF_K + rank + 1)
+            w = 1.0 if chunk.tier == _TIER1_NAME else self._file_chunk_weight
+            score[chunk.faiss_id] = score.get(chunk.faiss_id, 0.0) + w / (_RRF_K + rank + 1)
         for rank, fid in enumerate(summary_ids):
             score[fid] = score.get(fid, 0.0) + self._summary_weight / (_RRF_K + rank + 1)
 

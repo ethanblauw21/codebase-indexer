@@ -40,6 +40,7 @@ Search already fuses the three tier indexes by RRF over FAISS ids (`HybridRetrie
 - A summary hit shares its chunk's id, so it lifts that chunk.
 - A chunk found only through its summary joins the list with `source = "summary"`.
 - `[retrieval].summary_weight` defaults to 0.5.
+- `[retrieval].file_chunk_weight` (default 0.5) is how much a tier-2/3 chunk counts in the code ranking at this fusion, against 1.0 for tier 1. Its summary still counts in full.
 - The fused list keeps one chunk per split parent, meaning the same file and the same scope once `_part_N` is stripped, across tiers. The best-scoring part stands for the others.
 - With the index missing or empty, or the weight at 0, `retrieve()` makes exactly today's calls.
 
@@ -136,3 +137,10 @@ An index built before this ADR has summaries appended inside its code vectors an
   - Tried offline: fusing only tier-1 summaries fixed p-queue (0.557) but cost zustand 0.106 (original set 0.515 overall). So the tier-2/3 summaries carry zustand's gain.
   - Fix: `_fuse_summaries` keeps one chunk per split parent (§3). Result (`retrieval/results_orig030d.json`, `results_intent030d.json`): original 0.540 (+0.097, interval +0.027 to +0.166), intent 0.562 (+0.126, interval +0.054 to +0.200). p-queue original 0.494 to 0.524, against 0.550 without summaries.
   - What remains: the three lost queries now find their answer at ranks 4 to 8 instead of not at all. Whole-file and class-body parts still outrank the method, so the rest is a chunk-shape problem, not a fusion one.
+- 2026-09-25, **the grader keys on the file too, and whole-file chunks count less in the fusion.**
+  - Grader: `tools/real_repo_eval.py` now dedupes on (file, scope without `_part_N`). Keyed on the scope alone, every file's `Full File_part_N` graded as one entry. This moves the baselines: no summaries is now 0.436 original and 0.429 intent (was 0.443 and 0.436). Compare only numbers taken with the same grader.
+  - Not done: putting the path into the stored scope. The FAISS id is `md5(tier::file::scope)` and the scope is in the embedded text, so that would re-key every vector and every summary and need a full rebuild of every index. Nothing but the grader lacked the path; each chunk carries `file`.
+  - `[retrieval].file_chunk_weight` = 0.5 (§3). A replay over code-list weights 1, 0.5, 0.25 and 0, and summary-list weights 1 and 0.5, gave 0.535 / 0.555 at 1 and 1, and between 0.558 and 0.573 / 0.598 and 0.601 elsewhere. 0.5 was chosen because it keeps whole files present, not because it scored best.
+  - Real build (`retrieval/results_orig030e.json`, `results_intent030e.json`): original 0.567 against 0.436 (+0.131, interval +0.062 to +0.198, 41 up, 9 down). Intent 0.601 against 0.429 (+0.172, interval +0.100 to +0.244, 32 up, 4 down). p-queue original 0.560 against 0.537, so no repo now loses.
+  - **Caveat: every query in both sets has a symbol as its answer, so no query can show what demoting whole-file chunks costs.** The file-level query set (Verification 3) must check this knob before it is trusted.
+  - Still below baseline: `pq-concurrency`, `pq2-enqueue` and `pq2-on-error`, now behind tier-1 `PQueue_part_N` class-body parts, which this knob does not touch. That is the class-skeleton question.

@@ -129,6 +129,7 @@ def _retriever(monkeypatch, weight):
     r._summary.add_with_ids(np.stack([q, np.array([0.6, 0.8, 0, 0, 0, 0, 0, 0], np.float32)]),
                             np.array([3, 2], dtype=np.int64))
     r._summary_weight = weight
+    r._file_chunk_weight = hr._DEFAULT_FILE_CHUNK_WEIGHT
 
     class Store:
         def get(self, fid):
@@ -166,8 +167,22 @@ def test_fusion_keeps_one_part_per_split_parent_and_fills_past_them(monkeypatch)
               mk(13, "Full File_part_1", tier="tier3_architectural"),   # same file, other tier
               mk(14, "Full File_part_1", file="g.py", tier="tier2_component"),  # other file
               mk(15, "f.py::m")]
+    r._file_chunk_weight = 1.0   # rank order as given; the dedup alone is under test
     out = r._fuse_summaries("q", ranked, 4)
     assert [c.faiss_id for c in out if c.faiss_id >= 10] == [10, 12, 14, 15]
+
+
+def test_a_whole_file_chunk_counts_less_in_the_code_ranking(monkeypatch):
+    import hybrid_retriever as hr
+    r, _ = _retriever(monkeypatch, 0.5)
+    ranked = [hr.RetrievedChunk(faiss_id=20, score=1.0, file="f.py", scope="Full File_part_1",
+                                tier="tier2_component", text="", source="semantic"),
+              hr.RetrievedChunk(faiss_id=21, score=1.0, file="f.py", scope="f.py::m",
+                                tier="tier1_surgical", text="", source="semantic")]
+    r._file_chunk_weight = 1.0
+    assert r._fuse_summaries("q", ranked, 2)[0].faiss_id == 20
+    r._file_chunk_weight = 0.5
+    assert r._fuse_summaries("q", ranked, 2)[0].faiss_id == 21
 
 
 def test_retrieve_skips_fusion_without_a_summary_index(monkeypatch):
