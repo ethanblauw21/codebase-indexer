@@ -47,6 +47,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
 | [B-022](#b-022) | The summarizer runs one chunk at a time on the GPU | GPU baseline session, 2026-09-24 | M | **promoted → ADR-027** |
+| [B-025](#b-025) | Appended summaries make intent retrieval worse; the same summaries help when kept apart | retrieval check, 2026-09-25 | M | **promoted → ADR-030** |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -458,3 +459,14 @@ memory, it should back off or pause rather than spill into system RAM, because o
 does not raise an error, it just runs about 50 times slower.
 
 Numbers 012 to 021 are used on other branches; this entry takes the next free number.
+
+### B-025 — Appended summaries make intent retrieval worse; the same summaries help when kept apart
+
+**Source:** retrieval check, 2026-09-25 · **Status:** **promoted → [ADR-030](./adr/ADR-030-separate-summary-index.md)** · **Size:** M
+
+Each chunk is embedded as its code with the LLM summary appended. On 55 queries that describe what a function's body does, that scored 0.380 MRR@10 against 0.436 with no summaries, and on the original 83 queries it made no difference. The summary pulls the chunk toward its stated purpose, and for 68 to 77 percent of tier-2/3 chunks it falls past the embedder's 512-token window and is never seen.
+
+The same summaries embedded on their own and fused by RRF with the code ranking scored 0.613 and 0.606 on the two sets, against 0.457 and 0.450 for code alone (`gpu-crash-repro/summary_store_eval.py`; ADR-027's log has the details).
+
+**The want:** keep the summaries' value without their harm, and without paying the summarizer again for indexes that already have them cached.
+
