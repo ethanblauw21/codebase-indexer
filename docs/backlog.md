@@ -54,7 +54,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | promoted → ADR-032 |
 | [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
 | [B-025](#b-025) | Appended summaries make intent retrieval worse; the same summaries help when kept apart | retrieval check, 2026-09-25 | M | **promoted → ADR-030** |
-| [B-032](#b-032) | A save during a running watchdog reindex starts a second reindex in parallel | daemon queue review, 2026-09-25 | S | shaped |
+| [B-032](#b-032) | A save during a running watchdog reindex starts a second reindex in parallel | daemon queue review, 2026-09-25 | S | promoted → [ADR-036](adr/ADR-036-one-reindex-at-a-time.md) |
 | [B-033](#b-033) | Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place | daemon queue review, 2026-09-25 | M | shaped |
 | [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | raw |
 
@@ -834,7 +834,7 @@ to system RAM silently instead of raising an OOM.
 
 ### B-032 — A save during a running watchdog reindex starts a second reindex in parallel
 
-**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** shaped · **Size:** S · line numbers at `master` 0c8d7a6
+**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** promoted → [ADR-036](adr/ADR-036-one-reindex-at-a-time.md) · **Size:** S · line numbers at `master` 0c8d7a6
 
 `_ReindexDebouncer` (`MCPServer.py:1878-1913`) collapses a burst of watchdog events into a single
 `run_incremental` after 3 s of quiet. A formatter run or a branch switch counts as one burst, which

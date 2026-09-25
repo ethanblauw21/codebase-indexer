@@ -1219,6 +1219,13 @@ def reindex(changed_files_only: bool = False) -> str:
 
     Returns a summary of chunks added/updated/removed, then reloads the in-memory indexes.
     """
+    # ADR-036: a watchdog reindex in flight finishes first; this one then runs alone.
+    with _reindex_lock:
+        return _reindex(changed_files_only)
+
+
+def _reindex(changed_files_only: bool) -> str:
+    """The body of `reindex`. Call it holding `_reindex_lock`."""
     import sys
     import io
     import os
@@ -1846,6 +1853,13 @@ def map_module_communities(target_path: str = "", min_community_size: int = 3,
 # File watchdog — auto-reindex on source changes
 # ---------------------------------------------------------------------------
 
+# ADR-036: one run_incremental at a time in this process. The watchdog and the
+# reindex tool both take it, so a save during a running reindex waits for that
+# run to finish instead of starting a second one beside it (B-032). Other
+# processes on the same index are B-033.
+_reindex_lock = threading.Lock()
+
+
 def _reload_indexes() -> None:
     """Hot-swap the in-memory FAISS + doc-store state after a reindex run.
 
@@ -1884,12 +1898,18 @@ class _ReindexDebouncer:
     separate run_incremental() invocation that races the previous one for the
     SQLite lock.  Instead, every incoming event resets a timer; the reindex
     fires only after `delay` seconds of silence.
+
+    The timer only collapses a burst. An event that arrives while a reindex is
+    running starts a new timer, so the run itself takes `_reindex_lock`: the
+    follow-up waits for the one in flight (ADR-036). At most one run waits;
+    later events fold into it, since it reads the disk only once it starts.
     """
 
     def __init__(self, delay: float = 3.0) -> None:
         self._delay  = delay
         self._timer: threading.Timer | None = None
         self._lock   = threading.Lock()
+        self._queued = False    # a fired run is waiting for _reindex_lock
 
     def schedule(self) -> None:
         with self._lock:
@@ -1902,11 +1922,17 @@ class _ReindexDebouncer:
     def _fire(self) -> None:
         with self._lock:
             self._timer = None
+            if self._queued:
+                return          # the queued run scans the disk when it starts, so it sees this change too
+            self._queued = True
         print("\n[Watchdog] Change detected — running incremental reindex...")
         try:
             from incremental_indexer import run_incremental
-            run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
-            _reload_indexes()
+            with _reindex_lock:
+                with self._lock:
+                    self._queued = False    # from here on, a new change needs a new run
+                run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
+                _reload_indexes()
             print("[Watchdog] Reindex complete — in-memory indexes reloaded.\n")
         except Exception as exc:
             print(f"[Watchdog] Reindex failed: {exc}\n")
@@ -1991,7 +2017,26 @@ def start_watchdog(repo_path: str | None = None, debounce_seconds: float = 3.0):
     return observer
 
 
+def _utf8_stdio() -> None:
+    """Make print() safe for the indexer's own output under an MCP client (ADR-036).
+
+    A client that launches this server over stdio on Windows gives it pipes, and a
+    pipe's text encoding is the ANSI code page (cp1252), not UTF-8. The indexer's
+    first line is a "━━" banner, so every watchdog reindex died on its first print
+    with UnicodeEncodeError. The protocol itself is unaffected: FastMCP writes it
+    through its own UTF-8 wrapper over the same buffer. Line buffering keeps each
+    of our lines whole, so none can land in the middle of a protocol message.
+    """
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except (AttributeError, ValueError):
+            pass    # not a TextIOWrapper (already replaced by a harness); leave it
+
+
 def main() -> None:
+    _utf8_stdio()
     start_watchdog()
     mcp.run()
 
