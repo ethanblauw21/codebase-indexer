@@ -155,6 +155,21 @@ def test_fusion_respects_top_n_and_a_low_weight_keeps_code_first(monkeypatch):
     assert len(out) == 2 and out[0].faiss_id == 2
 
 
+def test_fusion_keeps_one_part_per_split_parent_and_fills_past_them(monkeypatch):
+    import hybrid_retriever as hr
+    r, _ = _retriever(monkeypatch, 0.5)
+    def mk(i, scope, file="f.py", tier="tier1_surgical"):
+        return hr.RetrievedChunk(faiss_id=i, score=1.0, file=file, scope=scope,
+                                 tier=tier, text="", source="semantic")
+    ranked = [mk(10, "f.py::C_part_1"), mk(11, "f.py::C_part_2"),
+              mk(12, "Full File_part_1", tier="tier2_component"),
+              mk(13, "Full File_part_1", tier="tier3_architectural"),   # same file, other tier
+              mk(14, "Full File_part_1", file="g.py", tier="tier2_component"),  # other file
+              mk(15, "f.py::m")]
+    out = r._fuse_summaries("q", ranked, 4)
+    assert [c.faiss_id for c in out if c.faiss_id >= 10] == [10, 12, 14, 15]
+
+
 def test_retrieve_skips_fusion_without_a_summary_index(monkeypatch):
     import hybrid_retriever as hr
     r = hr.HybridRetriever.__new__(hr.HybridRetriever)

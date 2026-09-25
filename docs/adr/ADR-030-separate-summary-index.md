@@ -36,10 +36,11 @@ Search already fuses the three tier indexes by RRF over FAISS ids (`HybridRetrie
 
 ### §3. Search fuses it with the finished ranking
 
-`retrieve()` runs the whole pipeline as today (semantic search, graph expansion, final scoring) to a depth of 30. It then fuses that ranking by RRF with the top 30 of `summary.faiss` for the same query, in `_fuse_summaries`, and cuts the result to `top_n`.
+`retrieve()` runs the whole pipeline as today (semantic search, graph expansion, final scoring) to a depth of 30. It then fuses that ranking by RRF with the top 30 of `summary.faiss` for the same query, in `_fuse_summaries`, and cuts the result to `top_n` distinct entries.
 - A summary hit shares its chunk's id, so it lifts that chunk.
 - A chunk found only through its summary joins the list with `source = "summary"`.
 - `[retrieval].summary_weight` defaults to 0.5.
+- The fused list keeps one chunk per split parent, meaning the same file and the same scope once `_part_N` is stripped, across tiers. The best-scoring part stands for the others.
 - With the index missing or empty, or the weight at 0, `retrieve()` makes exactly today's calls.
 
 This replaced the first design, which added the summary list inside `_semantic_search`. That failed Verification 1; see the Notes.
@@ -129,4 +130,9 @@ An index built before this ADR has summaries appended inside its code vectors an
   - Original: 0.531 against 0.443, a gain of +0.088 (interval +0.015 to +0.160), with 34 up and 12 down.
   - By repo, zustand and click gained on both sets. p-queue on the original set lost, 0.550 to 0.494, which is not looked into yet.
   - The result is below the offline 0.61. The offline run merged split `_part_N` chunks by name before fusing, and a real build cannot do that without a schema change.
-
+- 2026-09-25, **p-queue loss diagnosed, and the fused list made distinct.**
+  - Cause: the split parts of `index.ts` (`Full File_part_N` at tiers 2 and 3, `PQueue_part_N`, `Global_part_N`) rank in both lists. Under RRF that beats a rank-1 hit found in only one list. The parts then filled the top 10 as near-duplicates: `pq-concurrency` returned 10 chunks covering 2 scopes, and lost its rank-1 answer.
+  - Ruled out: the fusion depth of 30. Code-only at depth 30, cut to 10, scores exactly as the default path does.
+  - Tried offline: fusing only tier-1 summaries fixed p-queue (0.557) but cost zustand 0.106 (original set 0.515 overall). So the tier-2/3 summaries carry zustand's gain.
+  - Fix: `_fuse_summaries` keeps one chunk per split parent (§3). Result (`retrieval/results_orig030d.json`, `results_intent030d.json`): original 0.540 (+0.097, interval +0.027 to +0.166), intent 0.562 (+0.126, interval +0.054 to +0.200). p-queue original 0.494 to 0.524, against 0.550 without summaries.
+  - What remains: the three lost queries now find their answer at ranks 4 to 8 instead of not at all. Whole-file and class-body parts still outrank the method, so the rest is a chunk-shape problem, not a fusion one.

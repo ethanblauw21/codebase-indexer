@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -94,6 +95,7 @@ _DEFAULT_SPARSE_WEIGHT     = 0.3
 _DEFAULT_SUMMARY_WEIGHT    = 0.5
 _SUMMARY_INDEX_NAME        = "summary"
 _SUMMARY_FUSE_DEPTH        = 30   # candidates from each side of the final fusion
+_PART_SUFFIX = re.compile(r"_part_\d+$")   # ast_chunker's split-chunk scope suffix
 
 # ---------------------------------------------------------------------------
 # Return type
@@ -334,6 +336,7 @@ class HybridRetriever:
 
         by_id = {c.faiss_id: c for c in ranked}
         out: list[RetrievedChunk] = []
+        seen: set[tuple[str, str]] = set()
         for fid in sorted(score, key=score.get, reverse=True):
             chunk = by_id.get(fid)
             if chunk is None:
@@ -346,6 +349,16 @@ class HybridRetriever:
                     text=meta.get("text", ""), source="summary",
                     tags=meta.get("tags") or [], corroborated=True,
                 )
+            # One chunk per split parent. The parts of a big class or file sit in
+            # both lists, so without this they filled the top N as near-duplicates:
+            # p-queue's pq-concurrency returned 10 chunks covering 2 scopes, and lost
+            # its rank-1 answer (2026-09-25). The best-scoring part stands for the rest.
+            # Tier is not in the key: a file's tier-2 and tier-3 parts are slices of
+            # the same text.
+            key = (chunk.file, _PART_SUFFIX.sub("", chunk.scope))
+            if key in seen:
+                continue
+            seen.add(key)
             chunk.score = score[fid]
             out.append(chunk)
             if len(out) == top_n:
