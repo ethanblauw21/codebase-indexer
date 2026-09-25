@@ -98,6 +98,24 @@ def test_summaries_wait_while_the_embedder_is_warm_then_swap():
     assert b.events == ["load embedder", "embed query 1", "unload embedder", "load summarizer"]
 
 
+def test_steady_searches_cannot_hold_summaries_back_forever():
+    """First GPU run (2026-09-25): a search every 15 s against embed_idle_s = 60 s kept the
+    embedder warm, and summaries held indefinitely. A job now holds at most embed_idle_s."""
+    b = FakeBackend()
+    sched, clock = make(b, embed_idle_s=10.0)
+    sched.submit_embed(["x"], "query")
+    sched.step()
+    s = sched.submit_summary(["a"])
+    for t in (5.0, 9.0):                 # searches keep arriving inside the idle window
+        clock.t = t
+        sched.submit_embed(["q"], "query")
+        assert sched.step() == "embed"
+        assert sched.step() == "hold"
+    clock.t = 10.0                       # the job has waited embed_idle_s; the last search was 1 s ago
+    assert sched.step() == "summarize"
+    assert s.result() == ["sum:a"]
+
+
 def test_an_embed_preempts_a_summary_run_at_the_next_batch_boundary():
     holder = {}
     b = FakeBackend(on_batch=lambda n: n == 2 and holder.setdefault(

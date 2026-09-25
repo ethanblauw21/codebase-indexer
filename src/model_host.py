@@ -194,6 +194,7 @@ class _SummaryJob:
     project: str
     results: list[str | None]
     future: Future = field(default_factory=Future)
+    queued_at: float = 0.0
 
 
 class HostScheduler:
@@ -236,7 +237,7 @@ class HostScheduler:
         return req.future
 
     def submit_summary(self, codes: Sequence[str], project: str = "") -> Future:
-        job = _SummaryJob(list(codes), project, [None] * len(codes))
+        job = _SummaryJob(list(codes), project, [None] * len(codes), queued_at=self._clock())
         if not job.codes:
             job.future.set_result([])
             return job.future
@@ -304,8 +305,15 @@ class HostScheduler:
             return "embed"
 
         if jobs:
-            if self.loaded == EMBEDDER and now - self._last_embed < self._embed_idle_s:
-                return "hold"            # a search burst may not be over; summaries wait
+            # A search burst may not be over, so summaries wait while the embedder is warm, but
+            # only for embed_idle_s from when the oldest job arrived. Without that bound, searches
+            # more often than embed_idle_s kept the embedder warm forever and summaries never ran
+            # (ADR-028 log, first GPU run). Past it the summarizer loads, and a later search
+            # preempts it at the next batch boundary instead.
+            oldest = min(job.queued_at for job in jobs)
+            if (self.loaded == EMBEDDER and now - self._last_embed < self._embed_idle_s
+                    and now - oldest < self._embed_idle_s):
+                return "hold"
             self._run_summaries(jobs)
             return "summarize"
 
