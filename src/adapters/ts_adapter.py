@@ -18,7 +18,9 @@ import tree_sitter_typescript as tstypescript
 import tree_sitter_javascript as tsjavascript
 
 from adapters.base import Edge, ParseResult, Reference, Symbol, SymbolType, TestConventions, build_fqn
-from adapters._treesitter import leading_doc, merge_adjacent_same_fqn, node_text, run_query, skeletonize
+from adapters._treesitter import (
+    class_header, leading_doc, merge_adjacent_same_fqn, node_text, run_query, skeleton_with_lines,
+)
 from category_tagger import tag_symbol
 
 
@@ -354,7 +356,8 @@ class _WebAdapter:
                     if class_body:
                         for child in class_body.children:
                             walk(child, name)
-                    sym.text = skeletonize(node, src, _TS_STUB_TYPES, drop=moved_docs)
+                    sym.text, sym.line_map = skeleton_with_lines(node, src, _TS_STUB_TYPES, drop=moved_docs)
+                    sym.header = class_header(node, src)
                     moved_docs = outer
                 return
 

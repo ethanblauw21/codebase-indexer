@@ -76,22 +76,37 @@ def skeletonize(
     `drop` holds the start bytes of class-body children to leave out, such as doc comments that
     were moved into their member's own chunk.
     """
+    return skeleton_with_lines(node, src, stub_node_types, drop)[0]
+
+
+def skeleton_with_lines(
+    node: Node,
+    src: bytes,
+    stub_node_types: set[str],
+    drop: Optional[set[int]] = None,
+) -> tuple[str, list[int]]:
+    """`skeletonize`, plus the 1-based source line of each line of the skeleton.
+
+    Stubbed bodies break the one-to-one line mapping, so a split skeleton part can only
+    report the source lines it covers through this map (ADR-034 §5).
+    """
     class_body = next(
         (c for c in node.children if c.type in ("class_body", "block", "statement_block")),
         None,
     )
     if class_body is None:
-        return node_text(node, src)
+        text = node_text(node, src)
+        first = node.start_point[0] + 1
+        return text, [first + i for i in range(text.count("\n") + 1)]
 
-    parts: list[str] = [
-        src[node.start_byte:class_body.start_byte].decode("utf-8", errors="replace")
-    ]
+    pieces: list[tuple[int, int]] = [(node.start_byte, class_body.start_byte)]   # source slices
+    stubs: list[tuple[int, int]] = []    # (index in pieces, body start byte) for " ...\n"
     last = class_body.start_byte
 
     for child in class_body.children:
         if drop and child.start_byte in drop:
             cut_start, cut_end = _whole_lines(src, child.start_byte, child.end_byte)
-            parts.append(src[last:cut_start].decode("utf-8", errors="replace"))
+            pieces.append((last, cut_start))
             last = cut_end
             continue
         if child.type in stub_node_types:
@@ -102,13 +117,49 @@ def skeletonize(
                 inner = next((c for c in child.children if c.type in stub_node_types), None)
                 body = _body_of(inner) if inner is not None else None
             if body:
-                parts.append(src[last:body.start_byte].decode("utf-8", errors="replace"))
-                parts.append(" ...\n")
+                pieces.append((last, body.start_byte))
+                stubs.append((len(pieces), body.start_byte))
+                pieces.append((-1, -1))
                 last = body.end_byte
 
-    parts.append(src[last:class_body.end_byte].decode("utf-8", errors="replace"))
-    parts.append(src[class_body.end_byte:node.end_byte].decode("utf-8", errors="replace"))
-    return "".join(parts)
+    pieces.append((last, node.end_byte))
+
+    stub_at = dict(stubs)
+    texts: list[str] = []
+    line_map: list[int] = []
+    at_line_start = True
+    for i, (a, b) in enumerate(pieces):
+        if i in stub_at:
+            text, first = " ...\n", src.count(b"\n", 0, stub_at[i]) + 1
+        else:
+            text, first = src[a:b].decode("utf-8", errors="replace"), src.count(b"\n", 0, a) + 1
+        texts.append(text)
+        segs = text.split("\n")
+        for k, seg in enumerate(segs):
+            if k:
+                at_line_start = True
+            if at_line_start and (seg or k < len(segs) - 1):
+                line_map.append(first + k)
+                at_line_start = False
+    text = "".join(texts)
+    n_lines = text.count("\n") + 1
+    line_map += [line_map[-1] if line_map else 0] * (n_lines - len(line_map))
+    return text, line_map[:n_lines]
+
+
+def class_header(node: Node, src: bytes) -> str:
+    """The class declaration up to its body, without decorators or doc: `class A<T> extends B`.
+
+    Repeated at the top of every split part of an oversized skeleton (ADR-034 §5).
+    """
+    class_body = next(
+        (c for c in node.children if c.type in ("class_body", "block", "statement_block")),
+        None,
+    )
+    start = next((c.start_byte for c in node.children if c.type not in ("decorator", "comment")),
+                 node.start_byte)
+    end = class_body.start_byte if class_body is not None else node.end_byte
+    return " ".join(src[start:end].decode("utf-8", errors="replace").split())
 
 
 def merge_adjacent_same_fqn(symbols: list, impl_rank, merge_top_level: bool = False) -> list[tuple]:
@@ -146,6 +197,7 @@ def merge_adjacent_same_fqn(symbols: list, impl_rank, merge_top_level: bool = Fa
                 start_line = min(s.start_line for s in run),
                 end_line   = max(s.end_line for s in run),
                 text       = "\n\n".join(s.text for s in ordered),
+                line_map   = None,   # the merged text no longer maps line for line
             ), impl))
         i = j
     return out
