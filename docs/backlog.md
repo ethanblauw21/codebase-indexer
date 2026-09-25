@@ -46,6 +46,8 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
+| [B-022](#b-022) | The summarizer runs one chunk at a time on the GPU | GPU baseline session, 2026-09-24 | M | **promoted → ADR-027** |
+| [B-025](#b-025) | Appended summaries make intent retrieval worse; the same summaries help when kept apart | retrieval check, 2026-09-25 | M | **promoted → ADR-030** |
 | [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | shaped |
 | [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L | raw |
 | [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
@@ -444,6 +446,34 @@ this observation is from `BAAI/bge-code-v1` (dim 1536), reranker off, `fusion_mo
 98-file index of this repo. It is four queries on one small corpus — a real signal about the score
 *distribution*, not a measurement of retrieval quality. Anything that changes fusion needs the ADR-007
 harness, which needs the T4, which is GPU-gated.
+
+---
+
+<a id="b-022"></a>
+### B-022 — The summarizer runs one chunk at a time on the GPU
+
+**Source:** GPU baseline session, 2026-09-24 · **Status:** promoted → [ADR-027](./adr/ADR-027-summarizer-adaptive-batching.md) · **Size:** M
+
+With the summarizer on, a full index of this repository is dominated by summarization. On the
+repaired 8 GB RTX PRO 1000, embedding 1,731 chunks took 106 s, while the summarization pass ran at
+about 3 s per chunk and used 3.65 GB of the card. The isolated worker hardcodes `batch_size=1`
+(`src/summarizer.py:116`), so most of the card and a good part of its compute sit idle.
+
+**The want:** a faster summarization pass that stays safe on memory. If there is not enough free
+memory, it should back off or pause rather than spill into system RAM, because on Windows that spill
+does not raise an error, it just runs about 50 times slower.
+
+Numbers 012 to 021 are used on other branches; this entry takes the next free number.
+
+### B-025 — Appended summaries make intent retrieval worse; the same summaries help when kept apart
+
+**Source:** retrieval check, 2026-09-25 · **Status:** **promoted → [ADR-030](./adr/ADR-030-separate-summary-index.md)** · **Size:** M
+
+Each chunk is embedded as its code with the LLM summary appended. On 55 queries that describe what a function's body does, that scored 0.380 MRR@10 against 0.436 with no summaries, and on the original 83 queries it made no difference. The summary pulls the chunk toward its stated purpose, and for 68 to 77 percent of tier-2/3 chunks it falls past the embedder's 512-token window and is never seen.
+
+The same summaries embedded on their own and fused by RRF with the code ranking scored 0.613 and 0.606 on the two sets, against 0.457 and 0.450 for code alone (`gpu-crash-repro/summary_store_eval.py`; ADR-027's log has the details).
+
+**The want:** keep the summaries' value without their harm, and without paying the summarizer again for indexes that already have them cached.
 
 ### B-026 — Class members lose their docs, private methods and getters from the index, and a method arrives without its class
 

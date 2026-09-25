@@ -66,6 +66,16 @@ def _wired() -> dict[tuple[str, str], object]:
         # ADR-026 commit 1 wired these two — they were inert before.
         ("summarization", "enabled"):      config.DEFAULT_SUMMARIZATION_ENABLED,
         ("summarization", "model_id"):     config.DEFAULT_SUMMARIZER_MODEL_ID,
+
+        # ADR-027.
+        ("summarization", "max_batch_size"):  config.DEFAULT_SUMMARIZER_MAX_BATCH_SIZE,
+        ("summarization", "vram_reserve_mb"): config.DEFAULT_SUMMARIZER_VRAM_RESERVE_MB,
+        ("summarization", "batch_token_budget"): config.DEFAULT_SUMMARIZER_BATCH_TOKEN_BUDGET,
+
+        # ADR-030.
+        ("summarization", "tiers"):        config.DEFAULT_SUMMARIZER_TIERS,
+        ("retrieval", "summary_weight"):   hybrid_retriever._DEFAULT_SUMMARY_WEIGHT,
+        ("retrieval", "file_chunk_weight"): hybrid_retriever._DEFAULT_FILE_CHUNK_WEIGHT,
     }
 
 

@@ -61,3 +61,27 @@ def test_ingest_adds_one_vector_per_chunk_row(tmp_path, monkeypatch):
     assert "src/queue.ts::Queue.concurrency" in scopes, scopes
     for name, idx in indexes.items():
         assert idx.ntotal == rows.get(TIER_NUM[name], 0), name
+
+
+class _EchoSummarizer:
+    def summarize_batch(self, texts):
+        return [f"summary of {len(t)} chars" for t in texts]
+
+
+def test_summary_index_gets_one_vector_per_summarized_row(tmp_path, monkeypatch):
+    """ADR-030's summary index is keyed by the same ids, so it had the same surplus."""
+    from incremental_indexer import SUMMARY_INDEX
+
+    monkeypatch.setattr(core, "embed_batch", _fake_embed)
+    db_path = os.path.join(str(tmp_path), "graph.db")
+    db = CodeDB(db_path)
+    indexes = {name: faiss.IndexIDMap(faiss.IndexFlatIP(_DIM)) for name, _, _ in TIER_CONFIGS}
+    indexes[SUMMARY_INDEX] = faiss.IndexIDMap(faiss.IndexFlatIP(_DIM))
+
+    ingest_file("src/queue.ts", _ACCESSOR_PAIR, "h1", indexes, DocumentStore(db_path), db,
+                summarizer=_EchoSummarizer())
+
+    rows = db._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+    db.close()
+    ids = faiss.vector_to_array(indexes[SUMMARY_INDEX].id_map)
+    assert len(ids) == len(set(ids)) == rows

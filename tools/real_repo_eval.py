@@ -184,10 +184,12 @@ def run_arm(repo_name, arm, fixtures, verbose=False):
             # preserving rank. Scope format is language-dependent (JS "file::Sym",
             # C# "Ns.Class.M/arity", plus "_part_N" chunk-split suffixes), so match by
             # normalized suffix rather than exact string.
+            # The key carries the file: tier-2/3 scopes are a bare "Full File_part_N",
+            # so keyed on scope alone every file's whole-file chunk graded as one entry.
             seen, ranked = set(), []
             for c in chunks:
-                key = _norm(c.scope)
-                if not key or key in seen:
+                key = (c.file, _norm(c.scope))
+                if not key[1] or key in seen:
                     continue
                 seen.add(key)
                 hit = next((g for g in gold if _matches(c.scope, g)), None)

@@ -72,6 +72,12 @@ def load_indexer_config(start_dir: str | None = None) -> dict:
 
 DEFAULT_SUMMARIZATION_ENABLED = True
 DEFAULT_SUMMARIZER_MODEL_ID = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
+# ADR-027: the batch ceiling and the GPU memory the worker leaves for everything else.
+DEFAULT_SUMMARIZER_MAX_BATCH_SIZE = 48
+DEFAULT_SUMMARIZER_VRAM_RESERVE_MB = 1024
+DEFAULT_SUMMARIZER_BATCH_TOKEN_BUDGET = 16000
+# ADR-030: which chunk tiers are summarized (1 functions, 2 components, 3 files).
+DEFAULT_SUMMARIZER_TIERS = [1, 2, 3]
 
 _sum_cfg_cache: dict | None = None
 
@@ -107,3 +113,28 @@ def summarization_enabled() -> bool:
 def summarizer_model_id() -> str:
     """HuggingFace model id for chunk summarization."""
     return str(_sum_cfg().get("model_id", DEFAULT_SUMMARIZER_MODEL_ID))
+
+
+def summarizer_max_batch_size() -> int:
+    """Largest batch the summarizer worker may grow to (ADR-027). 1 turns batching off."""
+    return max(1, int(_sum_cfg().get("max_batch_size", DEFAULT_SUMMARIZER_MAX_BATCH_SIZE)))
+
+
+def summarizer_batch_token_budget() -> int:
+    """Prompt tokens per summarizer batch at the start of a run (ADR-027).
+
+    A batch holds budget // (its longest prompt) chunks. The budget adjusts during
+    the run: down on out-of-memory, up slowly while batches fit.
+    """
+    return max(1, int(_sum_cfg().get("batch_token_budget", DEFAULT_SUMMARIZER_BATCH_TOKEN_BUDGET)))
+
+
+def summarizer_vram_reserve_mb() -> int:
+    """GPU memory, in MiB, the summarizer worker must leave free for other processes (ADR-027)."""
+    return max(0, int(_sum_cfg().get("vram_reserve_mb", DEFAULT_SUMMARIZER_VRAM_RESERVE_MB)))
+
+
+def summarizer_tiers() -> set[int]:
+    """Chunk tiers that get a summary (ADR-030). Tier-2/3 chunks are the long
+    prompts, so they are most of the summarizer's GPU time."""
+    return {int(t) for t in _sum_cfg().get("tiers", DEFAULT_SUMMARIZER_TIERS)}
