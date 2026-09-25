@@ -76,8 +76,14 @@ The member's decorators may sit between them, and at most one blank line may sep
 comment and a `/* */` block that is not JSDoc do not move.
 
 **Where the moved doc goes:**
-- It becomes the first lines of the member's `Symbol.text`.
-- The member's `start_line` is moved up to the doc's first line, so `path:start-end` covers it.
+- It is appended **after** the member's code in `Symbol.text`, so the chunk reads code first, then
+  doc. Arm 1 measured both placements (see the log). With the doc first, a long doc ahead of a short
+  body diluted the body's vector. `setPriority` went from 113 to 404 tokens, mostly prose and
+  examples, and an intent query about its validation fell from rank 2 to 11. With the doc after the
+  code, that loss is gone.
+- Examples inside the doc stay. Stripping fenced and `@example` blocks made no measurable difference.
+- The member's `start_line` is moved up to the doc's first line, so `path:start-end` covers what the
+  chunk holds.
 - `skeletonize` leaves the moved comment out of the skeleton, and the stub stays.
 
 Python needs no doc-move, because a docstring is inside the body already.
@@ -147,7 +153,7 @@ Every criterion has a threshold. The final arm must pass all of them.
 | Named p-queue queries | Each ranks no worse than under `store031`, which covers the 23 queries with a rank today. `pq-concurrency` may stay not found. |
 | p-queue original set | MRR@10 ≥ 0.554 (`store031`) |
 | Regressions per set | In each set, at most 2 queries lose 3 or more ranks against `store031` |
-| Set baselines (`store031`, arm B) | original 0.635, intent 0.674, file "any" 0.867, file "whole" 0.500. The means are reported with the paired CI95 but not gated on it. |
+| Set baselines (`store031`, arm B, `arm_gate.py` at depth 50) | original 0.641, intent 0.671, file "any" 0.873, file "whole" 0.467. The means are reported with the paired CI95 but not gated on it. |
 | Skeleton size | `PQueue`'s skeleton is at most 8,500 characters (probe: 7,996), and no class skeleton in the three repos grows, except by §5's header line per part |
 | Token budget | A moved doc does not push a member that fit tier 1's 500 tokens into `_part_N`; each such member is listed with its token count |
 | Chunk integrity | `index_status` reports vectors equal to chunk rows for every tier |
@@ -205,9 +211,9 @@ Every criterion has a threshold. The final arm must pass all of them.
 
 ## Implementation Log
 
-- [ ] Merge `feature/adr-030-summary-index` in, for the measurement stack
-- [ ] §1 doc-move (TypeScript): adapter, `skeletonize`, fixtures and tests
-- [ ] Arm 1 built and measured against `store031`
+- [x] Merge `feature/adr-030-summary-index` in, for the measurement stack
+- [x] §1 doc-move (TypeScript): adapter, `skeletonize`, tests (`tests/test_class_member_docs.py`)
+- [x] Arm 1 built and measured against `store031` (see notes)
 - [ ] §2 `#` members, call query and arrow fields: fixtures and tests
 - [ ] Arm 2 built and measured
 - [ ] §3 merge and §4 Python decorated stubs: fixtures and tests
@@ -221,3 +227,37 @@ Every criterion has a threshold. The final arm must pass all of them.
 
 **Notes:**
 <!-- 2026-09-25: branch cut from ADR-033 (0604392); probe found the Python decorated-body defect (§4). -->
+
+**2026-09-25, arm 1 (§1 doc-move).**
+- **Setup:** three eval repos rebuilt on the GPU with summaries. The summary cache was seeded, so only
+  the changed chunks were re-summarized (p-queue: 21). Measured with `gpu-crash-repro/arm_gate.py`
+  (depth 50, arm B). Results are in `telemetry/retrieval/results_gate_034*.json`.
+- **Chunk sizes:**
+  - `PQueue`'s skeleton went from 10,105 to 5,475 characters.
+  - No class skeleton in the three repos grew.
+  - The same 17 members exceed 500 tokens before and after, so no member was pushed into `_part_N`.
+- **Doc placement, measured four ways:**
+
+  | Variant | orig (83) | intent (95) | file any / whole (40) | p-queue orig |
+  |---|---|---|---|---|
+  | `store031` | 0.641 | 0.671 | 0.873 / 0.467 | 0.554 |
+  | doc first | +0.050* | +0.018 | −0.013 / −0.017 | 0.729 |
+  | doc first, examples stripped | +0.050* | +0.019 | −0.013 / −0.017 | 0.729 |
+  | **doc after code** | **+0.051*** | **+0.025*** | **+0.004 / −0.010** | **0.730** |
+  | doc after, examples stripped | +0.051* | +0.025* | +0.004 / −0.010 | 0.730 |
+
+  \* = the paired 95% interval excludes zero.
+- **Doc first fails the gate on intent.** 3 queries lose 3 or more ranks: `pq-intent-04` 2→11,
+  `pq-intent-06` 2→5, `pq-intent-10` 9→14. Doc after code leaves only `pq-intent-06` (2→6), where the
+  query names the "all-work-finished notification" and `onIdle`, which now carries its doc, fairly
+  competes.
+- **Named p-queue ranks, doc after code:**
+  - Gains: `pq-pause` 4→1, `pq-saturated` 2→1, `pq-sizeby` 7→1, `pq-running-tasks` 13→3,
+    `pq2-pending` 10→4, `pq2-on-pending-zero` 9→1 and `pq2-is-rate-limited` 4→1.
+  - Worse: `pq2-on-error` 9→12. That is the fusion loss of Verification 6, and it fails the strict
+    "no worse" gate criterion. The gate applies to the final arm, so it stays open.
+- **Without summaries** (doc first, `none034a1` against `none031`): orig +0.058*, intent +0.028*,
+  file unchanged.
+- **Harness:** `arm_gate.py` retrieves at depth 50, so its `store031` means differ slightly from
+  `clean_sweep2.py`'s depth-10 means (0.635 / 0.674 / 0.867 / 0.500). The gate table uses the
+  harness's own numbers, and both arms are always compared in the same harness.

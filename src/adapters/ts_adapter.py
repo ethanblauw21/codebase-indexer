@@ -260,20 +260,23 @@ class _WebAdapter:
             type_node: Optional[Node]  = None,
         ) -> Symbol:
             fqn = build_fqn(file_path, class_ctx, name)
-            # A class member's leading JSDoc moves into the member's own chunk (ADR-034 §1);
-            # the class skeleton then leaves it out.
+            # A class member's leading JSDoc moves into the member's own chunk, placed after
+            # the code, and the class skeleton leaves it out (ADR-034 §1). After, not before:
+            # a long doc ahead of a short body diluted the body's vector (arm 1 of ADR-034).
             doc = leading_doc(node, src) if class_ctx and moved_docs is not None else None
-            start = doc or node
+            text = node_text(node, src)
             if doc:
                 moved_docs.add(doc.start_byte)
+                code = src[doc.end_byte:node.end_byte].decode("utf-8", errors="replace").lstrip()
+                text = f"{code}\n{node_text(doc, src)}"
             sym = Symbol(
                 fqn           = fqn,
                 kind          = kind,
                 name          = name,
                 class_context = class_ctx,
-                start_line    = start.start_point[0] + 1,
+                start_line    = (doc or node).start_point[0] + 1,
                 end_line      = node.end_point[0] + 1,
-                text          = src[start.start_byte:node.end_byte].decode("utf-8", errors="replace"),
+                text          = text,
             )
             symbols.append(sym)
             scope_node = call_scope or node
