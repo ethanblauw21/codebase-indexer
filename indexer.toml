@@ -100,6 +100,11 @@ fusion_mode = "rrf"
 dense_weight = 0.7
 sparse_weight = 0.3
 
+# ADR-030: RRF weight of the summary index next to the three code tiers. Summaries
+# have their own vectors under their chunk's id; 0 turns them off at search time.
+# 1.0 measured 0.606 MRR@10 on intent queries against 0.582 at 0.5 (2026-09-25).
+summary_weight = 1.0
+
 [summarization]
 # Set to false to skip LLM chunk summarization (faster indexing, lower recall).
 enabled = true
@@ -121,6 +126,11 @@ max_batch_size = 48
 # every chunk length (2026-09-24 profile). The budget steps down on out-of-memory and
 # grows slowly while batches fit, so this is a starting point, not a limit.
 batch_token_budget = 16000
+
+# ADR-030: chunk tiers that get a summary: 1 functions, 2 components, 3 whole files.
+# Tiers 2 and 3 are the long prompts, so they are most of the summarizer's GPU time;
+# whether their summaries earn it is not measured yet (ADR-030 Verification 3).
+tiers = [1, 2, 3]
 
 # GPU memory, in MiB, the summarizer leaves free for the desktop and other programs.
 # The worker caps itself at (what it holds + what is free - this reserve), so running

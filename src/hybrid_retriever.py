@@ -39,6 +39,7 @@ See stable_id.py for the formula and its constraints.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -89,6 +90,9 @@ _DEFAULT_RERANKER_ENABLED  = False
 _DEFAULT_FUSION_MODE       = "rrf"
 _DEFAULT_DENSE_WEIGHT      = 0.7
 _DEFAULT_SPARSE_WEIGHT     = 0.3
+# ADR-030: RRF weight of the summary index next to the three code tiers.
+_DEFAULT_SUMMARY_WEIGHT    = 1.0
+_SUMMARY_INDEX_NAME        = "summary"
 
 # ---------------------------------------------------------------------------
 # Return type
@@ -183,6 +187,12 @@ class HybridRetriever:
         self._tier1: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER1_NAME)
         self._tier2: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER2_NAME)
         self._tier3: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER3_NAME)
+        # ADR-030: summaries have their own vectors under their chunk's id. Absent on
+        # an index built before it, and then search is exactly as it was.
+        self._summary: Optional[faiss.Index] = (
+            self._index_manager.load_or_create(_SUMMARY_INDEX_NAME)
+            if os.path.exists(os.path.join(index_dir, f"{_SUMMARY_INDEX_NAME}.faiss")) else None
+        )
         self._doc_store = DocumentStore(db_path)
         self._db = CodeDB(db_path)
 
@@ -216,6 +226,7 @@ class HybridRetriever:
         ).lower()
         self._dense_weight: float = float(ret_cfg.get("dense_weight", _DEFAULT_DENSE_WEIGHT))
         self._sparse_weight: float = float(ret_cfg.get("sparse_weight", _DEFAULT_SPARSE_WEIGHT))
+        self._summary_weight: float = float(ret_cfg.get("summary_weight", _DEFAULT_SUMMARY_WEIGHT))
         self._bm25: Optional[object] = None
         self._bm25_fids: list[int] = []
         self._bm25_pos: dict[int, int] = {}   # faiss_id → row in the BM25 corpus
@@ -321,6 +332,17 @@ class HybridRetriever:
                     continue
                 fid = int(fid)
                 fused[fid] = fused.get(fid, 0.0) + 1.0 / (_RRF_K + rank)
+
+        # ADR-030: the summary index shares its chunks' ids, so a summary hit adds
+        # to that chunk's code score. The three code tiers can never do that for
+        # each other, because the tier is part of the id (B-011).
+        if self._summary is not None and self._summary.ntotal and self._summary_weight > 0:
+            _, ids = self._summary.search(vec, min(k, self._summary.ntotal))
+            for rank, fid in enumerate(ids[0]):
+                if fid == -1:
+                    continue
+                fid = int(fid)
+                fused[fid] = fused.get(fid, 0.0) + self._summary_weight / (_RRF_K + rank)
 
         if not fused:
             return []
