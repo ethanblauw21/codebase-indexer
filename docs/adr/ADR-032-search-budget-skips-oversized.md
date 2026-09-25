@@ -1,6 +1,6 @@
 # ADR-032: Search Output Skips a Result That Does Not Fit, Instead of Stopping
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-032-search-budget-skips-oversized`
 **Reviewer:** @edb
