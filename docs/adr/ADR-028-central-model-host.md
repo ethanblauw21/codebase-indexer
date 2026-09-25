@@ -194,7 +194,7 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
 - [x] Callers switched: `hybrid_retriever.py` (`embed`), `incremental_indexer.py` (`embed_batch`, `make_summarizer`)
 - [x] `[model_host]` config (`enabled`, `embed_idle_s`, `idle_exit_s`, `spawn_timeout_s`) and the drift test
 - [x] `tests/test_model_host.py`: policy with a fake backend and clock, HTTP with the token, client fallback and model check. Suite: 346 passed, plus the 6 snapshot failures that were already failing.
-- [ ] **Gate:** bf16 embedder landed (its own branch)
+- [x] **Gate:** bf16 embedder landed: ADR-035 (#39), merged to `master` 2026-09-25. The host loads the embedder through `core._get_embed_model()`, so it gets bf16 (2,944 MiB) with no change here
 - [ ] First real run on the GPU: fill the gaps table (load times, memory after unload, pass 1 through the host)
 - [ ] Per-batch timing in `BatchStats` (the longest batch's seconds), for the preemption bound
 - [ ] Watchdog: confirm the MCP server's save path goes through the client end to end. It calls `run_incremental`, so it should.
