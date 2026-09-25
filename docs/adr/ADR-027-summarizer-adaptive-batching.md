@@ -210,3 +210,18 @@ The PR does not merge until all of these hold on the 8 GB card.
   - **Batching, on this set:** batch size 1 against batched2 is -0.001 with 2 queries up and 2 down, and batched against batched2 goes the other way from the original set. So the systematic batching drop seen on the original set does not carry over. It stays a small effect next to the cost of summarizing at all.
   - **Scope of the claim:** three repos in TypeScript and Python, one embedder (`bge-code-v1`), one summarizer (Qwen2.5-Coder-1.5B) and one prompt. Summaries could still help with another embedder, a bigger summarizer, a prompt that describes the body rather than the purpose, or a separate summary index instead of appended text. But as shipped, `[summarization].enabled = true` costs 16 to 67 min of GPU per index on this repository and makes intent retrieval worse. Whether to turn it off is @edb's call. See the backlog item filed from this.
   - **Found while writing the queries:** TypeScript private `#` methods get no chunk of their own. Their bodies are only in whole-file chunks, so p-queue's rate-window and idle-timer logic cannot be a specific target.
+- 2026-09-25, **the summaries are good; appending them is the problem** (`gpu-crash-repro/summary_store_eval.py`, `retrieval/results_summary_store.json`). Every summary from an already-built index was embedded on its own as a document and searched by cosine. Each hit maps back to its chunk, and the result is fused by RRF (k = 60) with the code-only index's ranking (arm B, top 30 cut to 10). No new summaries were generated.
+
+    | | Original (83) | Intent (55) |
+    |---|---|---|
+    | code only | 0.457 | 0.450 |
+    | summaries alone | 0.567 | 0.535 |
+    | fused, summary weight 1.0 | **0.613** (43 up, 13 down) | **0.606** (26 up, 11 down) |
+    | fused, summary weight 0.5 | 0.619 | 0.582 |
+    | appended (shipped) | 0.449 | 0.380 |
+
+  - The code-only row is 0.457 here, not the 0.443 in the tables above, because this run pulls 30 candidates before cutting to 10. All the rows in this table share that setup.
+  - Batched summaries fused the same as batch-size-1 summaries (0.614 against 0.613 on the original set, 0.584 against 0.606 on intent), so batching is safe in this design.
+  - Why appending failed: for 77 percent of tier-2 and 68 percent of tier-3 chunks, the code alone fills the embedder's 512-token window, so the summary is never seen. Where it is seen, it pulls the chunk toward its purpose.
+  - Fusing only tier-2/3 summaries scored 0.28. That is not a fair test of file summaries, because every gold in both sets is a single function, so a whole-file hit counts as a miss.
+  - Summarization is turned off by default on `chore/summaries-off-by-default` (02eb4bb) until a separate summary index is built. That work needs its own ADR.
