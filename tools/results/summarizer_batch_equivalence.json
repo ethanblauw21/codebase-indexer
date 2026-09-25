@@ -1,5 +1,5 @@
 {
-  "git_sha": "9f096a6",
+  "git_sha": "43d5281",
   "model_id": "Qwen/Qwen2.5-Coder-1.5B-Instruct",
   "device": "cuda",
   "gpu": "NVIDIA RTX PRO 1000 Blackwell Generation Laptop GPU",
@@ -10,7 +10,7 @@
   "max_batch": 16,
   "reserve_mb": 1024,
   "batch_1": {
-    "seconds": 482.0,
+    "seconds": 478.1,
     "stats": {
       "summarized": 200,
       "empty_output": 0,
@@ -20,11 +20,13 @@
       "pauses": 0,
       "pause_timeouts": 0,
       "largest_batch": 1,
-      "peak_mb": 3510
+      "peak_mb": 3512,
+      "end_batch": 1,
+      "end_streak": 200
     }
   },
   "batched": {
-    "seconds": 159.1,
+    "seconds": 186.7,
     "stats": {
       "summarized": 200,
       "empty_output": 0,
@@ -34,11 +36,55 @@
       "pauses": 0,
       "pause_timeouts": 0,
       "largest_batch": 8,
-      "peak_mb": 4762
+      "peak_mb": 4762,
+      "end_batch": 8,
+      "end_streak": 3
     }
   },
-  "exact_match": 0.945,
+  "exact_match": 0.92,
   "differing": [
+    {
+      "file": "tests/fixtures/src/sample.py",
+      "tier": "tier1_surgical",
+      "text": "File: tests/fixtures/src/sample.py\nEntity: tests/fixtures/src/sample.py::format_output (function)\nTags: [CAT_PARSE]\nLines: 29-32\nCode:\ndef format_output(data: dict, indent: int = 2) -> str:\n    \"\"\"Render data as a formatted string.\"\"\"\n    import json\n    return json.dumps(data, indent=indent)",
+      "batch_1": "Purpose: Formats a dictionary into a JSON-formatted string.\nInputs: `data` (dict), `indent` (int, default 2).\nOutputs: Returns a string representing the formatted JSON.\nKey operations: Converts the dictionary to a JSON string using `json.dumps`.",
+      "batched": "Purpose: Formats a dictionary into a JSON-formatted string.\nInputs: `data` (dict), `indent` (int, default 2).\nOutputs: A string representing the formatted JSON data.\nKey operations: Converts the dictionary to a JSON string using `json.dumps`."
+    },
+    {
+      "file": "tools/ci_summary.py",
+      "tier": "tier1_surgical",
+      "text": "File: tools/ci_summary.py\nEntity: tools/ci_summary.py::build_markdown (function)\nLines: 98-147\nCode:\ndef build_markdown(\n    failures: list[dict],\n    n_failed: int,\n    n_passed: int,\n    survivors: list[dict],\n    n_killed: int,\n    n_total: int,\n    threshold_high: int,\n    threshold_low: int,\n    has_pytest: bool,\n    has_mutmut: bool,\n) -> str:\n    lines = [\"## CI Summary\", \"\"]\n\n    if has_py",
+      "batch_1": "Purpose: Generates markdown summary of CI results including test failures and mutation scores.\nInputs:\n- `failures`: List of dictionaries containing test details.\n- `n_failed`: Number of failed tests.\n- `n_passed`: Number of passed tests.\n- `survivors`: List of dictionaries containing survived mutation details.\n- `n_killed`: Number of killed mutations.\n- `n_total`: Total number of mutations.\n- `threshold_high`: Threshold for high mutation score.\n- `threshold_low`: Threshold for low mutation score.\n- `has_pytest`: Boolean indicating presence of pytest.\n- `has_mutmut`: Boolean indicating presence of mutmut.\nOutputs:\n- A string containing markdown formatted summary.\nKey operations:\n- Constructs markdown sections for test results and mutation scores based on input parameters.\n-",
+      "batched": "Purpose: Generates markdown summary of CI results including test failures and mutation scores.\nInputs: `failures`, `n_failed`, `n_passed`, `survivors`, `n_killed`, `n_total`, `threshold_high`, `threshold_low`, `has_pytest`, `has_mutmut`.\nOutputs: Markdown string containing summary information.\nKey operations: Constructs markdown table for test failures, calculates mutation score, and formats the output string."
+    },
+    {
+      "file": "tools/eval_common.py",
+      "tier": "tier1_surgical",
+      "text": "File: tools/eval_common.py\nEntity: tools/eval_common.py::score_query (function)\nTags: [CAT_PERSIST]\nLines: 47-81\nCode:\ndef score_query(ranked_ids, rel):\n    \"\"\"Grade one query's ranking.\n\n    ranked_ids: top-K doc ids (best first). rel: {doc_id: gain}.\n    Returns MRR@10, NDCG@10, MAP, and Recall/Success@{1,5,10}.\n    \"\"\"\n    relset = set(rel)\n\n    mrr = 0.0\n    for i, d in enumerate(ranked_ids):\n",
+      "batch_1": "Purpose: This function scores a query based on its ranking against a set of relevant documents.\nInputs:\n- `ranked_ids`: A list of document IDs ranked by relevance.\n- `rel`: A dictionary mapping document IDs to their relevance scores.\nOutputs:\n- A dictionary containing metrics such as Mean Reciprocal Rank (MRR), Normalized Discounted Cumulative Gain (NDCG), Average Precision (AP), and recall/success rates for different ranks.\nKey operations:\n- Calculates the MRR@10 by checking if any document in the top-10 ranked IDs is relevant.\n- Computes the MAP by iterating through the ranked IDs and calculating the average precision up to each relevant document.\n- Calculates the NDCG@K by sorting the relevance scores in descending order and computing the",
+      "batched": "Purpose: This function scores a query based on its ranking against a set of relevant documents.\nInputs:\n- `ranked_ids`: A list of document IDs ordered by relevance, best first.\n- `rel`: A dictionary mapping document IDs to their relevance scores.\nOutputs:\n- A dictionary containing metrics such as Mean Reciprocal Rank (MRR), Normalized Discounted Cumulative Gain (NDCG), Average Precision (AP), and recall/success rates for different ranks.\nKey operations:\n- Calculates the MRR@10 by checking if any document in the top-10 ranked IDs is among the relevant documents.\n- Computes the MAP by iterating through the ranked IDs and calculating the average precision up to each relevant document.\n- Calculates the NDCG@K by sorting the relevance scores"
+    },
+    {
+      "file": "tests/test_graph_report.py",
+      "tier": "tier1_surgical",
+      "text": "File: tests/test_graph_report.py\nEntity: tests/test_graph_report.py::test_render_scope_header_when_target_path_given (function)\nTags: [CAT_NETWORK] [CAT_TEST]\nLines: 179-182\nCode:\ndef test_render_scope_header_when_target_path_given():\n    analysis = ga.analyze(_FakeDB(_god_object_graph_edges()))\n    report = gr.render_report(analysis, target_path=\"src/db.py\")\n    assert \"scoped to `src/db.py`\" in ",
+      "batch_1": "Purpose: Tests rendering of scope header in graph report when a target path is specified.\nInputs: `analysis`, `target_path`\nOutputs: None, but asserts that the rendered report contains the expected string.\nKey operations: Calls `gr.render_report` with the analysis and target path, then checks for the presence of the specific string in the output.",
+      "batched": "Purpose: Tests rendering of scope header when a target path is given.\nInputs: `analysis`, `target_path`\nOutputs: None, but asserts that the rendered report contains the specified string.\nKey operations: Calls `gr.render_report` with the analysis and target path, then checks for the presence of the specified string in the output."
+    },
+    {
+      "file": "src/core.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/core.py\nEntity: src/core.py::MultiIndexManager.__init__ (method)\nTags: [CAT_CONFIG]\nLines: 145-148\nCode:\ndef __init__(self, base_dir=\".code-index\"):\n        self.base_dir = base_dir\n        os.makedirs(base_dir, exist_ok=True)\n        self.indexes = {}",
+      "batch_1": "Purpose: Initializes a MultiIndexManager instance with a specified base directory for indexing.\nInputs: \n- `base_dir` (str): The path where the index will be stored. Defaults to \".code-index\".\nOutputs: \n- None\nKey Operations:\n- Sets the `base_dir` attribute to the provided path.\n- Creates the directory at the specified path using `os.makedirs`.\n- Initializes an empty dictionary `indexes` to store index data.",
+      "batched": "Purpose: Initializes a MultiIndexManager instance with a specified base directory for indexing.\nInputs: \n- `base_dir` (str): The path where the index will be stored. Defaults to \".code-index\".\nOutputs: \n- None\nKey Operations:\n- Sets the `base_dir` attribute to the provided path.\n- Creates the directory at the specified path using `os.makedirs`, ensuring it exists.\n- Initializes an empty dictionary `indexes` to store index data."
+    },
+    {
+      "file": "tests/test_scan_policy.py",
+      "tier": "tier1_surgical",
+      "text": "File: tests/test_scan_policy.py\nEntity: tests/test_scan_policy.py::test_git_and_index_dir_are_excluded_unconditionally (function)\nTags: [CAT_CONFIG] [CAT_TEST]\nLines: 50-55\nCode:\ndef test_git_and_index_dir_are_excluded_unconditionally(tmp_path):\n    \"\"\"Not knobs: indexing `.git` embeds packfiles; indexing the index recurses.\"\"\"\n    policy = sp.scan_policy(_repo(tmp_path, \"[ignore]\\ndirs = []\\n\"))\n",
+      "batch_1": "Purpose: Tests that Git and index directories are excluded unconditionally by the scan policy.\nInputs: `tmp_path`, which is a temporary directory created for testing purposes.\nOutputs: The scan policy object (`policy`) should have no ignored directories set.\nKey operations: The function creates a scan policy using a temporary repository with specific configuration settings, then checks if the Git and index directories are correctly marked as ignored.",
+      "batched": "Purpose: Tests that Git and index directories are excluded unconditionally by the scan policy.\nInputs: `tmp_path`, `sp.scan_policy`\nOutputs: None\nKey operations: Initializes a scan policy with an ignore directory configuration, checks if `.git` and `.code-index` are ignored."
+    },
     {
       "file": "tests/fixtures/src/sample.ts",
       "tier": "tier1_surgical",
@@ -47,74 +93,67 @@
       "batched": "Purpose: Initializes a DataService instance with a specified path.\nInputs: `path` (string): The path to the data source.\nOutputs: None.\nKey operations: Sets up the DataService with the given path for data retrieval."
     },
     {
-      "file": "src/graph_report.py",
+      "file": "tests/test_stable_id.py",
       "tier": "tier1_surgical",
-      "text": "File: src/graph_report.py\nScope: src/graph_report.py::render_report (Part 2/3)\nCode:\n        (c for c in analysis.communities if len(c.members) >= min_community_size),\n        key=lambda c: len(c.members),\n        reverse=True,\n    )\n    hidden = len(analysis.communities) - len(shown)\n\n    lines += [\"## Module Communities\", \"\"]\n    if not shown:\n        lines += [\n            f\"_No community has ≥",
-      "batch_1": "1. This function renders a report about graph communities based on their size and cohesion.\n2. Input parameters include `analysis`, `min_community_size`, `god_fqns`, `max_members_shown`.\n3. Output includes a list of formatted strings representing the report content.\n4. Key operations involve filtering communities by size, sorting them by size, generating labels for each community, and listing its members.",
-      "batched": "Purpose: This function renders a report about graph communities and god-objects based on the given analysis object.\nInputs:\n- `analysis`: An object containing community and god-object data.\nOutputs:\n- A list of strings representing the rendered report.\nKey operations:\n- Filters communities based on minimum size.\n- Sorts communities by member count.\n- Generates labels for communities.\n- Displays community details including symbol labels and member previews.\n- Handles cases where no communities meet the minimum size threshold.\n- Lists god-objects with their properties and relationships."
-    },
-    {
-      "file": "tests/test_index_freshness.py",
-      "tier": "tier1_surgical",
-      "text": "File: tests/test_index_freshness.py\nEntity: tests/test_index_freshness.py::_fresh_db (function)\nTags: [CAT_PERSIST]\nLines: 31-32\nCode:\ndef _fresh_db(tmp_path) -> CodeDB:\n    return CodeDB(os.path.join(str(tmp_path), \"graph.db\"))",
-      "batch_1": "Purpose: This function creates a new instance of `CodeDB` using a temporary directory path.\nInputs: `tmp_path` (str): The path where the database file will be created.\nOutputs: `CodeDB`: An instance of `CodeDB` initialized with the specified database file path.\nKey operations: It constructs the full path for the database file by joining the temporary path with \"graph.db\" and then initializes a new `CodeDB` object with this path.",
-      "batched": "Purpose: This function creates a new instance of `CodeDB` using a temporary directory path.\nInputs: `tmp_path` (str): The path where the database file will be created.\nOutputs: A new instance of `CodeDB`.\nKey operations: It constructs the full path for the database file by joining the temporary path with \"graph.db\"."
-    },
-    {
-      "file": "src/ast_chunker.py",
-      "tier": "tier1_surgical",
-      "text": "File: src/ast_chunker.py\nScope: src/ast_chunker.py::fallback_token_chunker (Part 2/2)\nCode:\n\n    total = len(raw_chunks)\n    result: list[Chunk] = []\n    for idx, code in enumerate(raw_chunks):\n        rich_text = (\n            f\"File: {file_path}\\n\"\n            f\"Scope: {parent_scope} (Part {idx + 1}/{total})\\n\"\n            f\"Code:\\n{code}\"\n        )\n        result.append(Chunk(\n            text ",
-      "batch_1": "Purpose: This function processes a list of raw chunks of code into a structured format, including details about each chunk's location within the source file and its scope.\nInputs:\n- `raw_chunks`: A list of strings representing the raw code chunks.\n- `file_path`: The path to the source file containing these chunks.\n- `parent_scope`: The parent scope context for the current chunk.\nOutputs:\n- A list of `Chunk` objects, each containing detailed information about the code chunk.\nKey Operations:\n- Iterates over each raw chunk, creating a `Chunk` object with relevant metadata such as file path, scope, and line numbers.\n- Constructs a rich text string that includes file path, scope, and code content for each chunk.\n- Appends each `Chunk` object to the result",
-      "batched": "Purpose: This function processes a list of raw chunks of code into a structured format, including details about each chunk's location within the source file and its scope.\nInputs:\n- `raw_chunks`: A list of strings representing the raw code chunks.\n- `file_path`: The path to the source file being processed.\n- `parent_scope`: The parent scope context for the current chunk.\nOutputs:\n- A list of `Chunk` objects, each containing detailed information about the code chunk.\nKey operations:\n- Iterates over each raw chunk, creating a `Chunk` object with relevant metadata such as file path, scope, and code content.\n- Appends each `Chunk` object to the result list."
+      "text": "File: tests/test_stable_id.py\nEntity: tests/test_stable_id.py::test_stable_id_at_most_60_bits (function)\nTags: [CAT_TEST]\nLines: 87-94\nCode:\ndef test_stable_id_at_most_60_bits() -> None:\n    \"\"\"Formula uses 15 hex chars = 60 bits; result must fit.\"\"\"\n    for tier, path, scope in _GOLDEN_CASES:\n        fid = stable_id(tier, path, scope)\n        assert fid <= SIXTY_BIT_MAX, (\n            f\"stable_id",
+      "batch_1": "Purpose: Tests that the `stable_id` function returns a string representing a unique identifier within a specified scope, which is less than or equal to 60 bits.\nInputs: \n- `tier`: A string representing the tier of the identifier.\n- `path`: A string representing the path within the identifier.\n- `scope`: An integer representing the scope of the identifier.\nOutputs: \n- The function returns a string representing the stable identifier.\nKey Operations: \n- The function constructs a stable identifier using the provided tier, path, and scope.\n- It checks if the constructed identifier is less than or equal to 60 bits.",
+      "batched": "Purpose: Tests that the `stable_id` function returns a string representing a unique identifier within a specified scope, which is less than or equal to 60 bits.\nInputs: \n- `tier`: A string representing the tier of the identifier.\n- `path`: A string representing the path within the identifier.\n- `scope`: An integer representing the scope of the identifier.\nOutputs: \n- The function returns a string representing the stable identifier.\nKey Operations: \n- The function constructs a stable identifier using the given tier, path, and scope.\n- It checks if the constructed identifier is less than or equal to 60 bits."
     },
     {
       "file": "src/incremental_indexer.py",
       "tier": "tier1_surgical",
-      "text": "File: src/incremental_indexer.py\nScope: src/incremental_indexer.py::run_summarization_pass (Part 1/2)\nCode:\ndef run_summarization_pass(\n    to_index:   list[str],\n    repo_path:  str,\n    db:         CodeDB,\n    summarizer: object,\n) -> None:\n    \"\"\"Summarize every chunk of every file before any embedding begins.\n\n    The summarizer (Qwen2.5-Coder-1.5B) and the embedder (bge-code-v1) do not\n    fi",
-      "batch_1": "Purpose: This function runs a summarization pass on a given repository, reading all files, summarizing each chunk, and storing summaries in a cache.\nInputs:\n- `to_index`: A list of relative paths to files in the repository.\n- `repo_path`: The path to the root directory of the repository.\n- `db`: An instance of `CodeDB` used for database operations.\n- `summarizer`: An object representing the summarization model.\nOutputs:\n- No explicit outputs are defined in this function.\nKey operations:\n- Reads files from the specified repository.\n- Splits files into tiers based on content.\n- Calls the summarizer to generate summaries for each chunk.\n- Stores summaries in a cache for later use.",
-      "batched": "Purpose: This function runs a summarization pass on a given set of files in a repository using a specified summarizer and embedder.\nInputs:\n- `to_index`: A list of relative paths to files in the repository.\n- `repo_path`: The path to the root directory of the repository.\n- `db`: An instance of `CodeDB` used for database operations.\n- `summarizer`: An object representing the summarizer to be used.\nOutputs:\n- No explicit outputs are defined in this function.\nKey Operations:\n- It iterates over each file in the repository, reads its content, and processes it into chunks based on tier names.\n- For each chunk, it uses the summarizer to generate a summary and updates the `chunk_summaries` dictionary.\n- The function prints"
+      "text": "File: src/incremental_indexer.py\nScope: src/incremental_indexer.py::run_summarization_pass (Part 3/3)\nCode:\n          flush=True)\n    # ADR-027: empty summaries leave no cache row, so without this line a partly\n    # failed pass is only visible by counting chunk_summaries afterward.\n    if hasattr(summarizer, \"stats_line\"):\n        print(f\"  Pass 1 summarizer: {summarizer.stats_line()}\", flush=Tru",
+      "batch_1": "Purpose: This function runs a summarization pass on a dataset using an incremental indexer.\nInputs: `dataset`, `incremental_indexer`, `summary_generator`\nOutputs: None, but prints summary statistics if available.\nKey operations: The function iterates over each chunk of data, generates summaries, and updates the incremental indexer accordingly. It also checks for any statistics lines that can be printed during the process.",
+      "batched": "Purpose: This function runs a summarization pass on a dataset using an incremental indexer.\nInputs: `dataset`, `incremental_indexer`, `summary_generator`\nOutputs: None, but prints summary statistics\nKey operations: The function iterates over each chunk of data, generates summaries, and updates the incremental indexer accordingly. It also checks for any statistics lines generated by the summarizer and prints them."
     },
     {
-      "file": "tests/fixtures/src/sample.cpp",
+      "file": "src/adapters/ts_adapter.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/adapters/ts_adapter.py\nScope: src/adapters/ts_adapter.py::_WebAdapter._analyze_tags_impl (Part 1/3)\nCode:\ndef _analyze_tags_impl(\n        self,\n        root: Node,\n        src: bytes,\n        file_path: str,\n        lang: Language,\n        ext: str,\n        symbols: list[Symbol],\n    ) -> tuple[list[str], dict[str, list[str]]]:\n        file_tags: list[str]             = []\n        fqn_ta",
+      "batch_1": "Purpose: Analyzes TypeScript files to identify specific framework tags based on environment boundaries, Next.js pages/layouts, Zustand stores, and per-symbol framework tags.\nInputs: `root` (Node), `src` (bytes), `file_path` (str), `lang` (Language), `ext` (str), `symbols` (list[Symbol]).\nOutputs: A tuple containing a list of file-level tags (`file_tags`) and a dictionary mapping symbol names to their corresponding tags (`fqn_tags`).\nKey operations: Identifies environment boundary directives, Next.js page/layout tags, Zustand store tags, and per-symbol framework tags using query functions and parsing node texts.",
+      "batched": "Purpose: Analyzes TypeScript files to identify specific framework tags based on environment boundaries, Next.js pages/layouts, Zustand stores, and per-symbol framework tags.\nInputs: `root` (Node), `src` (bytes), `file_path` (str), `lang` (Language), `ext` (str), `symbols` (list[Symbol]).\nOutputs: A tuple containing a list of file-level tags (`file_tags`) and a dictionary mapping symbol names to their corresponding tags (`fqn_tags`).\nKey operations: Identifies environment boundary directives, Next.js page/layout tags, Zustand store tags, and per-symbol framework tags using query functions."
+    },
+    {
+      "file": "src/db.py",
+      "tier": "tier1_surgical",
+      "text": "File: src/db.py\nEntity: src/db.py::CodeDB._migrate_symbol_locations (method)\nTags: [CAT_PERSIST]\nLines: 533-551\nCode:\ndef _migrate_symbol_locations(self) -> None:\n        \"\"\"\n        Idempotent additive migration: back-fill symbol_locations from any\n        symbols rows that were written before this table existed.\n\n        For Python/TS/JS (Phase 1), each symbol has exactly one location, so\n      ",
+      "batch_1": "Purpose: This method performs an idempotent migration to populate `symbol_locations` table based on existing `symbols` data, ensuring that each symbol has exactly one location.",
+      "batched": "Purpose: This method migrates symbol locations from existing symbols into the `symbol_locations` table, ensuring that all symbols have a corresponding location record. It handles both Python/TS/JS and C# partial class scenarios by inserting new records for each symbol."
+    },
+    {
+      "file": "tests/test_scan_policy.py",
+      "tier": "tier1_surgical",
+      "text": "File: tests/test_scan_policy.py\nEntity: tests/test_scan_policy.py::_repo (function)\nTags: [CAT_PERSIST] [CAT_PARSE]\nLines: 31-35\nCode:\ndef _repo(tmp_path, toml_body: str | None = None) -> str:\n    \"\"\"A repo root, optionally carrying an `indexer.toml`.\"\"\"\n    if toml_body is not None:\n        (tmp_path / \"indexer.toml\").write_text(toml_body, encoding=\"utf-8\")\n    return str(tmp_path)",
+      "batch_1": "Purpose: This function creates a temporary directory for testing purposes and optionally writes a `toml_body` file into it.\nInputs:\n- tmp_path: A path object representing the temporary directory.\n- toml_body: An optional string containing the content of the `indexer.toml` file.\nOutputs:\n- A string representing the path to the created temporary directory.\nKey operations:\n- Creates a new temporary directory using the provided `tmp_path`.\n- Optionally writes the `toml_body` content to a file named `indexer.toml` within the temporary directory.\n- Returns the path to the temporary directory as a string.",
+      "batched": "Purpose: This function creates a temporary directory for testing purposes and optionally writes a `toml_body` file into it.\nInputs:\n- tmp_path: A pathlib.Path object representing the temporary directory.\n- toml_body: An optional string containing the content of the `indexer.toml` file.\nOutputs:\n- A string representing the path to the created temporary directory.\nKey operations:\n- Creates a new temporary directory using the provided `tmp_path`.\n- Optionally writes the `toml_body` content to a file named `indexer.toml` within the temporary directory.\n- Returns the path to the temporary directory as a string."
+    },
+    {
+      "file": "tests/test_receiver_type_resolution.py",
+      "tier": "tier1_surgical",
+      "text": "File: tests/test_receiver_type_resolution.py\nEntity: tests/test_receiver_type_resolution.py::_recv (function)\nTags: [CAT_ERROR]\nLines: 64-69\nCode:\ndef _recv(edges, method: str, target: str):\n    \"\"\"receiver_type of the call to `target` inside method `method` (by fqn substring).\"\"\"\n    for e in edges:\n        if f\".{method}/\" in e.source_fqn and e.target == target:\n            return e.receiver_typ",
+      "batch_1": "Purpose: This function attempts to determine the receiver type of a method call within a given set of edges based on the method name and target class name.\nInputs:\n- `edges`: A list of edge objects representing method calls.\n- `method`: The name of the method being called.\n- `target`: The fully qualified name of the target class.\nOutputs:\n- Returns the receiver type of the method call if found.\n- Raises an assertion error if no matching call edge is found.\nKey Operations:\n- Iterates through each edge object in the input list.\n- Checks if the source FQN of the edge contains the specified method name followed by a forward slash.\n- Compares the target class name of the edge with the specified target class name.\n- If a match is found, returns the receiver",
+      "batched": "Purpose: This function attempts to determine the receiver type of a method call within a given set of edges based on the method name and target class name.\nInputs:\n- `edges`: A list of edge objects representing method calls.\n- `method`: The name of the method being called.\n- `target`: The fully qualified name of the target class.\nOutputs:\n- Returns the receiver type of the method call if found.\nKey Operations:\n- Iterates through each edge object in the input list.\n- Checks if the source FQN of the edge contains the specified method name followed by a forward slash.\n- Compares the target class name of the edge with the specified target class name.\n- If a match is found, returns the receiver type of the method call.\n- Raises an assertion error if no"
+    },
+    {
+      "file": "tests/fixtures/conformance/csharp/filescoped_namespace.cs",
       "tier": "tier3_architectural",
-      "text": "File: tests/fixtures/src/sample.cpp\nScope: Full File (Part 1/1)\nCode:\n#include <string>\n#include <vector>\n#include \"core/config.h\"\n\nnamespace Core {\n\nenum class Status { Pending, Running, Done, Failed };\n\nstruct Config {\n    int maxRetries;\n    float timeout;\n};\n\ntypedef unsigned int uint32;\nusing StringVec = std::vector<std::string>;\n\nclass Logger {\npublic:\n    explicit Logger(int level);\n    voi",
-      "batch_1": "Purpose: This function provides a data service that interacts with a database using a configuration object.\nInputs: `Config` object for configuration settings, `int` ID for fetching data, `bool` flag for forcing refresh.\nOutputs: `std::string` representing the fetched data, `int` representing the number of items in the cache.\nKey operations: The function uses the `DataService` class to interact with the database and returns the fetched data. It also handles caching by checking the cache before making a new request.",
-      "batched": "Purpose: This function provides a data service that interacts with a database using a configuration object.\nInputs: `Config` object for configuration settings, `int` ID for fetching data, `bool` flag for forcing refresh.\nOutputs: `std::string` representing the fetched data, `int` representing the number of items in the cache.\nKey operations: The function uses the `DataService` class to interact with the database, handles retries based on the configuration, and formats the status of the operation."
+      "text": "File: tests/fixtures/conformance/csharp/filescoped_namespace.cs\nScope: Full File (Part 1/1)\nCode:\n// Feature (KNOWN GAP): a file-scoped namespace (`namespace X;`) — the default in .NET 6+.\n// Correct semantics: the namespace qualifies every type in the file, so the FQN is\n// `Ledger.Account` (ADR-003 D3). The adapter only propagates the namespace for BLOCK-form\n// declarations; under a file-scoped",
+      "batch_1": "Purpose: This function defines a class `Account` within the `Ledger` namespace, which includes methods for depositing money into an account and calculating the balance.",
+      "batched": "Purpose: This function defines a class `Account` within the `Ledger` namespace, which includes methods for initializing an account with an opening balance, depositing money, and adding amounts to the current balance."
     },
     {
-      "file": "src/graph_analytics.py",
+      "file": "tests/test_conformance.py",
       "tier": "tier1_surgical",
-      "text": "File: src/graph_analytics.py\nEntity: src/graph_analytics.py::graph_modularity (function)\nLines: 219-224\nCode:\ndef graph_modularity(G: nx.DiGraph, communities: list[set[str]]) -> float:\n    \"\"\"Newman modularity of the partition on the weighted undirected projection.\"\"\"\n    if G.number_of_nodes() == 0 or not communities:\n        return 0.0\n    U = to_weighted_undirected(G)\n    return nx_comm.modular",
-      "batch_1": "Purpose: Calculates the Newman modularity of a given directed graph partition based on its weighted undirected projection.\nInputs:\n- `G`: A directed graph object (`nx.DiGraph`).\n- `communities`: A list of sets containing node labels for each community.\nOutputs:\n- The Newman modularity score as a floating-point number.\nKey operations:\n- Converts the directed graph into a weighted undirected graph using `to_weighted_undirected`.\n- Computes the modularity score using `nx_comm.modularity` with the specified parameters.",
-      "batched": "Purpose: Calculates the Newman modularity of a given directed graph partition based on its weighted undirected projection.\nInputs:\n- `G`: A directed graph object (`nx.DiGraph`).\n- `communities`: A list of sets representing the partitions of nodes into communities.\nOutputs:\n- The Newman modularity score as a float.\nKey operations:\n- Converts the directed graph to a weighted undirected graph using `to_weighted_undirected`.\n- Computes the modularity score using `nx_comm.modularity` with the specified parameters."
+      "text": "File: tests/test_conformance.py\nEntity: tests/test_conformance.py::test_real_suite_gaps_manifest_and_no_unexpected_pass (function)\nTags: [CAT_TEST]\nLines: 157-165\nCode:\ndef test_real_suite_gaps_manifest_and_no_unexpected_pass():\n    \"\"\"On the committed suite: known-gap fixtures really do score sub-1.0 (the gap shows up),\n    there are no unexpected passes, and no key collisions anywhere.\"\"\"\n    re",
+      "batch_1": "Purpose: Tests that known-gap fixtures score below 1.0, have no unexpected passes, and do not cause key collisions.\nInputs: `results` dictionary containing fixture information.\nOutputs: None, but asserts conditions about the results.\nKey operations: Runs the conformance engine (`ce.run()`) and checks specific properties of the results.",
+      "batched": "Purpose: Tests that known-gap fixtures score below 1.0, have no unexpected passes, and do not cause key collisions.\nInputs: `results` dictionary containing fixture information.\nOutputs: None, but asserts conditions about the results.\nKey operations: Runs the conformance engine (`ce.run()`), filters out known-gap fixtures, checks their scores, verifies no unexpected passes, and ensures no key collisions."
     },
     {
-      "file": "tools/summarizer_batch_equivalence.py",
+      "file": "src/core.py",
       "tier": "tier1_surgical",
-      "text": "File: tools/summarizer_batch_equivalence.py\nEntity: tools/summarizer_batch_equivalence.py::sample_chunks (function)\nLines: 31-42\nCode:\ndef sample_chunks(n: int, seed: int) -> list[dict]:\n    chunks = []\n    for rel in sorted(scan_disk(os.getcwd())):\n        try:\n            with open(rel, encoding=\"utf-8\", errors=\"ignore\") as fh:\n                content = fh.read()\n        except OSError:\n        ",
-      "batch_1": "Purpose: This function reads files from a directory, splits them into tiers, and returns a list of dictionaries containing file information, tier, and text.\nInputs:\n- `n`: an integer specifying the number of chunks to return.\n- `seed`: an integer used to shuffle the chunks randomly.\nOutputs:\n- A list of dictionaries where each dictionary contains the file path, tier, and text of a chunk.\nKey operations:\n- Reads files from the specified directory.\n- Splits each file into tiers using `chunk_all_tiers`.\n- Constructs a list of dictionaries for each chunk.\n- Shuffles the list of dictionaries using `random.shuffle` with the given seed.\n- Returns the first `n` elements of the shuffled list.",
-      "batched": "Purpose: This function reads files from a directory, splits them into tiers, and returns a list of dictionaries containing file information, tier, and text.\nInputs:\n- `n`: an integer specifying the number of chunks to return.\n- `seed`: an integer used to shuffle the chunks randomly.\nOutputs:\n- A list of dictionaries where each dictionary contains the file path, tier, and text of a chunk.\nKey operations:\n- Reads files from the specified directory.\n- Splits each file into tiers using `chunk_all_tiers`.\n- Constructs a list of dictionaries for each chunk.\n- Shuffles the list of dictionaries based on the provided seed.\n- Returns the first `n` elements of the shuffled list."
-    },
-    {
-      "file": "tests/fixtures/conformance/typescript/arrow_functions.ts",
-      "tier": "tier1_surgical",
-      "text": "File: tests/fixtures/conformance/typescript/arrow_functions.ts\nEntity: tests/fixtures/conformance/typescript/arrow_functions.ts::double (arrow_function)\nType: number\nLines: 3-3\nCode:\nconst double = (x: number): number => x * 2;",
-      "batch_1": "Purpose: This function takes a single argument `x` of type `number`, doubles it, and returns the result.\nInputs: `x` - a number\nOutputs: The doubled value of `x`\nKey operations: It multiplies the input `x` by 2 using the arrow function syntax.",
-      "batched": "Purpose: This function takes a single argument `x` of type `number`, doubles it, and returns the result.\nInputs: `x` - a number\nOutputs: The doubled value of `x`\nKey operations: It multiplies the input `x` by 2 to produce the output."
-    },
-    {
-      "file": "tools/resolution_eval.py",
-      "tier": "tier1_surgical",
-      "text": "File: tools/resolution_eval.py\nEntity: tools/resolution_eval.py::run (function)\nTags: [CAT_TEST]\nLines: 238-240\nCode:\ndef run() -> dict:\n    fixture_results = [score_fixture(f) for f in discover_fixtures()]\n    return {\"fixtures\": fixture_results, \"by_language\": aggregate(fixture_results)}",
-      "batch_1": "Purpose: This function runs resolution evaluation tests by discovering fixtures and aggregating their results.\nInputs: `fixture_results` (list of dictionaries), `discover_fixtures()` (function that returns a list of fixtures).\nOutputs: A dictionary containing two keys: 'fixtures' (a list of fixture results) and 'by_language' (an aggregated result based on language).\nKey operations: It iterates over discovered fixtures, scores each using `score_fixture`, and aggregates these scores by language.",
-      "batched": "Purpose: This function runs resolution evaluation tests by discovering fixtures and aggregating their results.\nInputs: `fixture_results` (list of dictionaries), `discover_fixtures()` (function that returns a list of fixtures).\nOutputs: A dictionary containing two keys: 'fixtures' which is a list of fixture results, and 'by_language' which is an aggregated result based on language.\nKey operations: It iterates over discovered fixtures, scores each using `score_fixture`, and then aggregates these scores by language."
-    },
-    {
-      "file": "src/summarizer.py",
-      "tier": "tier1_surgical",
-      "text": "File: src/summarizer.py\nScope: src/summarizer.py::run_adaptive_batches (Part 2/2)\nCode:\n        if free_mb is not None and free_mb() < reserve_mb:\n            stats.pauses += 1\n            started = clock()\n            while free_mb() < reserve_mb and clock() - started < pause_timeout_s:\n                sleep(pause_poll_s)\n            if free_mb() < reserve_mb:\n                stats.pause_timeouts",
-      "batch_1": "Purpose: This function runs adaptive batches of summaries based on available memory and error handling.\nInputs: `free_mb`, `reserve_mb`, `pause_timeout_s`, `pause_poll_s`, `order`, `pos`, `size`, `batch`, `out`, `exc`, `is_oom`, `on_oom`, `stats`, `results`, `max_batch`.\nOutputs: A tuple containing the summarized texts and statistics.\nKey operations: Checks available memory, retries batches if necessary, adjusts batch size and retry count based on performance.",
-      "batched": "Purpose: This function runs adaptive batches of summaries based on available memory and pauses when necessary.\nInputs:\n- `free_mb`: A function that returns the available memory in MB.\n- `reserve_mb`: The minimum amount of memory required per batch.\n- `pause_timeout_s`: The maximum time to wait before pausing.\n- `pause_poll_s`: The interval between checks for available memory.\n- `order`: The list of documents to summarize.\n- `size`: The current size of the batch.\n- `pos`: The starting index of the current batch.\n- `results`: A dictionary to store the summarized texts.\n- `stats`: An object containing statistics about the summarization process.\nOutputs:\n- `results`: A dictionary containing the summarized texts.\n- `stats`: An object containing updated statistics"
+      "text": "File: src/core.py\nEntity: src/core.py::TokenizerManager._get (method)\nTags: [CAT_PERSIST]\nLines: 92-99\nCode:\ndef _get(self):\n        if self._tokenizer is None:\n            self._tokenizer = AutoTokenizer.from_pretrained(\n                embed_model_id(),\n                trust_remote_code=True,\n                model_max_length=100000,\n            )\n        return self._tokenizer",
+      "batch_1": "Purpose: Initializes the tokenizer for text processing.\nInputs: `self` (instance of `TokenizerManager`)\nOutputs: Returns the initialized tokenizer object.\nKey operations: Calls `AutoTokenizer.from_pretrained` to load a pre-trained tokenizer from Hugging Face's model hub.",
+      "batched": "Purpose: Initializes the tokenizer for text processing.\nInputs: `self` (instance of `TokenizerManager`)\nOutputs: Returns the initialized tokenizer object.\nKey operations: Loads a pre-trained tokenizer using Hugging Face's `AutoTokenizer`."
     }
   ]
 }
