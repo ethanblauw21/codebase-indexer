@@ -33,6 +33,7 @@ _DEFAULT_MODEL_ID = "BAAI/bge-code-v1"
 _DEFAULT_MAX_SEQ_LENGTH = 512
 _DEFAULT_DIMENSION = 1536
 _DEFAULT_QUERY_INSTRUCT = "Given a code search query, retrieve relevant code that answers it"
+_DEFAULT_DTYPE = "auto"
 
 _emb_cfg_cache = None
 
@@ -57,6 +58,26 @@ def embed_dimension() -> int:
     return int(_emb_cfg().get("dimension", _DEFAULT_DIMENSION))
 
 
+_DTYPES = ("float32", "bfloat16", "float16")
+
+
+def embed_dtype(device: str):
+    """The torch dtype the embedder loads in (ADR-035).
+
+    "auto" is bf16 on a CUDA device that supports it and fp32 everywhere else: fp32
+    bge-code-v1 is ~6.2 GB and fills an 8 GB card on its own, while bf16 matmuls on
+    most CPUs are slower than fp32. An explicit value is used as given.
+    """
+    import torch
+    name = _emb_cfg().get("dtype", _DEFAULT_DTYPE)
+    if name == "auto":
+        cuda = device.startswith("cuda") and torch.cuda.is_available()
+        name = "bfloat16" if cuda and torch.cuda.is_bf16_supported() else "float32"
+    if name not in _DTYPES:
+        raise ValueError(f"[embeddings].dtype = {name!r}: expected \"auto\" or one of {_DTYPES}")
+    return getattr(torch, name)
+
+
 # Lazy singleton — loaded on first call to embed() / embed_batch().
 # Deferring the load prevents the embedding model from being loaded inside
 # ProcessPoolExecutor worker processes (which import this module via the
@@ -73,8 +94,12 @@ def _get_embed_model() -> SentenceTransformer:
         # CODE_INDEXER_DEVICE=cpu now actually makes indexing CPU-only, instead
         # of sentence-transformers silently grabbing CUDA behind the override.
         device = resolve_device()
-        print(f"[core] Loading embedding model: {model_id} (device={device}) ...", flush=True)
-        _embed_model = SentenceTransformer(model_id, trust_remote_code=True, device=device)
+        # ADR-035: bf16 on a GPU that supports it, so the model takes ~3 GB, not ~6.2.
+        dtype = embed_dtype(device)
+        print(f"[core] Loading embedding model: {model_id} (device={device}, "
+              f"dtype={str(dtype).removeprefix('torch.')}) ...", flush=True)
+        _embed_model = SentenceTransformer(model_id, trust_remote_code=True, device=device,
+                                           model_kwargs={"torch_dtype": dtype})
         # Cap sequence length to prevent native OOM on tier3 architectural chunks
         # (~4000 tokens). Self-attention memory scales as O(L²) — 4000-token inputs
         # require ~9 GB of intermediate tensors, killing the process with an

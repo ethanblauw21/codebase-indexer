@@ -55,6 +55,7 @@ def _wired() -> dict[tuple[str, str], object]:
         ("embeddings", "max_seq_length"):  core._DEFAULT_MAX_SEQ_LENGTH,
         ("embeddings", "dimension"):       core._DEFAULT_DIMENSION,
         ("embeddings", "query_instruct"):  core._DEFAULT_QUERY_INSTRUCT,
+        ("embeddings", "dtype"):           core._DEFAULT_DTYPE,
 
         ("reranker", "model_id"):          hybrid_retriever._DEFAULT_RERANKER_MODEL_ID,
         ("reranker", "enabled"):           hybrid_retriever._DEFAULT_RERANKER_ENABLED,

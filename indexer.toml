@@ -56,6 +56,12 @@ dimension = 1536
 # Empty string = no wrapping (the jina behavior). Read by src/core.py.
 query_instruct = "Given a code search query, retrieve relevant code that answers it"
 
+# Precision the embedder loads in (ADR-035). "auto" = bfloat16 on a CUDA GPU that
+# supports it (~3 GB for bge-code-v1 instead of ~6.2 GB in fp32, which fills an 8 GB
+# card on its own), float32 on CPU. Or force "float32", "bfloat16" or "float16".
+# Every retrieval number since ADR-027 was measured in bfloat16.
+dtype = "auto"
+
 [reranker]
 # Reranker for cross-encoder rescoring of dense candidates (optional).
 #
