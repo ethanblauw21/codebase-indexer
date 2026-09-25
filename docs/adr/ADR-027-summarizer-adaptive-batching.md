@@ -190,3 +190,23 @@ The PR does not merge until all of these hold on the 8 GB card.
   - **Summaries barely help on this eval at any batch size.** The best case, batch size 1, is +0.006 MRR over no summaries, and zustand scores worse with summaries than without.
   - **The fields fix did not help retrieval.** One-paragraph summaries fell from 17.7 to 0.7 percent and mean length rose from 322 to 467 characters, but MRR fell 0.007 against batched (14 queries changed, 6 up and 8 down; p-queue lost the most). A likely reason is that longer summaries crowd the code out of the embedder's 512-token window for short chunks. So it is not merged, and the branch stays for reference.
   - @edb's condition was that batching must not reduce retrieval accuracy. **On this eval it does, slightly.** That is recorded as the outcome and left for @edb to decide, with the size of the loss above.
+- 2026-09-24, **do summaries help intent queries at all?** (@edb asked, after the noise floor)
+  - **The query set.** A new set of 55 queries across the same three repos (`gpu-crash-repro/intent_fixtures/`). Each describes behavior found only in a function's body, such as a fallback, a side effect or a data transformation, with no identifiers and nothing from the name or the first line of the docstring. That is the case summaries exist for.
+  - **How it was written.** Three agents wrote the queries, one per repo. They chose the correct answer from the source alone and checked it against chunk scopes in the `none` index. They never saw a summary or a retrieval result.
+  - **The run.** Arm B, embedder in bf16, the five indexes already built (no rebuild). Results are in `retrieval/results_intent.json`, and the original set was re-scored with intervals in `results_orig.json`.
+
+    | Variant | Intent MRR@10 (55) | Original MRR@10 (83) |
+    |---|---|---|
+    | no summaries | **0.4360** | 0.4427 |
+    | batch size 1 | 0.3804 | 0.4490 |
+    | batched | 0.3650 | 0.4410 |
+    | batched2 | 0.3793 | 0.4330 |
+    | fields | 0.3561 | 0.4344 |
+
+  - **Summaries hurt the queries they were meant to help.** Against no summaries, batch size 1 comes out 0.056 lower (23 of 30 changed queries down, 95 percent interval -0.124 to +0.011). Batched comes out 0.071 lower (interval -0.135 to -0.010), and fields 0.080 lower (-0.141 to -0.021). On the original set, summaries make no difference: +0.006 for batch size 1, interval -0.047 to +0.059.
+  - **Mechanism, seen in the largest drops.** A summary states what a function is for. Appended before embedding, it pulls the chunk toward that purpose and away from what its body does.
+    - Example: "where is the time estimate smoothed with a rolling window of recent timings" found `ProgressBar.make_step` first without summaries. With summaries, `ProgressBar.time_per_iteration` ("calculates the average time per iteration for a progress bar") came first.
+    - Example: a question about when an option with an optional value refuses the next token went from rank 1 to rank 6, behind chunks whose summaries talk about options and values in general.
+  - **Batching, on this set:** batch size 1 against batched2 is -0.001 with 2 queries up and 2 down, and batched against batched2 goes the other way from the original set. So the systematic batching drop seen on the original set does not carry over. It stays a small effect next to the cost of summarizing at all.
+  - **Scope of the claim:** three repos in TypeScript and Python, one embedder (`bge-code-v1`), one summarizer (Qwen2.5-Coder-1.5B) and one prompt. Summaries could still help with another embedder, a bigger summarizer, a prompt that describes the body rather than the purpose, or a separate summary index instead of appended text. But as shipped, `[summarization].enabled = true` costs 16 to 67 min of GPU per index on this repository and makes intent retrieval worse. Whether to turn it off is @edb's call. See the backlog item filed from this.
+  - **Found while writing the queries:** TypeScript private `#` methods get no chunk of their own. Their bodies are only in whole-file chunks, so p-queue's rate-window and idle-timer logic cannot be a specific target.
