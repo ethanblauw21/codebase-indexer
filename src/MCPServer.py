@@ -96,6 +96,12 @@ def semantic_code_search(query: str) -> str:
     # 8B models easily crash if you feed them more than 8k tokens.
     # We cap the returned context strictly at 4000 tokens to be safe.
     context = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
+    # B-029: say so when the index predates the current chunker. A warning, not an
+    # error: the results are still the best this index has.
+    from incremental_indexer import chunker_version_warning
+    version_warning = chunker_version_warning(_db())
+    if version_warning:
+        context = f"{version_warning}\n\n" + context
     current_tokens = 0
     MAX_TOKENS = 4000
 
@@ -1350,7 +1356,7 @@ def index_status(since: str = "1d") -> str:
     import os
     import subprocess
     from datetime import datetime, timedelta, timezone
-    from incremental_indexer import INDEX_DIR
+    from incremental_indexer import INDEX_DIR, CHUNKER_VERSION, chunker_version_warning
     from db import CodeDB
 
     db_path = os.path.join(INDEX_DIR, "graph.db")
@@ -1377,6 +1383,7 @@ def index_status(since: str = "1d") -> str:
         last_verified = db.meta_get("last_verified_at") or "(never recorded)"
         last_commit   = db.meta_get("last_indexed_commit")
         files_total   = db.meta_get("files_total") or "?"
+        version_warning = chunker_version_warning(db)
         rows = db._conn.execute(
             "SELECT path, content_changed_at FROM files "
             "WHERE content_changed_at IS NOT NULL AND content_changed_at > ? "
@@ -1388,6 +1395,7 @@ def index_status(since: str = "1d") -> str:
         "--- INDEX STATUS ---",
         f"last_verified_at:    {last_verified}",
         f"files_total:         {files_total}",
+        version_warning or f"chunker_version:     {CHUNKER_VERSION} (== current)",
     ]
 
     if last_commit:
