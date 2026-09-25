@@ -51,6 +51,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | shaped · **do first** |
 | [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | shaped |
 | [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | shaped |
+| [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -778,3 +779,22 @@ oversized chunk to its header or signature rather than dropping it. Test: a resu
 oversized chunk in the middle still shows everything after it.
 
 **Depends on:** nothing. Blocks B-026 Stage 2.
+
+### B-031 — The embedder loads in fp32 and fills the 8 GB card on its own
+
+**Source:** ADR-028's gate and the GPU work of 2026-09-24/25 · **Status:** promoted → ADR-035 · **Size:** S
+
+`core._get_embed_model` (`core.py:66-84`) builds `SentenceTransformer(model_id, trust_remote_code=True,
+device=device)` with no dtype, so `bge-code-v1` (1.5B parameters) loads in fp32: about 6.2 GB of an
+8 GB card. That leaves no room for ADR-027's 1 GB reserve, let alone the summarizer, and WDDM pages
+to system RAM silently instead of raising an OOM.
+
+- **Every measurement since 2026-09-24 already embedded in bf16.** The eval kit patches
+  `core.SentenceTransformer` to pass `torch_dtype=bfloat16` for index and queries alike, and the MCP
+  Inspector wrapper does the same. Production is the one path that doesn't.
+- **ADR-028 is gated on this.** Its log says the host doesn't get turned on for real until it lands.
+- **CPU stays fp32.** bf16 matmuls on most CPUs are slower, not faster.
+- **Open question:** an index built in fp32 and queried in bf16 mixes precisions. How much that moves a
+  cosine should be measured, not assumed.
+
+**Depends on:** none. **Blocks:** ADR-028.
