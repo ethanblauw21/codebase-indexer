@@ -110,12 +110,9 @@ _TS_STUB_TYPES: set[str] = {"method_definition", "function_declaration", "arrow_
                             "function_expression", *_TS_FIELD_TYPES}
 
 
-_GETTER_RE = re.compile(r"^(?:(?:static|public|private|protected|override|readonly|async)\s+)*get\s")
-
-
 def _ts_impl_rank(sym: Symbol) -> int:
-    """0 for a getter, which leads a merged accessor pair; 1 otherwise."""
-    return 0 if _GETTER_RE.match(sym.text) else 1
+    """The member with the most code leads a merged accessor pair (ADR-034 §3)."""
+    return -len(sym.text)
 
 
 # ---------------------------------------------------------------------------
@@ -443,9 +440,15 @@ class _WebAdapter:
                 walk(child, class_ctx)
 
         walk(root, None)
-        # An accessor pair is one member: one symbol, getter first, getter's type (ADR-034 §3).
+        # An accessor pair is one member: one symbol, the one with more code first (ADR-034 §3).
         merged = merge_adjacent_same_fqn(symbols, _ts_impl_rank)
-        symbol_types = [type_of[id(impl)] for _, impl in merged if id(impl) in type_of]
+        # One type row per FQN; for an accessor pair the getter's, which carries the type.
+        types: dict[str, SymbolType] = {}
+        for sym in symbols:
+            st = type_of.get(id(sym))
+            if st and (sym.fqn not in types or types[sym.fqn].return_type is None):
+                types[sym.fqn] = st
+        symbol_types = list(types.values())
         return [m for m, _ in merged], edges, symbol_types
 
     def _extract_references(

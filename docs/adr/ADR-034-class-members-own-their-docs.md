@@ -104,18 +104,29 @@ Python needs no doc-move, because a docstring is inside the body already.
 
 ### 3. Contiguous same-FQN siblings merge into one symbol
 
-Only **adjacent** members of one class body with the same name merge: TypeScript `get`/`set` pairs,
-Python `@property` with `@x.setter`/`@x.deleter`, and `@overload` sets.
-- **Order in the text.** The implementation comes first, then the others in source order. For an
-  accessor pair that is the getter; for an overload set it is the undecorated definition. This keeps the
-  implementation inside the embedder's 512-token window.
+Only **consecutive** members of one class body with the same name merge: TypeScript `get`/`set` pairs
+and Python `@property` with `@x.setter`/`@x.deleter`. Python also merges consecutive module-level
+redefinitions, such as a class defined in both branches of `if t.TYPE_CHECKING:`. It never extracts
+nested functions, so a top-level run there is always one name defined twice. TypeScript does not merge
+top-level runs, because helpers redeclared in separate test callbacks are consecutive there.
+- **Order in the text.** The member with the most code comes first, so the logic stays inside the
+  embedder's 512-token window whether it lives in the getter or the setter. Arm 3 measured "getter
+  first" (the first draft of this rule): it put p-queue's one-line `get concurrency()` ahead of the
+  setter that drains the queue, and `pq-intent-07` fell from 11 to 17.
+- **`@overload` stubs are dropped, not merged**, when an implementation of the same name exists. A stub
+  is a signature without a body, and the implementation's own signature subsumes it. Merging them in
+  measured as pure dilution: `click-intent-09`'s `Editor.edit` fell from rank 1 to 4. Without an
+  implementation, as in a stub-only module, the stubs merge.
+- **Decorators stay out of the symbol's text**, as before. The adapter reads them from the tree to rank
+  a run. Putting them in the text was measured and rejected: long `@pytest.mark.parametrize` tables
+  pushed 33 click tests past tier 1's 500 tokens into `_part_N`.
 - **Lines.** The merged symbol runs from the first member's first line to the last member's last line.
-- **Type row.** `symbol_types` keeps one row per FQN. The implementation's row wins: the getter's return
-  type, or the overload implementation's signature.
-- **Edges.** The calls of every merged member are unioned.
-- **What stays unmerged.** Same-FQN symbols that are not adjacent, such as helpers redeclared in separate
-  test callbacks (zustand has 92), are left alone. ADR-031 already keeps one vector for them, and B-027
-  gives them distinct names.
+- **Type row.** `symbol_types` keeps one row per FQN. For an accessor pair it is the getter's, which
+  carries the return type.
+- **Edges.** The calls of every merged member are kept, since edges are keyed by FQN.
+- **What stays unmerged.** Same-FQN symbols that are not consecutive, such as the zustand helpers
+  (92 of them), are left alone. ADR-031 already keeps one vector for them, and B-027 gives them
+  distinct names.
 
 ### 4. Python skeletons stub decorated methods
 
@@ -216,8 +227,8 @@ Every criterion has a threshold. The final arm must pass all of them.
 - [x] Arm 1 built and measured against `store031` (see notes)
 - [x] §2 `#` members, call query and arrow fields: tests (`tests/test_private_members.py`)
 - [x] Arm 2 built and measured (see notes)
-- [ ] §3 merge and §4 Python decorated stubs: fixtures and tests
-- [ ] Arm 3 built and measured
+- [x] §3 merge and §4 Python decorated stubs: tests (`tests/test_member_merge.py`)
+- [x] Arm 3 built and measured: four variants, 3d kept (see notes)
 - [ ] §5 skeleton header and body line range
 - [ ] Arm 4 built and measured; the gate table filled in
 - [ ] `CHUNKER_VERSION` → 3
@@ -279,3 +290,28 @@ Every criterion has a threshold. The final arm must pass all of them.
   (`tests/test_private_members.py`).
 - **Gate:** `pq2-constructor` 1→2 fails the strict "no worse" criterion. The gate is judged on the
   final arm.
+
+**2026-09-25, arm 3 (§3 merge and §4 Python decorated stubs).** Four variants were built, each against
+arm 2 unless noted.
+
+| Variant | What differs | orig | intent | file whole | Verdict |
+|---|---|---|---|---|---|
+| 3 | getter first, overloads merged, decorators in the text | −0.004 | −0.005 | +0.018 | rejected: 33 click tests pushed into `_part_N`; intent gate FAIL (4 losers) |
+| 3b | 3 with the most code first | same as 3, except `pq-intent-07` back to 11 | | | ordering kept |
+| 3c | 3b with decorators out of the text | +0.000 | −0.007 | +0.004 | `click-intent-09` 1→4, caused by the merged overload stubs |
+| **3d** | **3c with implemented overload stubs dropped** | **+0.000** | **+0.000** | **+0.004** | **kept** |
+
+- **3d against `store031`:**
+  - orig +0.045\* and intent +0.025 (its lower bound sits at −0.0000); file any +0.004 and file whole
+    −0.006.
+  - p-queue original is 0.709.
+  - Intent has 2 queries losing 3 or more ranks: `pq-intent-06` (from arm 1) and `pq-intent-07` (from
+    arm 2). That passes.
+  - The only remaining gate failure is `pq2-constructor` 1→2, from arm 2.
+- **Chunks:**
+  - click's tier-1 chunks went from 1,298 to 1,286, because Python skeletons no longer carry decorated
+    bodies. Click's class skeletons shrank by 14%, from 111,918 to 96,714 characters.
+  - The two `if TYPE_CHECKING` class pairs merged into one symbol each.
+  - No member was newly pushed past 500 tokens.
+- **Summaries:** click was re-summarized for the first time in this ADR (368 changed chunks). p-queue
+  and zustand did not change.

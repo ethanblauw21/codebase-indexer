@@ -30,13 +30,16 @@ _CALL_QUERY = """
 """
 
 
-_SECONDARY_DECORATOR = re.compile(r"^\s*@(?:[\w.]+\.)?overload\b|^\s*@\w+\.(?:setter|deleter)\b", re.M)
+_OVERLOAD_DECORATOR = re.compile(r"@(?:[\w.]+\.)?overload\b")
 
 
-def _impl_rank(sym: Symbol) -> int:
-    """0 for the implementation of a merged run, 1 for `@overload` stubs and property setters."""
-    head = sym.text.split("def ", 1)[0]
-    return 1 if _SECONDARY_DECORATOR.search(head) else 0
+def _is_overload(node: Node, src: bytes) -> bool:
+    """Is this function_definition an `@overload` stub? Its decorators are siblings under a
+    decorated_definition, outside the symbol's own text."""
+    parent = node.parent
+    return (parent is not None and parent.type == "decorated_definition"
+            and any(_OVERLOAD_DECORATOR.match(node_text(c, src))
+                    for c in parent.children if c.type == "decorator"))
 
 
 def _extract_calls(node: Node, src: bytes) -> list[str]:
@@ -102,6 +105,7 @@ class PythonAdapter:
         self, root: Node, src: bytes, file_path: str
     ) -> tuple[list[Symbol], list[Edge]]:
         symbols: list[Symbol] = []
+        rank_of: dict[int, tuple[int, int]] = {}
         edges:   list[Edge]   = []
 
         def walk(node: Node, class_ctx: Optional[str]) -> None:
@@ -150,18 +154,19 @@ class PythonAdapter:
                 if name_node:
                     name = node_text(name_node, src)
                     fqn  = build_fqn(file_path, class_ctx, name)
-                    # Decorators belong to the definition: `@property`, `@x.setter` and
-                    # `@overload` are what tell a merged run apart (ADR-034 §3).
-                    whole = node.parent if node.parent is not None and node.parent.type == "decorated_definition" else node
                     sym  = Symbol(
                         fqn           = fqn,
                         kind          = "method" if class_ctx else "function",
                         name          = name,
                         class_context = class_ctx,
-                        start_line    = whole.start_point[0] + 1,
+                        start_line    = node.start_point[0] + 1,
                         end_line      = node.end_point[0] + 1,
-                        text          = node_text(whole, src),
+                        text          = node_text(node, src),
                     )
+                    # A merged run (ADR-034 §3): `@overload` stubs last, then the member with
+                    # the most code first, so the implementation stays inside the embedder's
+                    # window whether a property's logic is in its getter or its setter.
+                    rank_of[id(sym)] = (1 if _is_overload(node, src) else 0, -len(sym.text))
                     symbols.append(sym)
                     for call_name in _extract_calls(node, src):
                         edges.append(Edge(source_fqn=fqn, target=call_name, kind="call"))
@@ -174,7 +179,15 @@ class PythonAdapter:
                 walk(child, class_ctx)
 
         walk(root, None)
-        merged = [m for m, _ in merge_adjacent_same_fqn(symbols, _impl_rank, merge_top_level=True)]
+        # `@overload` stubs are signatures without bodies, and the implementation's own
+        # signature subsumes them; merging them in only diluted its vector (ADR-034 arm 3).
+        # They are dropped when an implementation of the same name exists, kept otherwise.
+        stubs = {id(s) for s in symbols if rank_of.get(id(s), (0, 0))[0] == 1}
+        implemented = {(s.fqn, s.class_context) for s in symbols if id(s) not in stubs}
+        symbols = [s for s in symbols
+                   if id(s) not in stubs or (s.fqn, s.class_context) not in implemented]
+        merged = [m for m, _ in merge_adjacent_same_fqn(
+            symbols, lambda s: rank_of.get(id(s), (0, 0)), merge_top_level=True)]
         return merged, edges
 
     def _extract_references(

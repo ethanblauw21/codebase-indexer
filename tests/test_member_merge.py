@@ -32,7 +32,7 @@ def g(a):
 '''
 
 TS = '''class Q {
-  set c(v: number) { this.x = v; }
+  set c(v: number) { this.x = v; this.#drain(); }
   get c(): number { return 1; }
 }
 
@@ -47,19 +47,31 @@ def _syms(path, src):
     return [s for s in parse_file(path, src).symbols]
 
 
-def test_python_property_and_setter_merge_getter_first():
+def test_python_property_and_setter_merge_longer_first():
     x = [s for s in _syms("a.py", PY) if s.fqn == "a.py::A.x"]
     assert len(x) == 1
-    assert x[0].text.startswith("@property")
-    assert "@x.setter" in x[0].text
-    assert (x[0].start_line, x[0].end_line) == (5, 11)
+    assert x[0].text.startswith("def x(self) -> int:")
+    assert "def x(self, v):" in x[0].text
+    assert (x[0].start_line, x[0].end_line) == (6, 11)
 
 
-def test_python_overload_set_merges_implementation_first():
+def test_python_overload_stubs_are_dropped_when_implemented():
     f = [s for s in _syms("a.py", PY) if s.fqn == "a.py::A.f"]
     assert len(f) == 1
     assert f[0].text.startswith("def f(self, a):")
-    assert f[0].text.count("@t.overload") == 2
+    assert f[0].text.count("def f(") == 1
+
+
+def test_python_overload_stubs_without_implementation_are_kept():
+    stubs = '''import typing as t
+
+@t.overload
+def h(a: int) -> int: ...
+@t.overload
+def h(a: str) -> str: ...
+'''
+    h = [s for s in _syms("s.py", stubs) if s.fqn == "s.py::h"]
+    assert len(h) == 1 and h[0].text.count("def h(") == 2
 
 
 def test_python_module_level_overloads_merge():
@@ -74,11 +86,19 @@ def test_python_skeleton_stubs_decorated_methods():
     assert "@staticmethod" in skel
 
 
-def test_ts_accessor_pair_merges_getter_first_with_getter_type():
+def test_python_function_text_leaves_decorators_out():
+    """Decorators such as long @pytest.mark.parametrize tables would push members past
+    tier 1's 500 tokens (ADR-034 arm 3); they are read from the tree for ordering only."""
+    s = next(s for s in _syms("a.py", PY) if s.fqn == "a.py::A.s")
+    assert s.text.startswith("def s():")
+
+
+def test_ts_accessor_pair_merges_more_code_first_with_getter_type():
     result = parse_file("q.ts", TS)
     c = [s for s in result.symbols if s.fqn == "q.ts::Q.c"]
     assert len(c) == 1
-    assert c[0].text.startswith("get c()")
+    assert c[0].text.startswith("set c(")
+    assert "get c()" in c[0].text
     types = [t for t in result.symbol_types if t.fqn == "q.ts::Q.c"]
     assert len(types) == 1 and types[0].return_type == "number"
 
