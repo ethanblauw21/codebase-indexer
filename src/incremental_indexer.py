@@ -381,6 +381,32 @@ def _backfill_null_stamps(db: CodeDB, git_times: dict[str, tuple[str, str]]) -> 
     return n
 
 
+# B-029: the generation of the parser and chunker that built an index. Bump it in the
+# same commit as any change to what chunks a file produces (their scope, text, count or
+# ids), and add a line here. Incremental runs key on file content only, so without this
+# an index silently mixes chunks from old and new code.
+#   (no marker)  built before ADR-033
+#   2            ADR-031: one chunk per (file, scope, tier), so one vector per row
+CHUNKER_VERSION = 2
+CHUNKER_VERSION_KEY = "chunker_version"
+
+
+def chunker_version_warning(db: CodeDB) -> Optional[str]:
+    """A one-line warning when the index was built by another chunker, else None.
+
+    Never triggers a rebuild: at MCP startup that could block the first search for
+    minutes (hours with summaries on), and a run cut off midway would leave a mixed
+    index. The user runs a full re-index when they choose.
+    """
+    recorded = db.meta_get(CHUNKER_VERSION_KEY)
+    if recorded == str(CHUNKER_VERSION):
+        return None
+    built = f"chunker v{recorded}" if recorded else "a chunker older than v2"
+    return (f"⚠️ This index was built by {built}; the current chunker is v{CHUNKER_VERSION}. "
+            "Results may mix old and new chunks. Run a full re-index "
+            "(reindex(changed_files_only=False) or a fresh code-indexer build).")
+
+
 def _write_index_meta(db: CodeDB, repo_path: str) -> None:
     """ADR-025 §4/§5: record run-level freshness facts from the shared chokepoint
     so CLI and MCP agree about what is indexed. Written on EVERY completed run,
@@ -747,6 +773,15 @@ def run_incremental(
     if _guard_msg:
         print(_guard_msg)
 
+    # B-029: a fresh build (nothing indexed yet) is the only run that makes every
+    # chunk come from this chunker, so it is the only run that records the version,
+    # and only once it has finished. A build killed midway leaves no marker.
+    _fresh_build = _n_indexed == 0
+    if not _fresh_build:
+        _version_warning = chunker_version_warning(db)
+        if _version_warning:
+            print(f"  {_version_warning}")
+
     # ADR-025 §2: one git pass up front. Reused for back-dating new files, dirty
     # detection, and the §1 one-time backfill of legacy NULL stamps. Done before the
     # no-op check so a quiet repo with legacy rows still gets its stamps backfilled.
@@ -871,6 +906,10 @@ def run_incremental(
     # ADR-025 §4/§5: record run-level freshness facts from this one chokepoint that
     # all four triggers (CLI, MCP reindex, watchdog, startup) share, so they agree.
     _write_index_meta(db, repo_path)
+    if _fresh_build:
+        # Files that failed above are retried on the next run with this same chunker,
+        # so the index is still one generation.
+        db.meta_set(CHUNKER_VERSION_KEY, str(CHUNKER_VERSION))
     db.close()
 
     with CodeDB(DB_PATH) as verify_db:

@@ -49,7 +49,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | Stage 1 promoted → ADR-034 |
 | [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L | raw |
 | [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
-| [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | shaped |
+| [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | promoted → ADR-033 |
 | [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | shaped |
 | [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
 
@@ -744,7 +744,7 @@ measurement includes these ghosts.**
 
 ### B-029 — Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content
 
-**Source:** jury review of B-026, 2026-09-25 · **Status:** shaped · **Size:** S–M · line numbers at e1e9491
+**Source:** jury review of B-026, 2026-09-25 · **Status:** promoted → [ADR-033](adr/ADR-033-chunker-version.md) · **Size:** S–M · line numbers at e1e9491
 
 `compute_diff` (`incremental_indexer.py:278`) marks a file modified only when its MD5 changes.
 There is no chunker or parser version; `schema_version` (`db.py:456`) covers the table layout only.
