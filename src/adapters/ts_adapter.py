@@ -18,7 +18,7 @@ import tree_sitter_typescript as tstypescript
 import tree_sitter_javascript as tsjavascript
 
 from adapters.base import Edge, ParseResult, Reference, Symbol, SymbolType, TestConventions, build_fqn
-from adapters._treesitter import leading_doc, node_text, run_query, skeletonize
+from adapters._treesitter import leading_doc, merge_adjacent_same_fqn, node_text, run_query, skeletonize
 from category_tagger import tag_symbol
 
 
@@ -108,6 +108,14 @@ _TS_FIELD_TYPES = frozenset(("public_field_definition", "field_definition"))
 _TS_FUNCTION_VALUES = ("arrow_function", "function_expression")
 _TS_STUB_TYPES: set[str] = {"method_definition", "function_declaration", "arrow_function",
                             "function_expression", *_TS_FIELD_TYPES}
+
+
+_GETTER_RE = re.compile(r"^(?:(?:static|public|private|protected|override|readonly|async)\s+)*get\s")
+
+
+def _ts_impl_rank(sym: Symbol) -> int:
+    """0 for a getter, which leads a merged accessor pair; 1 otherwise."""
+    return 0 if _GETTER_RE.match(sym.text) else 1
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +264,7 @@ class _WebAdapter:
     ) -> tuple[list[Symbol], list[Edge], list[SymbolType]]:
         symbols:      list[Symbol]     = []
         edges:        list[Edge]       = []
-        symbol_types: list[SymbolType] = []
+        type_of:      dict[int, SymbolType] = {}   # id(Symbol) -> its type row
         moved_docs:   Optional[set[int]] = None   # doc comments moved out of the class being walked
 
         def emit(
@@ -296,7 +304,7 @@ class _WebAdapter:
                 edges.append(Edge(source_fqn=class_fqn, target=fqn, kind="owns"))
             st = _extract_ts_type(type_node or node, src, fqn)
             if st:
-                symbol_types.append(st)
+                type_of[id(sym)] = st
             return sym
 
         def walk(node: Node, class_ctx: Optional[str]) -> None:
@@ -428,14 +436,17 @@ class _WebAdapter:
                             edges.append(Edge(source_fqn=class_fqn, target=fqn, kind="owns"))
                         st = _extract_ts_type(value_node, src, fqn)
                         if st:
-                            symbol_types.append(st)
+                            type_of[id(sym)] = st
                 return
 
             for child in node.children:
                 walk(child, class_ctx)
 
         walk(root, None)
-        return symbols, edges, symbol_types
+        # An accessor pair is one member: one symbol, getter first, getter's type (ADR-034 §3).
+        merged = merge_adjacent_same_fqn(symbols, _ts_impl_rank)
+        symbol_types = [type_of[id(impl)] for _, impl in merged if id(impl) in type_of]
+        return [m for m, _ in merged], edges, symbol_types
 
     def _extract_references(
         self,

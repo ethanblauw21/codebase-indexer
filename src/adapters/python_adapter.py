@@ -1,13 +1,15 @@
 """PythonAdapter — tree-sitter Python parser."""
 from __future__ import annotations
 
+import re
+
 from typing import Optional
 
 from tree_sitter import Language, Parser, Node
 import tree_sitter_python as tspython
 
 from adapters.base import Edge, ParseResult, Reference, Symbol, TestConventions, build_fqn
-from adapters._treesitter import node_text, run_query, skeletonize
+from adapters._treesitter import merge_adjacent_same_fqn, node_text, run_query, skeletonize
 from category_tagger import tag_symbol
 
 
@@ -26,6 +28,15 @@ _CALL_QUERY = """
     (attribute attribute: (identifier) @name)
   ])
 """
+
+
+_SECONDARY_DECORATOR = re.compile(r"^\s*@(?:[\w.]+\.)?overload\b|^\s*@\w+\.(?:setter|deleter)\b", re.M)
+
+
+def _impl_rank(sym: Symbol) -> int:
+    """0 for the implementation of a merged run, 1 for `@overload` stubs and property setters."""
+    head = sym.text.split("def ", 1)[0]
+    return 1 if _SECONDARY_DECORATOR.search(head) else 0
 
 
 def _extract_calls(node: Node, src: bytes) -> list[str]:
@@ -108,7 +119,7 @@ class PythonAdapter:
                         class_context = None,
                         start_line    = node.start_point[0] + 1,
                         end_line      = node.end_point[0] + 1,
-                        text          = skeletonize(node, src, {"function_definition"}),
+                        text          = skeletonize(node, src, {"function_definition", "decorated_definition"}),
                     )
                     symbols.append(sym)
                     # Inheritance: `class Dog(Animal, base.Mixin):` -> extends edges.
@@ -139,14 +150,17 @@ class PythonAdapter:
                 if name_node:
                     name = node_text(name_node, src)
                     fqn  = build_fqn(file_path, class_ctx, name)
+                    # Decorators belong to the definition: `@property`, `@x.setter` and
+                    # `@overload` are what tell a merged run apart (ADR-034 §3).
+                    whole = node.parent if node.parent is not None and node.parent.type == "decorated_definition" else node
                     sym  = Symbol(
                         fqn           = fqn,
                         kind          = "method" if class_ctx else "function",
                         name          = name,
                         class_context = class_ctx,
-                        start_line    = node.start_point[0] + 1,
+                        start_line    = whole.start_point[0] + 1,
                         end_line      = node.end_point[0] + 1,
-                        text          = node_text(node, src),
+                        text          = node_text(whole, src),
                     )
                     symbols.append(sym)
                     for call_name in _extract_calls(node, src):
@@ -160,7 +174,8 @@ class PythonAdapter:
                 walk(child, class_ctx)
 
         walk(root, None)
-        return symbols, edges
+        merged = [m for m, _ in merge_adjacent_same_fqn(symbols, _impl_rank, merge_top_level=True)]
+        return merged, edges
 
     def _extract_references(
         self, root: Node, src: bytes, symbols: list[Symbol]

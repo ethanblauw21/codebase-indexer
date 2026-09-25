@@ -109,3 +109,43 @@ def skeletonize(
     parts.append(src[last:class_body.end_byte].decode("utf-8", errors="replace"))
     parts.append(src[class_body.end_byte:node.end_byte].decode("utf-8", errors="replace"))
     return "".join(parts)
+
+
+def merge_adjacent_same_fqn(symbols: list, impl_rank, merge_top_level: bool = False) -> list[tuple]:
+    """Merge consecutive class members that share an FQN into one symbol (ADR-034 §3).
+
+    Accessor pairs, `@property` with its setter and `@overload` sets are one concept declared
+    more than once; the database keeps one row per FQN, so all but the last used to be lost.
+    Only runs of consecutive symbols merge, and only class members unless `merge_top_level`
+    is set. TypeScript leaves it off: helpers redeclared in separate test callbacks are
+    consecutive top-level symbols that must stay apart. Python sets it: it never extracts
+    nested functions, so a top-level run is a module-level `@overload` set or redefinition.
+
+    `impl_rank(sym)` orders a run: lowest first, so the implementation leads the text and stays
+    inside the embedder's window. Returns [(symbol, implementation)] in source order, where
+    `symbol` is the merged one (or the original when it stands alone).
+    """
+    from dataclasses import replace
+
+    out: list[tuple] = []
+    i = 0
+    while i < len(symbols):
+        j = i + 1
+        mergeable = symbols[i].class_context is not None or merge_top_level
+        while (mergeable and j < len(symbols) and symbols[j].fqn == symbols[i].fqn
+               and symbols[j].class_context == symbols[i].class_context):
+            j += 1
+        run = symbols[i:j]
+        if len(run) == 1:
+            out.append((run[0], run[0]))
+        else:
+            ordered = sorted(run, key=impl_rank)
+            impl = ordered[0]
+            out.append((replace(
+                impl,
+                start_line = min(s.start_line for s in run),
+                end_line   = max(s.end_line for s in run),
+                text       = "\n\n".join(s.text for s in ordered),
+            ), impl))
+        i = j
+    return out
