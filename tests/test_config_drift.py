@@ -55,6 +55,7 @@ def _wired() -> dict[tuple[str, str], object]:
         ("embeddings", "max_seq_length"):  core._DEFAULT_MAX_SEQ_LENGTH,
         ("embeddings", "dimension"):       core._DEFAULT_DIMENSION,
         ("embeddings", "query_instruct"):  core._DEFAULT_QUERY_INSTRUCT,
+        ("embeddings", "dtype"):           core._DEFAULT_DTYPE,
 
         ("reranker", "model_id"):          hybrid_retriever._DEFAULT_RERANKER_MODEL_ID,
         ("reranker", "enabled"):           hybrid_retriever._DEFAULT_RERANKER_ENABLED,
@@ -72,6 +73,10 @@ def _wired() -> dict[tuple[str, str], object]:
         ("summarization", "vram_reserve_mb"): config.DEFAULT_SUMMARIZER_VRAM_RESERVE_MB,
         ("summarization", "batch_token_budget"): config.DEFAULT_SUMMARIZER_BATCH_TOKEN_BUDGET,
 
+        # ADR-030.
+        ("summarization", "tiers"):        config.DEFAULT_SUMMARIZER_TIERS,
+        ("retrieval", "summary_weight"):   hybrid_retriever._DEFAULT_SUMMARY_WEIGHT,
+        ("retrieval", "file_chunk_weight"): hybrid_retriever._DEFAULT_FILE_CHUNK_WEIGHT,
         # ADR-028.
         ("model_host", "enabled"):         config.DEFAULT_MODEL_HOST_ENABLED,
         ("model_host", "embed_idle_s"):    config.DEFAULT_MODEL_HOST_EMBED_IDLE_S,

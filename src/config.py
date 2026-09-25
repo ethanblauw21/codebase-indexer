@@ -76,6 +76,8 @@ DEFAULT_SUMMARIZER_MODEL_ID = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 DEFAULT_SUMMARIZER_MAX_BATCH_SIZE = 48
 DEFAULT_SUMMARIZER_VRAM_RESERVE_MB = 1024
 DEFAULT_SUMMARIZER_BATCH_TOKEN_BUDGET = 16000
+# ADR-030: which chunk tiers are summarized (1 functions, 2 components, 3 files).
+DEFAULT_SUMMARIZER_TIERS = [1, 2, 3]
 
 _sum_cfg_cache: dict | None = None
 
@@ -131,6 +133,12 @@ def summarizer_batch_token_budget() -> int:
 def summarizer_vram_reserve_mb() -> int:
     """GPU memory, in MiB, the summarizer worker must leave free for other processes (ADR-027)."""
     return max(0, int(_sum_cfg().get("vram_reserve_mb", DEFAULT_SUMMARIZER_VRAM_RESERVE_MB)))
+
+
+def summarizer_tiers() -> set[int]:
+    """Chunk tiers that get a summary (ADR-030). Tier-2/3 chunks are the long
+    prompts, so they are most of the summarizer's GPU time."""
+    return {int(t) for t in _sum_cfg().get("tiers", DEFAULT_SUMMARIZER_TIERS)}
 
 
 # ---------------------------------------------------------------------------

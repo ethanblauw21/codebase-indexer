@@ -39,6 +39,8 @@ See stable_id.py for the formula and its constraints.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -90,6 +92,14 @@ _DEFAULT_RERANKER_ENABLED  = False
 _DEFAULT_FUSION_MODE       = "rrf"
 _DEFAULT_DENSE_WEIGHT      = 0.7
 _DEFAULT_SPARSE_WEIGHT     = 0.3
+# ADR-030: RRF weight of the summary ranking against the finished code ranking.
+_DEFAULT_SUMMARY_WEIGHT    = 0.5
+# ADR-030: how much a tier-2/3 (whole-file) chunk counts in the code ranking at that
+# fusion, against 1.0 for tier 1. Its summary still counts in full.
+_DEFAULT_FILE_CHUNK_WEIGHT = 1.0
+_SUMMARY_INDEX_NAME        = "summary"
+_SUMMARY_FUSE_DEPTH        = 30   # candidates from each side of the final fusion
+_PART_SUFFIX = re.compile(r"_part_\d+$")   # ast_chunker's split-chunk scope suffix
 
 # ---------------------------------------------------------------------------
 # Return type
@@ -104,7 +114,7 @@ class RetrievedChunk:
     scope: str         # FQN for tier-1 AST chunks (contains "::"); positional label otherwise
     tier: str
     text: str
-    source: str        # "semantic" | "structural"
+    source: str        # "semantic" | "structural" | "summary" (found only through its summary, ADR-030)
     tags: list[str] = field(default_factory=list)
     corroborated: bool = True   # False when a CALLS edge lacks import-graph backing
 
@@ -184,6 +194,12 @@ class HybridRetriever:
         self._tier1: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER1_NAME)
         self._tier2: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER2_NAME)
         self._tier3: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER3_NAME)
+        # ADR-030: summaries have their own vectors under their chunk's id. Absent on
+        # an index built before it, and then search is exactly as it was.
+        self._summary: Optional[faiss.Index] = (
+            self._index_manager.load_or_create(_SUMMARY_INDEX_NAME)
+            if os.path.exists(os.path.join(index_dir, f"{_SUMMARY_INDEX_NAME}.faiss")) else None
+        )
         self._doc_store = DocumentStore(db_path)
         self._db = CodeDB(db_path)
 
@@ -217,6 +233,9 @@ class HybridRetriever:
         ).lower()
         self._dense_weight: float = float(ret_cfg.get("dense_weight", _DEFAULT_DENSE_WEIGHT))
         self._sparse_weight: float = float(ret_cfg.get("sparse_weight", _DEFAULT_SPARSE_WEIGHT))
+        self._summary_weight: float = float(ret_cfg.get("summary_weight", _DEFAULT_SUMMARY_WEIGHT))
+        self._file_chunk_weight: float = float(ret_cfg.get("file_chunk_weight",
+                                                           _DEFAULT_FILE_CHUNK_WEIGHT))
         self._bm25: Optional[object] = None
         self._bm25_fids: list[int] = []
         self._bm25_pos: dict[int, int] = {}   # faiss_id → row in the BM25 corpus
@@ -285,13 +304,76 @@ class HybridRetriever:
         padding. Default calls are byte-for-byte unchanged (ADR-023 §1).
         """
         self._import_cache.clear()
-        semantic_hits = self._semantic_search(query, k=max(_SEMANTIC_K, top_n))
+        use_summaries = (self._summary is not None and self._summary.ntotal > 0
+                         and self._summary_weight > 0)
+        depth = max(top_n, _SUMMARY_FUSE_DEPTH) if use_summaries else top_n
+        semantic_hits = self._semantic_search(query, k=max(_SEMANTIC_K, depth))
         pool = (
-            self._expand_structurally_budgeted(semantic_hits, top_n=top_n)
+            self._expand_structurally_budgeted(semantic_hits, top_n=depth)
             if self._graph_enabled
             else semantic_hits
         )
-        return self._rerank(query, pool, top_n=top_n)
+        ranked = self._rerank(query, pool, top_n=depth)
+        if not use_summaries:
+            return ranked
+        return self._fuse_summaries(query, ranked, top_n)
+
+    def _fuse_summaries(self, query: str, ranked: list[RetrievedChunk],
+                        top_n: int) -> list[RetrievedChunk]:
+        """ADR-030: RRF of the finished ranking with a ranking of the summary index.
+
+        Fused at the end, not inside the semantic step. Inside it, the summary list
+        was one of four and the category boost (+0.12 against RRF scores of ~0.02)
+        drowned it: MRR@10 0.429 against 0.436 without summaries on intent queries.
+        At the end, with weight 0.5, it measured 0.564 (2026-09-25). A summary hit
+        shares its chunk's id, so it lifts that chunk; a chunk found only through
+        its summary joins the list.
+        """
+        vec = np.array([embed(query)], dtype=np.float32)
+        faiss.normalize_L2(vec)
+        _, ids = self._summary.search(vec, min(_SUMMARY_FUSE_DEPTH, self._summary.ntotal))
+        summary_ids = [int(i) for i in ids[0] if i != -1]
+
+        score: dict[int, float] = {}
+        # A whole-file chunk is near every query of its file, in both lists, so at
+        # full weight it outranked the method that answers (p-queue, 2026-09-25).
+        # It counts less in the code ranking; its summary still counts in full.
+        for rank, chunk in enumerate(ranked):
+            w = 1.0 if chunk.tier == _TIER1_NAME else self._file_chunk_weight
+            score[chunk.faiss_id] = score.get(chunk.faiss_id, 0.0) + w / (_RRF_K + rank + 1)
+        for rank, fid in enumerate(summary_ids):
+            score[fid] = score.get(fid, 0.0) + self._summary_weight / (_RRF_K + rank + 1)
+
+        by_id = {c.faiss_id: c for c in ranked}
+        out: list[RetrievedChunk] = []
+        seen: set[tuple[str, str]] = set()
+        for fid in sorted(score, key=score.get, reverse=True):
+            chunk = by_id.get(fid)
+            if chunk is None:
+                meta = self._doc_store.get(fid)
+                if meta is None:
+                    continue
+                chunk = RetrievedChunk(
+                    faiss_id=fid, score=0.0, file=meta.get("file", ""),
+                    scope=meta.get("scope", ""), tier=meta.get("tier", _TIER1_NAME),
+                    text=meta.get("text", ""), source="summary",
+                    tags=meta.get("tags") or [], corroborated=True,
+                )
+            # One chunk per split parent. The parts of a big class or file sit in
+            # both lists, so without this they filled the top N as near-duplicates:
+            # p-queue's pq-concurrency returned 10 chunks covering 2 scopes, and lost
+            # its rank-1 answer (2026-09-25). The best-scoring part stands for the rest.
+            # Tier is not in the key: a file's tier-2 and tier-3 parts are slices of
+            # the same text.
+            key = (chunk.file, _PART_SUFFIX.sub("", chunk.scope))
+            if key in seen:
+                continue
+            seen.add(key)
+            chunk.score = score[fid]
+            out.append(chunk)
+            if len(out) == top_n:
+                break
+        return out
 
     # ------------------------------------------------------------------
     # Step 1 — Semantic retrieval (multi-tier RRF)

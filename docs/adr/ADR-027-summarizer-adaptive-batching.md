@@ -1,6 +1,6 @@
 # ADR-027: Summarizer Batching With a Self-Imposed GPU Memory Cap
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-24
 **Branch:** `feature/adr-027-summarizer-adaptive-batching` (cut from `fix/two-pass-summarization` at 5f03798)
 **Reviewer:** @edb
@@ -112,7 +112,10 @@ The PR does not merge until all of these hold on the 8 GB card.
 - [x] §5 bounded job groups, worker restart on timeout, end-of-pass counts
 - [x] `[summarization].max_batch_size` and `vram_reserve_mb` in `indexer.toml`, `src/config.py`, and the drift test
 - [x] §3 revised to a token budget with step-back-one on OOM; `[summarization].batch_token_budget`
-- [ ] Verification 3 and 1 rerun on the token-budget build
+- [x] Verification 3 on the token-budget build (16.3 min, see Notes)
+- [ ] Verification 1 rerun on the token-budget build
+- [x] Verification 2 noise floor (see Notes: the drop is real, small)
+- [ ] Decision (@edb): accept the small retrieval loss for the speed, or find why batched output differs systematically
 - [x] Unit tests (Verification 6): `tests/test_summarizer_batching.py`, 20 tests, no GPU
 - [x] `tools/summarizer_batch_equivalence.py` for Verification 1 (not run yet)
 - [ ] Verification 1 to 5 on the GPU, results recorded here with provenance
@@ -148,3 +151,77 @@ The PR does not merge until all of these hold on the 8 GB card.
 - 2026-09-24: GPU health across all of the above, about 6 hours of load: 0 WHEA events, 0 PCIe replays, link at Gen5 x4 throughout, 70 C maximum.
 - 2026-09-24, **deviation, §3 revised to a token budget** (suggested by @edb after the profile): batch size is `budget // longest prompt in the batch`, starting at 16,000 prompt tokens, at most 48 chunks. An OOM retries one chunk smaller (twice), then halves, and lowers the budget to what was retried. The budget grows by one chunk's worth after 8 clean batches. Worker groups went from 32 to 96 chunks and pass-1 slices from 64 to 192, because a group caps the batch. 3 new unit tests (sizing by length, step-back to the exact ceiling, step-back then halving); 332 tests pass on CPU, with the 6 pre-existing snapshot failures deselected. Measured on a 200-chunk sample in stage 12 at 4.45 times batch size 1; the full pass has not been run on this build yet.
 - 2026-09-24, **CPU baseline, projected** (no GPU, 14 torch threads, same repository, 1,552 chunks; `gpu-crash-repro/cpu_baseline.py`, `telemetry/cpu_baseline.json`): a full CPU index would pin the CPU for hours, so a few chunks were timed from the short end, the middle, and the long end of the length range, and a straight-line fit of seconds against tokens was applied to every chunk. Summarizer, fp32, batch size 1: 5.1 to 5.4 s at ~143 prompt tokens, 12.4 to 17.8 s at ~290, 57 to 71 s at ~4,000, **projected 6.3 h** for the repository (about 6.1 h for the 1,490 distinct texts). The indexer's CPU default is fp16, and three fp16 chunks timed the same or a little faster (4.0 s, 9.5 s, 15.5 s), so the projection stands for either. Embedder, fp32: 0.19 s at ~26 tokens, 0.73 s at ~168, 2.73 s at the 512-token cap, **projected 31.8 min**. Against the GPU: summarizing 67 min at batch size 1 (about 5.5 times the CPU), 17.2 min after the cross-file fix (**about 21 times the CPU**); embedding 90 s in bf16 (about 21 times). A projection from 6 summarizer points, not a measured full run.
+- 2026-09-24, **Verification 3 on the token budget** (stage 7, 64a38be, fresh index, telemetry `stress_20260924_192215`): pass 1 took 975.5 s (**16.3 min**) for 1,496 distinct texts, 1.53 per second. The batch-1 baseline was 67.0 min, so this is 4.1 to 4.3 times faster. It is only 5 percent faster than the cross-file build (1,030 s).
+  - Largest batch 48, 0 OOM backoffs, 0 pauses, peak 5,898 MiB, shared usage flat at 64 MiB. Pass 2 took 98 s.
+  - From 19:26 to the end, the card sat in P4 at about 1,200 MHz and 30 W while reporting 95 percent utilization. Later, when the laptop's battery ran low during stage 15, utilization fell from about 70 to about 37 percent while the SM clock held at about 2,550 MHz. Both point the same way: the short-chunk tail is limited by the CPU launching kernels, not by the GPU. More batch size will not fix that. `torch.compile` or CUDA graphs might.
+- 2026-09-24, **defect in §4, found and fixed** (5bc3f60): after a pause timed out, the loop paused again before every batch, so memory held by another process ran one chunk every 120 s.
+  - Found when the retrieval driver built three repos in one process and left the embedder from zustand resident while click summarized. Stage 13 crawled and was stopped by the stall guard after 20 min with no output.
+  - The loop now carries on at batch size 1 without waiting again for the rest of the call, as §4 always said it should. There is a test for it.
+  - The driver now frees the embedder between repos, and stage 13 was rerun from scratch.
+- 2026-09-24, **Verification 2, retrieval** (stages 13 to 16, 5bc3f60, telemetry `stress_20260924_202823`, `gpu-crash-repro/telemetry/retrieval/results.json`).
+  - Setup: three pinned eval repos (p-queue, zustand, click), 83 queries, the shipped arm (graph on, reranker off, RRF), and the embedder in bf16 for index and queries alike. Each variant has a fresh index: no summaries, batch size 1, and batched.
+
+    | Variant | MRR@10 | nDCG@10 | p-queue MRR | zustand MRR | click MRR |
+    |---|---|---|---|---|---|
+    | no summaries | 0.4427 | 0.5379 | 0.5500 | 0.3126 | 0.4719 |
+    | batch size 1 | 0.4490 | 0.5482 | 0.5771 | 0.2825 | 0.4935 |
+    | batched | 0.4410 | 0.5417 | 0.5771 | 0.2733 | 0.4805 |
+
+  - Batched against batch size 1: MRR 0.008 lower and nDCG 0.0065 lower. **5 of 83 queries changed, all 5 down**, each by one or two places (3rd to 4th three times, 2nd to 4th, 2nd to 3rd).
+    - The three zustand queries all target `persist.ts`, and in each one a test chunk from `tests/basic.test.tsx`, whose summaries were worded differently, moved into the top 3.
+    - The two click queries moved on a reworded summary: once on the gold chunk's own summary (`UsageError`) and once on a competing test's (`test_getchar`).
+    - Summaries identical between the two runs: 94.6, 93.9 and 92.6 percent per repo. Where they differ, batched is shorter 76 times and longer 67, so there is no systematic bias.
+  - Summaries themselves barely move this eval: no summaries against batch size 1 changed 40 queries, 22 up and 18 down, for +0.006 MRR, and zustand got worse with summaries. The batching drop is the same size as the whole benefit of summarizing here.
+  - **Verdict: not resolved.** Five down and none up is suggestive (a sign test gives about p = 0.06, and three of the five are one event), but it is not a demonstrated loss. The eval cannot separate the two either way. The missing number is the noise floor: two batched runs with different batch compositions. If those also move about 5 queries against each other, this is noise.
+- 2026-09-24, **separate finding, both batch sizes:** 17.5 percent of summaries are one paragraph, because `_clean()` keeps only the text before the first blank line, and the model often puts one after "Purpose:". Those summaries lose their Inputs, Outputs and Key operations lines. This is independent of batching (17.5 against 17.7 percent), and it probably costs more retrieval than batching does. Not changed here.
+- 2026-09-24, **Verification 2, noise floor and the summary-fields fix** (stages 17 to 19, 77733c0 and `fix/summary-keep-all-fields` at 31a6f3a, telemetry `stress_20260924_224220`, `retrieval/results.json`; the stage 16 file is kept as `results_stage16.json`). Two more fresh builds of the same three repos.
+  - `batched2` is batched with a 12,000-token budget, so the chunks group into different batches.
+  - `fields` is batched with `_clean()` keeping every field.
+
+    | Variant | MRR@10 | nDCG@10 | Queries changed against batch size 1 |
+    |---|---|---|---|
+    | no summaries | 0.4427 | 0.5379 | |
+    | batch size 1 | 0.4490 | 0.5482 | |
+    | batched | 0.4410 | 0.5417 | 5, all down |
+    | batched2 | 0.4330 | 0.5357 | 7, all down |
+    | fields | 0.4344 | 0.5367 | |
+
+  - **The drop is real, not noise.** The two batched builds differ from each other on only 2 queries. Both drop the same 5 queries against batch size 1, and batched2 drops 2 more, 7 of 7 down (a sign test gives about p = 0.016). With different batch groupings, the same chunks come out worded the same way, which suggests something systematic in batched generation (left padding under fp16 is the first suspect), not chance. The loss is small: each query moves one or two places, and MRR falls 0.008 to 0.016. That brings batched summaries down to about the no-summary score.
+  - **Summaries barely help on this eval at any batch size.** The best case, batch size 1, is +0.006 MRR over no summaries, and zustand scores worse with summaries than without.
+  - **The fields fix did not help retrieval.** One-paragraph summaries fell from 17.7 to 0.7 percent and mean length rose from 322 to 467 characters, but MRR fell 0.007 against batched (14 queries changed, 6 up and 8 down; p-queue lost the most). A likely reason is that longer summaries crowd the code out of the embedder's 512-token window for short chunks. So it is not merged, and the branch stays for reference.
+  - @edb's condition was that batching must not reduce retrieval accuracy. **On this eval it does, slightly.** That is recorded as the outcome and left for @edb to decide, with the size of the loss above.
+- 2026-09-24, **do summaries help intent queries at all?** (@edb asked, after the noise floor)
+  - **The query set.** A new set of 55 queries across the same three repos (`gpu-crash-repro/intent_fixtures/`). Each describes behavior found only in a function's body, such as a fallback, a side effect or a data transformation, with no identifiers and nothing from the name or the first line of the docstring. That is the case summaries exist for.
+  - **How it was written.** Three agents wrote the queries, one per repo. They chose the correct answer from the source alone and checked it against chunk scopes in the `none` index. They never saw a summary or a retrieval result.
+  - **The run.** Arm B, embedder in bf16, the five indexes already built (no rebuild). Results are in `retrieval/results_intent.json`, and the original set was re-scored with intervals in `results_orig.json`.
+
+    | Variant | Intent MRR@10 (55) | Original MRR@10 (83) |
+    |---|---|---|
+    | no summaries | **0.4360** | 0.4427 |
+    | batch size 1 | 0.3804 | 0.4490 |
+    | batched | 0.3650 | 0.4410 |
+    | batched2 | 0.3793 | 0.4330 |
+    | fields | 0.3561 | 0.4344 |
+
+  - **Summaries hurt the queries they were meant to help.** Against no summaries, batch size 1 comes out 0.056 lower (23 of 30 changed queries down, 95 percent interval -0.124 to +0.011). Batched comes out 0.071 lower (interval -0.135 to -0.010), and fields 0.080 lower (-0.141 to -0.021). On the original set, summaries make no difference: +0.006 for batch size 1, interval -0.047 to +0.059.
+  - **Mechanism, seen in the largest drops.** A summary states what a function is for. Appended before embedding, it pulls the chunk toward that purpose and away from what its body does.
+    - Example: "where is the time estimate smoothed with a rolling window of recent timings" found `ProgressBar.make_step` first without summaries. With summaries, `ProgressBar.time_per_iteration` ("calculates the average time per iteration for a progress bar") came first.
+    - Example: a question about when an option with an optional value refuses the next token went from rank 1 to rank 6, behind chunks whose summaries talk about options and values in general.
+  - **Batching, on this set:** batch size 1 against batched2 is -0.001 with 2 queries up and 2 down, and batched against batched2 goes the other way from the original set. So the systematic batching drop seen on the original set does not carry over. It stays a small effect next to the cost of summarizing at all.
+  - **Scope of the claim:** three repos in TypeScript and Python, one embedder (`bge-code-v1`), one summarizer (Qwen2.5-Coder-1.5B) and one prompt. Summaries could still help with another embedder, a bigger summarizer, a prompt that describes the body rather than the purpose, or a separate summary index instead of appended text. But as shipped, `[summarization].enabled = true` costs 16 to 67 min of GPU per index on this repository and makes intent retrieval worse. Whether to turn it off is @edb's call. See the backlog item filed from this.
+  - **Found while writing the queries:** TypeScript private `#` methods get no chunk of their own. Their bodies are only in whole-file chunks, so p-queue's rate-window and idle-timer logic cannot be a specific target.
+- 2026-09-25, **the summaries are good; appending them is the problem** (`gpu-crash-repro/summary_store_eval.py`, `retrieval/results_summary_store.json`). Every summary from an already-built index was embedded on its own as a document and searched by cosine. Each hit maps back to its chunk, and the result is fused by RRF (k = 60) with the code-only index's ranking (arm B, top 30 cut to 10). No new summaries were generated.
+
+    | | Original (83) | Intent (55) |
+    |---|---|---|
+    | code only | 0.457 | 0.450 |
+    | summaries alone | 0.567 | 0.535 |
+    | fused, summary weight 1.0 | **0.613** (43 up, 13 down) | **0.606** (26 up, 11 down) |
+    | fused, summary weight 0.5 | 0.619 | 0.582 |
+    | appended (shipped) | 0.449 | 0.380 |
+
+  - The code-only row is 0.457 here, not the 0.443 in the tables above, because this run pulls 30 candidates before cutting to 10. All the rows in this table share that setup.
+  - Batched summaries fused the same as batch-size-1 summaries (0.614 against 0.613 on the original set, 0.584 against 0.606 on intent), so batching is safe in this design.
+  - Why appending failed: for 77 percent of tier-2 and 68 percent of tier-3 chunks, the code alone fills the embedder's 512-token window, so the summary is never seen. Where it is seen, it pulls the chunk toward its purpose.
+  - Fusing only tier-2/3 summaries scored 0.28. That is not a fair test of file summaries, because every gold in both sets is a single function, so a whole-file hit counts as a miss.
+  - Summarization is turned off by default on `chore/summaries-off-by-default` (02eb4bb) until a separate summary index is built. That work needs its own ADR.

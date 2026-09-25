@@ -48,6 +48,13 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
 | [B-022](#b-022) | The summarizer runs one chunk at a time on the GPU | GPU baseline session, 2026-09-24 | M | **promoted → ADR-027** |
 | [B-023](#b-023) | Several projects watched at once cannot share one 8 GB card | GPU baseline session, 2026-09-24 | L | **promoted → ADR-028** |
+| [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | Stage 1 promoted → ADR-034 |
+| [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L | raw |
+| [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
+| [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | promoted → ADR-033 |
+| [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | promoted → ADR-032 |
+| [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
+| [B-025](#b-025) | Appended summaries make intent retrieval worse; the same summaries help when kept apart | retrieval check, 2026-09-25 | M | **promoted → ADR-030** |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -470,3 +477,365 @@ Numbers 012 to 021 are used on other branches; this entry takes the next free nu
 Every MCP server process loads its own embedder, and one is started per Claude session per project. With the watchdog daemon on for several projects, the card fills with copies of the same model before any summary runs. The daemon also starts a summarizer beside the resident embedder on every save with a cache miss, so the two-pass split does not help it.
 
 **The want:** watch several projects at once on one GPU. Saves should show up in search within seconds, and summaries should catch up in the background, batched across projects, without the models ever spilling into system RAM.
+### B-025 — Appended summaries make intent retrieval worse; the same summaries help when kept apart
+
+**Source:** retrieval check, 2026-09-25 · **Status:** **promoted → [ADR-030](./adr/ADR-030-separate-summary-index.md)** · **Size:** M
+
+Each chunk is embedded as its code with the LLM summary appended. On 55 queries that describe what a function's body does, that scored 0.380 MRR@10 against 0.436 with no summaries, and on the original 83 queries it made no difference. The summary pulls the chunk toward its stated purpose, and for 68 to 77 percent of tier-2/3 chunks it falls past the embedder's 512-token window and is never seen.
+
+The same summaries embedded on their own and fused by RRF with the code ranking scored 0.613 and 0.606 on the two sets, against 0.457 and 0.450 for code alone (`gpu-crash-repro/summary_store_eval.py`; ADR-027's log has the details).
+
+**The want:** keep the summaries' value without their harm, and without paying the summarizer again for indexes that already have them cached.
+
+### B-026 — Class members lose their docs, private methods and getters from the index, and a method arrives without its class
+
+**Source:** ADR-030 p-queue diagnosis, a grill with @edb, and a five-reviewer jury, 2026-09-25 (`CHUNK_SHAPE_PLAN_REVIEW.md`) · **Status:** Stage 1 promoted → ADR-034 (`feature/adr-034-class-member-chunks`); Stage 2 shaped · **Size:** L
+
+**Where it came from.** Under ADR-030's summary fusion, p-queue's original query set (24 queries)
+scored 0.511 MRR@10, against 0.537 with no summaries. Three named queries lose: `pq-concurrency`,
+`pq2-enqueue` and `pq2-on-error`; whether others moved as well is not yet tabulated. They lose to
+the parts of `index.ts`'s class chunk (`PQueue_part_1..7`), which rank in both the code list and
+the summary list. A fusion knob cannot fix it, because ADR-030 Verification 3 showed that
+down-weighting whole-file chunks costs file-level questions as much as it gains on symbol ones.
+
+**Provenance for every number here.**
+- **Code:** `feature/adr-030-summary-index` at e1e9491, not merged. Line numbers below are at that
+  commit.
+- **Builds:**
+  - `store` is ADR-030's variant: code-only vectors plus `summary.faiss`, with the summaries seeded
+    from the batched build.
+  - `none` has no summaries.
+  - Both live under `gpu-crash-repro/telemetry/retrieval/<variant>/<repo>/`.
+- **Harness:** the gitignored kit under `gpu-crash-repro/` (`retrieval_summaries.py`, plus the
+  replay scripts behind `results_file_level.json`). The grader is `tools/real_repo_eval.py`,
+  deduping on (file, scope without `_part_N`).
+- **Stack:** bge-code-v1 in bf16, arm B (graph on, reranker off, RRF).
+- **All numbers carry the ghost vectors of B-028.**
+
+**What the code already does.**
+- **Class chunks are already skeletons.** `skeletonize` (`_treesitter.py:33`) stubs member bodies
+  with ` ...`, and TypeScript and Python share it (`ts_adapter.py:303`, `python_adapter.py:111`).
+  C# and C++ have **separate** skeletonizers (`csharp_adapter.py:150`, `cpp_adapter.py:236`).
+- **`PQueue`'s bloat is documentation, not code.** Its chunk has 48 stubs but still runs to 11,545
+  characters in 7 parts. The bulk is JSDoc, and field docs too.
+- **Where the parsers look for symbols.**
+  - The TypeScript parser does not look inside *named* functions and methods (`ts_adapter.py:361`).
+  - Its generic fallthrough (`ts_adapter.py:403`) **does** walk into anonymous callbacks. That is
+    how helpers declared inside `it(() => …)` are extracted, with no parent. This corrects an
+    earlier version of this item.
+  - Python, C# and C++ do not look inside function bodies (`python_adapter.py:157`,
+    `csharp_adapter.py:432`, `cpp_adapter.py:638`).
+
+**The mechanism differs by query, so each needs its own proof before building.**
+- **`pq-concurrency`: a name collision, not JSDoc.** Its gold symbol `PQueue.concurrency` has
+  **no JSDoc**. `get concurrency()` and `set concurrency()` share one FQN, and only the setter is
+  kept.
+- **`pq2-on-error` and `pq2-enqueue`: possibly JSDoc bloat in the skeleton parts.** This is
+  unproven.
+
+**Defects, all data loss today, whatever else ships:**
+
+1. **Member doc comments live only in the class skeleton.** A TypeScript `/** … */` is a sibling
+   node of its `method_definition`, so the method chunk leaves it out. The JSDoc blocks in
+   `index.ts` exist only in `PQueue_part_N`, so `@param` text never sits next to its body. C# `///`
+   and C++ doc comments sit between members the same way. Python is not affected, because its
+   docstrings are inside the body.
+2. **Private `#` methods get no chunk and no call edges.**
+   - `_TS_NAME_TYPES` (`ts_adapter.py:101`) lacks `private_property_identifier`. The skeleton
+     stubs the bodies, so the bodies of `PQueue`'s 21 `#` methods and accessors exist in tier 1
+     nowhere.
+   - `_CALL_QUERY` (`ts_adapter.py:59-65`) matches only `property_identifier`, so
+     `this.#x()` produces no call edge. Once `#` members are indexed, `find_dead_code` would call
+     every one of them dead unless the call and reference queries are fixed in the same change.
+3. **Arrow-function class fields are neither extracted nor stubbed.** `private doWork = () => {…}`
+   is a `public_field_definition`, whatever its modifier. It is not extracted, and `skeletonize`
+   finds no body inside it to stub. None occur in the three eval repos.
+4. **Symbols sharing an FQN overwrite each other.** Only the last one's text survives
+   (`db.py:745`, `symbols.fqn` UNIQUE at `db.py:135`), and every one of them leaves a vector
+   behind (B-028). This comes in two kinds that need different fixes:
+   - **Contiguous siblings of one concept:** a getter with its setter (p-queue: 1) and `@overload`
+     sets (click has 36 `@overload` decorators in `src/`). These should merge.
+   - **Scattered, unrelated redeclarations:** helpers with the same name declared in separate test
+     callbacks (zustand: 92, e.g. `useBoundStore` 15 times in `tests/basic.test.tsx`). Merging
+     these would stitch unrelated bodies into one chunk, so they must **not** merge. B-027's
+     test-block scoping is what gives them distinct names.
+
+**The want:** every member reachable on its own with its docs; a class skeleton that is small
+because it holds signatures, not documentation; and a returned method that brings its class
+context with it.
+
+**Order of work:** B-028 → B-029 → Stage 1 → B-027 → any Stage 2 change to the schema or
+`retrieve()`. Stage 2's display-only grouping may come before B-027 (see Stage 2).
+
+**Before any ADR is written** (the jury's gate):
+- **ADR-030:** merge it, or pin it at e1e9491 with the `store` artifact paths.
+- **A per-query baseline:** tabulate all 24 p-queue original queries, with ranks under `none` and
+  under `store`, and state how many changed.
+- **A mechanism per losing query:** prove the mechanism for `pq2-on-error` and `pq2-enqueue` with
+  a CPU probe on a hand-edited chunk set (docs moved, header repeated), before paying for a
+  summary rebuild.
+- **Write down the rules below:** scope, merge, doc-move and gate.
+
+**Prerequisites measured, 2026-09-25** (pinned: `none031` / `store031`, ADR-030 + ADR-031 at
+`feature/adr-030-summary-index` 56ea132, arm B, shipped weights, bge-code-v1 bf16; script
+`pq_mechanism.py`, results `gpu-crash-repro/telemetry/retrieval/results_pq_mechanism.json`). The
+numbers at the top of this item carried ghost vectors; these replace them.
+- **Per-query baseline, 24 original p-queue queries:** MRR@10 0.555 without summaries, 0.554 with.
+  9 queries improve with summaries, 4 get worse (`pq-add` 11→12, `pq-running-tasks` 6→13,
+  `pq2-on-error` 1→9, `pq2-enqueue` 1→11), 10 stay at rank 1, and `pq-concurrency` is not found
+  by either.
+- **Probes** (tier-1 chunks of `index.ts` edited and re-embedded; summary vectors left as built;
+  skeleton parts stripped in place, not re-split):
+
+  | Probe | orig, no summaries | orig, summaries | intent (25), summaries | file (10) |
+  |---|---|---|---|---|
+  | as built | 0.555 | 0.554 | 0.619 | 0.883 |
+  | JSDoc removed from the skeleton | 0.587 | 0.578 | 0.634 | 0.883 |
+  | **+ each member's JSDoc in its own chunk** | **0.735** | **0.696** | **0.640** | 0.883 |
+  | + class declaration repeated in each member | 0.640 | 0.598 | 0.609 | 0.883 |
+  | getter and setter merged (alone) | 0.555 | 0.554 | 0.619 | 0.883 |
+
+- **Moving docs onto members is proven:** +0.18 and +0.14 on the original set. With summaries,
+  `pq-pause` goes 4→1, `pq-sizeby` 7→1, `pq2-is-rate-limited` 4→1, `pq-saturated` 2→1,
+  `pq2-on-pending-zero` 9→2 and `pq2-pending` 10→4. The skeleton shrank by 31% (11,545 → 7,996
+  characters).
+- **Do not embed a repeated class header.** It costs 0.10 against doc-move alone, because every
+  member then shares one long line. Stage 2's parent context stays display-only.
+- **Mechanism per losing query, and none of them is JSDoc:**
+  - `pq2-on-error` and `pq2-enqueue`: **fusion.** Each answer is rank 1 in the code list but
+    rank 40 or absent in the summary list (the query is one word, "enqueue", and the summary says
+    "adds a new item"). RRF sums credit, so chunks ranked moderately in *both* lists pass a
+    one-list rank 1. Doc-move leaves them at 10 and 10. This is a question for ADR-030's fusion
+    rule, not for chunk shape.
+  - `pq-concurrency`: **a vocabulary gap.** The answer is not in the top 50 in any probe. Neither
+    accessor has a doc comment; "limit how many tasks run at once" is written only in
+    `options.ts`. Merging the getter back changes nothing, so the accessor merge is correct
+    hygiene with no retrieval payoff here.
+  - `pq-running-tasks` (6→13) and `pq-add` (11→12): whole-file and `Global_part_N` chunks that
+    rank in both lists crowd them out. That is the same fusion effect, and part of B-027.
+- The measurement stays the same for Stage 1's real build, which re-summarizes the changed
+  chunks: the gate compares against these per-query ranks.
+
+**Stage 1: parser fixes** (TypeScript and Python adapters plus `ast_chunker.py`).
+- **Scope.** TypeScript and Python carry retrieval claims. C# and C++ are fixtures only: their
+  forked skeletonizers keep docs inside the skeleton for now. Say so in the ADR, so the difference
+  is not later mistaken for a regression.
+- **Doc-move rule.**
+  - A leading doc comment moves from the skeleton to its member **only when that member is emitted
+    as a `Symbol` in the same parse.** Documented plain fields, index signatures, abstract members
+    and overload signatures keep their docs in the skeleton.
+  - The ADR defines "leading": the comment immediately before the member, allowing for decorators
+    and at most one blank line.
+  - Report each member's token count after the move. A moved doc must not push members past
+    tier 1's 500 tokens into `_part_N`. The largest measured case is about 290–335 estimated
+    tokens (`setPriority`, `onError`, `runningTasks`), so this needs a real token count.
+- **`#` members.** Extract them with the `#` kept in the FQN (`PQueue.#tryToStartAnother`), and
+  add `private_property_identifier` to the call and reference queries. `#` in an FQN is a public
+  contract, so check that symbol lookups by FQN accept it.
+- **Arrow fields.** Extract them, and teach `skeletonize` to find the body inside a field
+  definition.
+- **Merge policy.**
+  - Only contiguous same-FQN siblings merge: accessor pairs and overload sets.
+  - The implementation comes **first** and the stubs follow, so the implementation stays inside
+    the embedder's 512-token window.
+  - The merged symbol spans from the first line to the last.
+  - The ADR names which declaration's type wins, because `symbol_types` holds one row per FQN.
+  - Scattered same-FQN symbols are left alone. Their ghost vectors are B-028's fix.
+- **Skeleton header, capped and measured.**
+  - Every skeleton part repeats the class declaration, generics and heritage, with no decorators
+    and no doc.
+  - Each part records a body-only line range that is separate from the header's, so Stage 2 can
+    pick the right part.
+- **Fixtures (ADR-008) and unit tests:**
+  - a documented plain field, whose doc stays in the skeleton;
+  - a documented method, whose doc moves to it;
+  - a decorated method;
+  - a `#` method with a caller;
+  - an arrow field, extracted and stubbed;
+  - a getter/setter pair, giving one chunk and one symbol row;
+  - Python `@property` with a setter;
+  - Python `@overload`, implementation first;
+  - scattered redeclarations: not merged, and no duplicate ids.
+- **Measurement: one arm per change.**
+  - Arms: docs moved alone; then `#` members and arrow fields added; then the merge; then the
+    header.
+  - Each arm is first a code-list-only arm on the CPU. It is diagnostic only, because it is biased
+    against scopes that have no summary yet.
+  - Then one full build that regenerates summaries on the GPU. It logs summary-cache hits and
+    misses.
+- **The Stage 1 gate.** Every criterion has a threshold; none is report-only.
+  - Each named p-queue query ranks no worse than under `store`.
+  - p-queue original is at or above 0.537.
+  - In each set, at most 2 queries lose 3 or more ranks against `store`. The sets and their
+    `store` scores are original 0.535, intent 0.555, file 0.811 (any) and file 0.500 (whole).
+  - The means are reported with the paired CI95 (`tools/eval_common.py:84`) but not gated on it:
+    at n = 24 the interval cannot resolve a 0.026 change.
+  - The largest skeleton part is under a threshold set in the ADR.
+  - B-029's chunker version is bumped.
+  - The MCP Inspector run passes. It lists the tools, a search returns `#` FQNs, a lookup by a
+    `#` FQN works, and errors come back as `isError`.
+
+**Stage 2: class context in results.**
+- **The parent is text, not an id.** Keep `class_context` or a `parent_fqn` text column on
+  `symbols`, which the parser already computes. Never store a stable id: parts and tiers make it
+  ambiguous.
+  - `NULL` means "no extracted ancestor". A helper inside an `it(() => …)` callback has no parent
+    today, and B-027 will change that for test files.
+  - If a column is migrated, it must tell "never filled" apart from "no parent".
+- **Grouping is MCP display only until B-027's FQN decision.**
+  - Results are ordered by class. Each group sits at its best member's rank; within the group the
+    member comes first, then its class skeleton, once per class. If the skeleton is too big, a
+    header-only skeleton is used.
+  - The skeleton part is picked by the body-only ranges from Stage 1.
+  - Grouping inside `retrieve()` would change what the eval grades, so it waits for B-027.
+- **B-030 lands first.** The MCP result loop must skip an oversized chunk instead of stopping at it.
+- **The Stage 2 gate:**
+  - the eval MRR is unchanged, as it must be for a display-only change;
+  - for 10 fixed queries, every top-5 member is still present after grouping;
+  - tokens per result list are reported before and after;
+  - the MCP Inspector run passes, including an empty result and an oversized class.
+
+**Depends on:** B-028 and B-029, and ADR-030 merged or pinned.
+
+### B-027 — Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries
+
+**Source:** same grill and jury, 2026-09-25 · **Status:** raw · **Size:** L, likely to split into two or three items when shaped
+
+Tier 2 cuts every file into 1,500-token slices and tier 3 into 4,000-token slices
+(`stable_id.py:23-27`, `fallback_token_chunker` with `parent_scope="Full File"`). The embedder reads
+only the first 512 tokens (`core.py:51`), so a tier-3 slice's code vector sees about an eighth of
+its text. The file view is carried almost entirely by the slices' summaries: file questions scored
+0.500 MRR@10 ("whole" grading, meaning only a tier-2/3 chunk of the gold file counts) with tier-2/3
+summaries and under 0.10 without them (ADR-030 Verification 3). Their scopes are a bare
+`Full File_part_N`, and tier 2 and tier 3 often hold identical text (B-010). Files with no symbols,
+which is most test files, fall back to token slices even at tier 1 (`Global_part_N`).
+
+**The want:** a file-level representation the embedder can actually read, that gives a file-level
+question one strong target instead of N generic slices, and that does not flood symbol questions.
+
+**Ideas from the grill, not yet decided:**
+- **An outline chunk per file:** imports plus exported signatures, replacing the slices as the
+  file's code vector. A god file, such as a barrel re-exporting 200 modules, needs a size cap or
+  paging.
+- **Test files:** treat `describe`/`it`/`test` blocks as symbols, but only those framework calls,
+  not `useEffect` or `app.get`.
+  - A `describe` skeleton keeps its setup and teardown bodies (`beforeEach` and the rest) and stubs
+    the `it` bodies, so a single `it` is not stranded without its setup.
+  - This also gives B-026's scattered test-helper collisions distinct names.
+
+**Must be decided before this starts** (the jury's gate):
+- **Test-block FQN syntax.** Test names contain spaces, quotes, `.` and `::`, which break
+  `split(".")[-1]` (`hybrid_retriever.py:652`) and the grader's suffix match. Every test-file
+  symbol will get a new id and a fresh summary.
+- **A home for free-floating comments** (license text, region markers, TODOs). B-026 moves them out
+  of the skeleton, and replacing the slices would remove them from the index entirely.
+- **One summary per file versus one per slice.** One per file means summarizing input longer than
+  the model's window. Choose page-and-merge or truncation, and cost it in GPU-minutes on the 8 GB
+  card.
+- **A B-029 version bump,** with a warning to users.
+
+Measure on the file-level set, where 7 of the 15 gold files are tests or benchmarks. A global
+fusion weight is ruled out, because it trades file questions against symbol ones (ADR-030
+Verification 3).
+
+**Measured 2026-09-25, on clean indexes (ADR-030 Verification 5, 40 file questions):**
+- **The 512-token window is not the limit.** Embedding tier-2/3 slices with a 4,096-token window
+  changed whole-file MRR by +0.001. The title's premise is wrong. Summaries are what carry
+  file-level retrieval (whole 0.259 → 0.500 with them).
+- **BM25 is a lead.** Convex BM25 fusion lifts whole-file MRR by +0.30 without summaries and
+  +0.13 with them, but costs symbol questions 0.12 to 0.28. A file-level-only sparse signal, or
+  routing by query type, may beat a new chunk shape.
+- `file_chunk_weight` 0.75 still trades +0.03 to +0.04 on symbol questions for −0.28 on file
+  whole, so the trade is confirmed with 40 file questions.
+
+**Depends on:** B-026 Stage 1 shipped and gated, with its numbers as the baseline, and B-029.
+Related: B-010.
+
+### B-028 — Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has
+
+**Source:** jury review of B-026, confirmed by counting, 2026-09-25 · **Status:** promoted → [ADR-031](adr/ADR-031-one-vector-per-chunk-row.md) · **Size:** S · **Do first** · line numbers at `feature/adr-030-summary-index` e1e9491
+
+Ingest adds one vector per chunk with `add_with_ids` and does not dedupe ids
+(`incremental_indexer.py:665`, and `:673` for the summary index). `IndexIDMap` accepts duplicate
+ids. The database keeps only the last row per (file, scope, tier) (`INSERT OR REPLACE`,
+`db.py:745`). So every same-FQN collision leaves an extra vector under an id whose text belongs to
+another symbol: a query can match the getter's vector and return the setter's text.
+
+Measured on the `store` builds (e1e9491):
+
+| Repo | Tier-1 vectors | Tier-1 rows | Summary vectors | Chunk rows, all tiers |
+|---|---|---|---|---|
+| p-queue | 76 | 75 | 137 | 136 |
+| zustand | 323 | 231 | 464 | 372 |
+| click | 1,334 | 1,298 | 1,625 | 1,589 |
+
+Tiers 2 and 3 match exactly, because their scopes are unique by construction. **Every ADR-030
+measurement includes these ghosts.**
+
+**Fix:**
+- Dedupe `(tier, id)` within a file before `add_with_ids`, for the code and summary indexes,
+  keeping the same record the database keeps (the last). Log how many were dropped.
+- Add a test asserting FAISS `ntotal` equals the chunk-row count per tier. Add the same check to
+  `index_status`.
+- Rebuild the three eval indexes and re-measure ADR-030's `none` and `store` numbers, which
+  become the baseline for B-026.
+- Existing user indexes keep their ghosts until rebuilt, which is B-029's warning.
+
+**Depends on:** nothing. Blocks B-026's baseline.
+
+### B-029 — Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content
+
+**Source:** jury review of B-026, 2026-09-25 · **Status:** promoted → [ADR-033](adr/ADR-033-chunker-version.md) · **Size:** S–M · line numbers at e1e9491
+
+`compute_diff` (`incremental_indexer.py:278`) marks a file modified only when its MD5 changes.
+There is no chunker or parser version; `schema_version` (`db.py:456`) covers the table layout only.
+After any parser change (B-026, B-027, B-028), unchanged files keep their old chunks, vectors and
+summaries forever, and edited files get new ones: a mixed-generation index that says nothing.
+
+**Fix:**
+- Write a `chunker_version` into `index_meta`.
+- **On a mismatch, warn; do not rebuild automatically.** Put the warning in the header of search
+  output and in `index_status`, not as `isError`, and ask for an explicit full re-index. An
+  automatic rebuild at MCP startup could block the first search for minutes, or for GPU-hours with
+  summaries on, and a run cut off midway would leave a mixed index marked as clean.
+- Write the new version only after a full build succeeds. Test it by killing a build midway and
+  checking that the marker is unchanged.
+- Consider building aside and swapping in.
+- Each chunk-shape change bumps the version in its own commit.
+
+**Depends on:** nothing. Blocks B-026 Stage 1 and B-027.
+
+### B-030 — MCP search output stops at the first chunk that does not fit the token budget
+
+**Source:** jury review of B-026, confirmed in code, 2026-09-25 · **Status:** promoted → [ADR-032](adr/ADR-032-search-budget-skips-oversized.md) · **Size:** S · line numbers at e1e9491
+
+`semantic_code_search` formats results into a 4,000-token budget and **`break`s** at the first chunk
+that does not fit (`MCPServer.py:100-111`). One large chunk, such as a big skeleton part or a
+member with a long docstring, hides every result ranked below it behind a single "truncated" note.
+B-026 makes this likelier, because moved docs enlarge members and Stage 2 puts skeletons at the
+head of groups.
+
+**Fix:** skip an oversized chunk and continue. Say how many were skipped. Optionally shorten an
+oversized chunk to its header or signature rather than dropping it. Test: a result list with one
+oversized chunk in the middle still shows everything after it.
+
+**Depends on:** nothing. Blocks B-026 Stage 2.
+
+### B-031 — The embedder loads in fp32 and fills the 8 GB card on its own
+
+**Source:** ADR-028's gate and the GPU work of 2026-09-24/25 · **Status:** promoted → ADR-035 · **Size:** S
+
+`core._get_embed_model` (`core.py:66-84`) builds `SentenceTransformer(model_id, trust_remote_code=True,
+device=device)` with no dtype, so `bge-code-v1` (1.5B parameters) loads in fp32: about 6.2 GB of an
+8 GB card. That leaves no room for ADR-027's 1 GB reserve, let alone the summarizer, and WDDM pages
+to system RAM silently instead of raising an OOM.
+
+- **Every measurement since 2026-09-24 already embedded in bf16.** The eval kit patches
+  `core.SentenceTransformer` to pass `torch_dtype=bfloat16` for index and queries alike, and the MCP
+  Inspector wrapper does the same. Production is the one path that doesn't.
+- **ADR-028 is gated on this.** Its log says the host doesn't get turned on for real until it lands.
+- **CPU stays fp32.** bf16 matmuls on most CPUs are slower, not faster.
+- **Open question:** an index built in fp32 and queried in bf16 mixes precisions. How much that moves a
+  cosine should be measured, not assumed.
+
+**Depends on:** none. **Blocks:** ADR-028.
