@@ -1,6 +1,6 @@
 # ADR-034: Class Members Own Their Docs, and Every Member Gets a Chunk
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-034-class-member-chunks` (stacked on `feature/adr-033-chunker-version`, with
 `feature/adr-030-summary-index` merged in for measurement)
