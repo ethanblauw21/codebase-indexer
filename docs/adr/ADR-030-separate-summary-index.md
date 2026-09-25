@@ -1,6 +1,6 @@
 # ADR-030: Summaries Get Their Own Index, Fused With the Code at Search Time
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-030-summary-index` (cut from `feature/adr-027-summarizer-adaptive-batching` at aa3c367)
 **Reviewer:** @edb
