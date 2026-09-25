@@ -362,3 +362,50 @@ arm 2 unless noted.
   took a list position above the constructor. The per-list scores were not pulled.
 - `Options` is a fair first answer to a question about configuration options, and the constructor
   stays second. Reverting would mean un-indexing the 22 `#` members. The gate now has no open items.
+
+**2026-09-25, held-out check: two TypeScript repos the design was never tuned on (@edb).**
+- **Why:** every TypeScript choice in this ADR was measured on p-queue alone.
+- **Repos:**
+  - `isaacs/node-lru-cache` v11.5.3 (7e71a1f): one 3,219-line class file with 144 JSDoc blocks and
+    44 `#` members.
+  - `taskforcesh/bullmq` v6.3.9 (10dc93c), `src/` only: 108 files; members are `private`/`protected`,
+    not `#`.
+- **Queries:** written from source by one agent per repo, blind to every result
+  (`gpu-crash-repro/heldout_fixtures/`). 20 short and 20 intent questions per repo, plus 12
+  file-level questions for bullmq. Every gold was checked against the built indexes.
+- **Builds:**
+  - `base` was built from 5c48bca (pre-ADR-034) and `final` from 4805ca1. Both use summaries in their
+    own index.
+  - `final` seeded its summaries from `base`, so only changed chunks were summarized again: 76 for
+    lru-cache and 321 for bullmq.
+- **Driver:** `gpu-crash-repro/heldout.py`, output in `telemetry/gate_heldout_034.txt`.
+- **No retuning:** the rules were run exactly as committed.
+
+| Set | lru-cache | bullmq | Both |
+|---|---|---|---|
+| short (20 + 20) | 0.409 → 0.796, +0.387\* | 0.793 → 0.742, −0.051 | +0.168\* |
+| intent (20 + 20) | 0.237 → 0.670, +0.432\* | 0.656 → 0.664, +0.008 | +0.220\* |
+| short, answer not `#`-only | +0.233\* (n 15) | −0.051 (n 20) | +0.071 (n 35) |
+| intent, answer not `#`-only | +0.086 (n 7) | +0.008 (n 20) | +0.028 (n 27) |
+| file any / whole (12) | | +0.042 / +0.035 | |
+| queries losing ≥3 ranks | 0 | 0 | **0 in every set: gate passes** |
+
+- **lru-cache:**
+  - Most of the gain is coverage. 18 answers are `#`-only (`#evict`, `#backgroundFetch` …), and
+    they went from unrankable to 0.850 (short) and 0.619 (intent).
+  - The doc-move alone, on answers the base could rank, is still +0.233\* on the short set.
+- **bullmq is neutral.** Of its 40 symbol queries, 10 moved; the only rank changes were 1↔2 and
+  unranked↔ranked.
+  - The biggest change: `Worker.concurrency`, a merged accessor pair, went from not found to 2.
+  - Four 1→2 flips come from the doc-move working on both sides. The competitor that overtook the
+    gold also received its doc: `FlowProducer.toFlowError` (+215 characters), `waitForEvent`,
+    `whenCurrentJobsFinished` and `removeOrphanedJobsBatch`. The same effect wins `bmq-intent-15`
+    3→1 and `bmq-intent-05` 2→1.
+  - One flip (`bmq-sym-03`) involves no changed chunk on either side; it is a fusion shift.
+  - Like `pq2-constructor`, these are close ties settled by which neighbour's doc matches better, not
+    a loss of the answer.
+- **Reading:**
+  - The p-queue result generalizes to another `#`-heavy class file, strongly.
+  - On a large `private`-keyword codebase, the doc-move is about neutral for symbol questions and
+    slightly positive for file questions.
+  - No design choice failed on unseen code.
