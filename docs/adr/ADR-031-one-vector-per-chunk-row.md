@@ -46,7 +46,7 @@ whether accessor pairs and overloads should become one chunk, is B-026 Stage 1.
 
 ## Consequences
 
-**Better:** every vector resolves to the text it was embedded from. Retrieval numbers stop
+**Better:** every vector resolves to the text it was embedded from, and no id collects RRF credit more than once per tier (no-summary MRR@10 0.436 → 0.624 on the original set). Retrieval numbers stop
 counting ghost hits, and the dropped chunks are no longer summarized or embedded.
 **Worse:** the first chunk of a collision is not searchable at all now, where before it was
 searchable but returned the wrong text. For a getter/setter pair the setter wins. B-026 decides
@@ -66,7 +66,7 @@ whether to merge them instead.
 - [x] `dedupe_chunks_by_scope` in `ingest_file`, with a log line per file
 - [x] `index_status` vectors against chunk rows, per tier
 - [x] `tests/test_ghost_vectors.py` (the pre-fix ingest gives 3 tier-1 vectors for 2 rows)
-- [ ] Carry the dedupe into ADR-030's summary index (its `add_with_ids` for `summary.faiss`)
-- [ ] Rebuild the three eval indexes and re-measure ADR-030 `none` and `store`
+- [x] Carried into ADR-030 by merging this branch into `feature/adr-030-summary-index` (eaf3bd9). There the dedupe sits in `chunk_all_tiers`, which both summarization passes share, so `summary.faiss` gets one vector per id as well; a summary-index case was added to the test.
+- [x] Rebuilt the three eval indexes (`none031`, `store031`): every tier and the summary index hold exactly one vector per row. **Retrieval with no summaries rose from 0.436 to 0.624 on the original set and from 0.429 to 0.596 on intent** (zustand 0.313 → 0.757). `_semantic_search` sums RRF credit per hit, so an id with n ghost vectors scored up to n times. Details and the ADR-030 consequences are in ADR-030's Verification 4.
 - [x] MCP Inspector: `tools/list --strict` exits 0; `index_status` returns the per-tier check; a bad argument returns `isError: true`
 - [x] **Found on the way:** `index_status` never answered over stdio on Windows, on `master` too (Inspector timed out at 60 s; the same function called directly takes 0.1 s). Its `git` subprocesses inherited the MCP stdin pipe. All seven `git` calls in `MCPServer.py` and `incremental_indexer.py` now pass `stdin=subprocess.DEVNULL`; `reindex` had the same calls.
