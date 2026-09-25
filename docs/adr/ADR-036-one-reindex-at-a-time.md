@@ -1,4 +1,4 @@
-# ADR-036: One Reindex at a Time, and a Watchdog Reindex That Can Print
+# ADR-036: One Reindex at a Time, and a Watchdog Reindex That Runs Under an MCP Client
 
 **Status:** proposed
 **Date:** 2026-09-25
@@ -11,7 +11,7 @@
 ## Context
 
 The watchdog daemon is the top priority once the GPU works again: an MCP server that keeps its
-index current as files are saved. Two things stand between today's code and that.
+index current as files are saved. Three things stood between that and the code on `master`.
 
 **1. Overlapping runs (B-032).** `_ReindexDebouncer` collapses a burst of events into one
 `run_incremental` after 3 s of quiet. But `_fire` runs the reindex in the timer's own thread, and an
@@ -32,6 +32,18 @@ Two runs race on SQLite writes, on `MultiIndexManager.save_all`, and, with summa
   the crash for hand-run kit scripts).
 - Seven `print` calls in `incremental_indexer.py` hold characters outside cp1252 (`━`, `→`, `✓`, `✗`).
 
+**3. Found in the end-to-end run, after 2 was fixed: the summarizer's worker never started.**
+- The first watchdog run stopped at `[summarize] 155 chunks in 14 files` and stayed there, with the
+  GPU empty. The worker process that `IsolatedChunkSummarizer` spawns sat at 11 MB with no CPU time.
+- The MCP transport keeps a read pending on the stdin pipe. On Windows, a child started through
+  `multiprocessing` (no handle inheritance) still gets its parent's standard input handle, and its
+  bootstrap closes stdin, which waits behind that pending read forever.
+- Reproduced without the indexer: a process with a thread reading its stdin pipe spawns a
+  `ProcessPoolExecutor` worker. Without the fix, no answer in 90 s; with it, the answer comes at once.
+- ADR-031's `git` hang was the same mechanism, fixed there call by call with `stdin=DEVNULL`.
+  `multiprocessing` takes no such argument.
+- ADR-028's host is not affected: `model_client._spawn` already passes `stdin=DEVNULL`.
+
 ## Decision
 
 1. **`_reindex_lock`**, a module-level `threading.Lock` in `MCPServer.py`. The watchdog's run and the
@@ -46,6 +58,9 @@ Two runs race on SQLite writes, on `MultiIndexManager.save_all`, and, with summa
    `errors="replace"` and line buffering. The protocol is untouched, because FastMCP writes it through
    its own UTF-8 wrapper over `sys.stdout.buffer`. Line buffering flushes each of our lines whole, so
    none can land in the middle of a protocol message.
+4. **`_detach_stdin()`**, called in `main()` after `_utf8_stdio()`, on Windows only. The transport gets
+   a private, non-inheritable duplicate of the stdin pipe as `sys.stdin`. Then fd 0 is pointed at NUL
+   with `os.dup2`, which also sets the process's standard input handle, so every child gets NUL.
 
 Out of scope: two server processes on one index (B-033), and re-embedding only changed chunks
 (B-034).
@@ -55,7 +70,9 @@ Out of scope: two server processes on one index (B-033), and re-embedding only c
 **Better:**
 - A save during a reindex queues exactly one follow-up. It no longer starts a second writer.
 - A `reindex` tool call waits for a watchdog run in flight instead of wiping the index under it.
-- The watchdog reindex actually runs when the server is launched by an MCP client on Windows.
+- The watchdog reindex actually runs when the server is launched by an MCP client on Windows, with
+  summaries on.
+- No child process of the server can hang on the MCP pipe again, whoever starts it.
 
 **Worse:**
 - A `reindex` call can now block for as long as the watchdog run ahead of it takes. With summaries on,
@@ -73,6 +90,7 @@ Out of scope: two server processes on one index (B-033), and re-embedding only c
 | The lock alone, with no `_queued` flag | Each save more than 3 s apart during a long run would leave another thread waiting on the lock, and each of them would run a reindex afterwards. |
 | Strip the non-ASCII characters from the indexer's prints | Seven lines today, and the next `✓` brings the bug back. Fixing the stream fixes every print. |
 | Set `PYTHONUTF8=1` in the MCP registration | It fixes this machine only. Anyone who registers the server from the README would hit the bug again. |
+| Start the summarizer's worker with `stdin=DEVNULL` | `multiprocessing` has no such option, and the next child someone adds would hang the same way. Detaching once covers every child. |
 | Move the indexer's prints to stderr | Better hygiene for a stdio server, but FastMCP takes `sys.stdout.buffer` when it starts, so swapping `sys.stdout` would move the protocol too. It needs its own change. |
 
 ## Implementation Log
@@ -82,16 +100,19 @@ Out of scope: two server processes on one index (B-033), and re-embedding only c
 - [x] `_reindex_lock`, held by the watchdog and the `reindex` tool; the tool body moved to `_reindex`
 - [x] `_queued`: at most one fired run waits for the lock
 - [x] `_utf8_stdio()` in `main()`
-- [x] Tests (`tests/test_reindex_serial.py`, 4). A fake `run_incremental` blocks until the test lets it
+- [x] `_detach_stdin()` in `main()` (found in the end-to-end run, see Notes)
+- [x] Tests (`tests/test_reindex_serial.py`, 5). A fake `run_incremental` blocks until the test lets it
   finish:
   - Five saves during one run give two runs, never two at once.
   - A save after the follow-up started gets a third run.
   - The `reindex` tool waits for a watchdog run in flight.
   - A subprocess with a cp1252 pipe for stdout prints the banner.
-  - All four fail on `master`'s `MCPServer.py`.
-- [ ] End to end on the GPU: a server launched over stdio with pipes, a file saved, and the watchdog's
-  reindex finishing
-- [ ] MCP Inspector: `tools/list --strict`, and `reindex` called once
+  - A child with a read pending on its stdin pipe spawns a pool worker. It sends its line only after
+    the worker answers, so the read is pending during the spawn. Without `_detach_stdin()` it hangs.
+  - Each fails without its fix.
+- [x] End to end on the GPU: a server launched over stdio with pipes, a file saved, and the watchdog's
+  reindex finishing (see Notes)
+- [x] MCP Inspector (see Notes)
 
 **Notes:**
 <!-- 2026-09-25: branch cut from master (0f39e44). -->
@@ -105,3 +126,33 @@ banner with stdout redirected exits 1 with that error. With `_utf8_stdio()` firs
 **Suite:** 388 passed, 1 skipped. The 6 failures are `test_adapter_snapshots`. It fails in every
 worktree outside the main checkout (a path difference, seen since ADR-034) and passes in the main
 checkout and in CI.
+
+**2026-09-25, end to end** (`gpu-crash-repro/watchdog_e2e.py`; logs in `gpu-crash-repro/telemetry/`).
+- **Setup:** the server started as an MCP client starts it, with stdin, stdout and stderr as pipes
+  and neither `PYTHONUTF8` nor `PYTHONIOENCODING` set. `PYTHONUNBUFFERED=1` was added so the harness
+  can see lines as they happen. It changes buffering only, not encoding.
+- **Project:** a scratch copy of p-queue with no index, so the first save triggers a full index,
+  with summaries on and the models in-process.
+- **Sequence:** one save, then two more 5 s apart while the first reindex runs.
+- **`master`:** every save fails at once: `[Watchdog] Reindex failed: 'charmap' codec can't
+  encode characters in position 0-1`, three times, and no index is written
+  (`watchdog_e2e_master_evidence.log`).
+  - Without `PYTHONUNBUFFERED`, `master` prints nothing at all until it exits, because a pipe is
+    block-buffered. The line buffering in Decision 3 fixes that too.
+- **This branch, before `_detach_stdin`:** the first run hung at `[summarize]` (fix 3 above).
+- **This branch, final:** run 1 finished in 149 s, a full index with summaries, 155 chunks. The two
+  saves made during it produced exactly one follow-up run. That run began only after run 1 completed,
+  and finished 15 s later. Nothing failed.
+- **Announcement moved:** a queued run used to print "Change detected — running" while it was still
+  waiting for the lock. It now prints once it holds the lock (331d647).
+
+**2026-09-25, MCP Inspector** (`gpu-crash-repro/telemetry/inspector_036/`). The server ran as shipped
+on this branch, with `main()` doing the stdio setup, against a scratch p-queue index.
+- **`tools/list --strict`:** exits 0.
+- **`reindex` with `changed_files_only=true`:** completes over stdio, including the summarizer check.
+- **`reindex` with `changed_files_only=notabool`:** ran a *full* reindex. The Inspector CLI converts
+  `--tool-arg` values by the schema's type, so the value reached the server as `false`. The
+  server's own validation of a boolean can't be exercised through the CLI. That full rebuild, with
+  summaries on, also finished over stdio, which exercises fix 4 on the tool path too.
+- **`semantic_code_search`:** returns `PQueue.pause` first.
+- **`index_status`:** answers, with vectors equal to chunk rows in every tier.
