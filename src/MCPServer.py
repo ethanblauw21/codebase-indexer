@@ -1418,6 +1418,24 @@ def index_status(since: str = "1d") -> str:
     else:
         lines.append("last_indexed_commit: (none recorded)")
 
+    # B-028: each FAISS index must hold exactly one vector per chunk row. A surplus
+    # means vectors whose text the database has since replaced; only a rebuild
+    # removes them.
+    _ensure_indexes()
+    with CodeDB(db_path) as db:
+        row_counts = dict(db._conn.execute(
+            "SELECT tier, COUNT(*) FROM chunks GROUP BY tier"
+        ).fetchall())
+    for tier_num, idx in ((1, t1_index), (2, t2_index), (3, t3_index)):
+        rows_n = row_counts.get(tier_num, 0)
+        if idx.ntotal == rows_n:
+            lines.append(f"tier{tier_num}_vectors:       {idx.ntotal} (== chunk rows)")
+        else:
+            lines.append(
+                f"tier{tier_num}_vectors:       {idx.ntotal}  chunk rows: {rows_n}  "
+                "⚠️ MISMATCH — rebuild the index"
+            )
+
     lines.append(f"\nfiles with content changed since {cutoff}  ({len(rows)}):")
     if rows:
         lines.extend(f"    {ts}  {path}" for path, ts in rows)
