@@ -45,7 +45,8 @@ from typing import Optional
 import faiss
 import numpy as np
 
-from core import DocumentStore, MultiIndexManager, embed
+from core import DocumentStore, MultiIndexManager
+from model_client import embed   # ADR-028: the model host when enabled, else core.embed
 from db import CodeDB
 from category_tagger import classify_query
 from config import load_indexer_config

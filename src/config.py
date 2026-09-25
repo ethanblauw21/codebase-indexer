@@ -95,8 +95,9 @@ def reset_config_cache() -> None:
     first case's values. ``core.py`` keeps its own embedder cache — reset that
     separately if a test changes ``[embeddings]``.
     """
-    global _sum_cfg_cache
+    global _sum_cfg_cache, _host_cfg_cache
     _sum_cfg_cache = None
+    _host_cfg_cache = None
 
 
 def summarization_enabled() -> bool:
@@ -130,3 +131,47 @@ def summarizer_batch_token_budget() -> int:
 def summarizer_vram_reserve_mb() -> int:
     """GPU memory, in MiB, the summarizer worker must leave free for other processes (ADR-027)."""
     return max(0, int(_sum_cfg().get("vram_reserve_mb", DEFAULT_SUMMARIZER_VRAM_RESERVE_MB)))
+
+
+# ---------------------------------------------------------------------------
+# Model host (ADR-028) — [model_host] in indexer.toml.
+#
+# One local process owns the GPU models; project processes are its clients. Off by
+# default, so CI, CPU-only machines and single-project use behave as before.
+# The timing defaults are PROVISIONAL until ADR-028's Implementation Log records the
+# measured swap cost and batch durations they are meant to come from.
+# ---------------------------------------------------------------------------
+
+DEFAULT_MODEL_HOST_ENABLED = False
+DEFAULT_MODEL_HOST_EMBED_IDLE_S = 60.0        # PROVISIONAL: needs the measured embedder reload cost
+DEFAULT_MODEL_HOST_IDLE_EXIT_S = 1800.0       # PROVISIONAL
+DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S = 30.0     # host start to listening; models load later, on demand
+
+_host_cfg_cache: dict | None = None
+
+
+def _host_cfg() -> dict:
+    global _host_cfg_cache
+    if _host_cfg_cache is None:
+        _host_cfg_cache = load_indexer_config().get("model_host", {})
+    return _host_cfg_cache
+
+
+def model_host_enabled() -> bool:
+    """Whether embeds and summaries go to the shared model host (ADR-028)."""
+    return bool(_host_cfg().get("enabled", DEFAULT_MODEL_HOST_ENABLED))
+
+
+def model_host_embed_idle_s() -> float:
+    """How long the host keeps the embedder loaded after its last request."""
+    return max(0.0, float(_host_cfg().get("embed_idle_s", DEFAULT_MODEL_HOST_EMBED_IDLE_S)))
+
+
+def model_host_idle_exit_s() -> float:
+    """How long the host process stays up with nothing loaded and nothing queued."""
+    return max(0.0, float(_host_cfg().get("idle_exit_s", DEFAULT_MODEL_HOST_IDLE_EXIT_S)))
+
+
+def model_host_spawn_timeout_s() -> float:
+    """How long a client waits for a host it started to begin listening."""
+    return max(1.0, float(_host_cfg().get("spawn_timeout_s", DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S)))

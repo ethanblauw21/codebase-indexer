@@ -71,6 +71,12 @@ def _wired() -> dict[tuple[str, str], object]:
         ("summarization", "max_batch_size"):  config.DEFAULT_SUMMARIZER_MAX_BATCH_SIZE,
         ("summarization", "vram_reserve_mb"): config.DEFAULT_SUMMARIZER_VRAM_RESERVE_MB,
         ("summarization", "batch_token_budget"): config.DEFAULT_SUMMARIZER_BATCH_TOKEN_BUDGET,
+
+        # ADR-028.
+        ("model_host", "enabled"):         config.DEFAULT_MODEL_HOST_ENABLED,
+        ("model_host", "embed_idle_s"):    config.DEFAULT_MODEL_HOST_EMBED_IDLE_S,
+        ("model_host", "idle_exit_s"):     config.DEFAULT_MODEL_HOST_IDLE_EXIT_S,
+        ("model_host", "spawn_timeout_s"): config.DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S,
     }
 
 

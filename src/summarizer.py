@@ -96,6 +96,7 @@ class BatchStats:
     peak_mb:        int = 0   # peak memory the worker's allocator reserved
     end_budget:     int = 0   # token budget and clean-batch streak when the call ended;
     end_streak:     int = 0   # the worker's next call picks up from here
+    yielded:        int = 0   # ADR-028: items left unattempted because should_yield said stop
 
     def merge(self, other: "BatchStats | dict") -> None:
         other = other if isinstance(other, dict) else asdict(other)
@@ -139,7 +140,8 @@ def run_adaptive_batches(
     pause_timeout_s: float = _PAUSE_TIMEOUT_S,
     sleep:        Callable[[float], None] = time.sleep,
     clock:        Callable[[], float] = time.monotonic,
-) -> tuple[list[str], BatchStats]:
+    should_yield: Callable[[], bool] | None = None,
+) -> tuple[list[str | None], BatchStats]:
     """Summarize ``len(lengths)`` items in batches sized by a token budget.
 
     ``lengths`` are prompt lengths in tokens. ``run_batch`` gets a list of item
@@ -158,6 +160,11 @@ def run_adaptive_batches(
     back, and if it does not, carry on one item at a time without pausing again
     for the rest of the call.
 
+    ADR-028: ``should_yield`` is asked before every batch after the first. When it
+    returns True the run stops there, and every item not yet attempted comes back
+    as None (not "", which means attempted and empty), so the model host can
+    serve a search and resume the rest later.
+
     Returns results in the caller's original order, and what happened.
     """
     n = len(lengths)
@@ -172,6 +179,11 @@ def run_adaptive_batches(
     may_pause = free_mb is not None
 
     while pos < n:
+        if should_yield is not None and pos > 0 and should_yield():
+            for i in order[pos:]:
+                results[i] = None
+            stats.yielded += n - pos
+            break
         length = max(1, lengths[order[pos]])
         if may_pause and free_mb() < reserve_mb:
             stats.pauses += 1
@@ -342,11 +354,14 @@ def _worker_summarize(
     max_batch_size: int,
     reserve_mb:     int,
     token_budget:   int = _TOKEN_BUDGET,
-) -> tuple[list[str], dict]:
+    should_yield:   Callable[[], bool] | None = None,
+) -> tuple[list[str | None], dict]:
     """Summarize one group of chunks inside the worker. Returns (summaries, stats).
 
     ``token_budget`` is where the first call starts; later calls carry on from
-    the budget the previous call ended with.
+    the budget the previous call ended with. ``should_yield`` is only passed by
+    the model host (ADR-028), which calls this in its own process; see
+    run_adaptive_batches for what it does.
     """
     global _w_next_budget, _w_next_streak
     if _w_model is None:
@@ -375,6 +390,7 @@ def _worker_summarize(
             on_oom=torch.cuda.empty_cache,
             start_budget=_w_next_budget if _w_next_budget is not None else token_budget,
             start_streak=_w_next_streak,
+            should_yield=should_yield,
         )
         _w_next_budget, _w_next_streak = stats.end_budget, stats.end_streak
         stats.peak_mb = int(torch.cuda.max_memory_reserved() / 2**20)
@@ -382,6 +398,7 @@ def _worker_summarize(
         # Batching buys little on CPU and the memory cap means nothing there.
         results, stats = run_adaptive_batches(
             lengths, run_batch, is_oom=lambda _e: False, max_batch=1,
+            should_yield=should_yield,
         )
     return results, asdict(stats)
 
