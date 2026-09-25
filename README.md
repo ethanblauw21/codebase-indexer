@@ -11,7 +11,54 @@ Instead of grepping for strings, the Codebase Indexer:
 - Stores embeddings in **FAISS** and symbol relationships in **SQLite**
 - Serves **11 AI-facing MCP tools** so any compatible assistant (Claude Code, Continue.dev, etc.) can query it
 
+## Why not a naive indexer?
+
+Splitting files every N tokens or at blank lines cuts function bodies in half, strands a method's
+doc comment in a different chunk from its code, and leaves the embedder unable to see where one
+symbol ends and the next begins. This indexer parses real AST symbols instead: each function or
+method is its own chunk, a class is carved into a skeleton (fields and signatures, with bodies
+stubbed out) plus one chunk per member carrying its own docs, and calls between symbols are
+recorded as graph edges the retriever can follow. That structure is measurable: moving each
+member's doc comment into its own chunk ([ADR-034](docs/adr/ADR-034-class-members-own-their-docs.md))
+raised MRR@10 on one TypeScript repo from 0.554 to 0.709, and by +0.39 on a second repo the design
+was never tuned on. Whole-file slices are still kept as tiers 2 and 3, for questions about a file
+as a whole.
+
+## Hardware and VRAM footprint
+
+Built to run on one 8 GB consumer GPU, measured on an 8 GB RTX PRO 1000 laptop card:
+
+- **Embedder:** `bge-code-v1` loads in bf16 on a GPU that supports it, about **2.9 GB**, instead of
+  6.2 GB in fp32 ([ADR-035](docs/adr/ADR-035-bf16-embedder.md)).
+- **Summarizer:** `Qwen2.5-Coder-1.5B` in fp16, batched under a self-imposed GPU memory cap with a
+  1 GB reserve. It sizes batches by a token budget and backs off rather than spill into system
+  RAM, where Windows would run it about 50 times slower without an error
+  ([ADR-027](docs/adr/ADR-027-summarizer-adaptive-batching.md)).
+- **One model on the card at a time:** indexing summarizes every chunk first, unloads the
+  summarizer, then embeds, so peak memory is the larger model rather than both (about 5.8 GB during
+  summarization).
+- **No GPU?** Everything runs on the CPU, just slower; `CODE_INDEXER_DEVICE=cpu` forces it (see
+  below).
+
 ## Architecture
+
+### Pipeline
+
+```mermaid
+flowchart LR
+    A[Source files] --> B["Tree-sitter adapters<br/>Python · TS/JS · C# · C++"]
+    B --> C["AST chunker<br/>tier 1: one chunk per symbol,<br/>class skeletons + members<br/>tiers 2-3: whole-file slices"]
+    B --> D[("SQLite<br/>files · symbols · edges · chunks")]
+    C --> D
+    C --> E["Summarizer (optional)<br/>Qwen2.5-Coder-1.5B"]
+    C --> F["Embedder<br/>bge-code-v1"]
+    E --> G[("summary.faiss")]
+    F --> H[("tier1 / tier2 / tier3 .faiss")]
+    D --> I["Hybrid retriever<br/>RRF fusion +<br/>call-graph expansion"]
+    G --> I
+    H --> I
+    I --> J["MCP server<br/>semantic_code_search, find_dead_code, ..."]
+```
 
 ### Three-Tier Index
 
