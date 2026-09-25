@@ -70,6 +70,7 @@ def _wired() -> dict[tuple[str, str], object]:
         # ADR-027.
         ("summarization", "max_batch_size"):  config.DEFAULT_SUMMARIZER_MAX_BATCH_SIZE,
         ("summarization", "vram_reserve_mb"): config.DEFAULT_SUMMARIZER_VRAM_RESERVE_MB,
+        ("summarization", "batch_token_budget"): config.DEFAULT_SUMMARIZER_BATCH_TOKEN_BUDGET,
     }
 
 

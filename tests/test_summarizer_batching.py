@@ -63,24 +63,43 @@ def test_results_come_back_in_the_callers_order():
 
 def test_items_go_longest_first():
     model = FakeModel()
-    run([5, 50, 1, 30, 7, 2], model, start_batch=2)
+    run([5, 50, 1, 30, 7, 2], model, start_budget=2)
     flat = [i for batch in model.batches for i in batch]
     assert flat == [1, 3, 4, 0, 5, 2]
 
 
-def test_oom_halves_and_retries_the_same_items_without_losing_any():
+def test_oom_steps_back_then_halves_and_retries_the_same_items_without_losing_any():
     model = FakeModel(fits=2)
-    results, stats = run([1] * 8, model, start_batch=8, max_batch=8)
+    results, stats = run([1] * 8, model, start_budget=8, max_batch=8)
     assert results == [f"s{i}" for i in range(8)]
     assert stats.empty == 0
-    assert stats.oom_backoffs == 2                    # 8 -> 4 -> 2
-    assert [len(b) for b in model.batches[:3]] == [8, 4, 2]
-    assert model.batches[1] == model.batches[0][:4], "the retry must start with the same items"
+    assert [len(b) for b in model.batches[:5]] == [8, 7, 6, 3, 1]   # two step-backs, then halving
+    assert stats.oom_backoffs == 4
+    assert model.batches[1] == model.batches[0][:7], "the retry must start with the same items"
+
+
+def test_step_back_finds_the_ceiling_and_stays_under_it():
+    """With room for more step-backs, the batch lands exactly on the largest size
+    that fits, and later batches stay there instead of walking back into the wall."""
+    model = FakeModel(fits=5)
+    _results, stats = run([100] * 40, model, start_budget=800, max_batch=48, step_back_tries=10)
+    sizes = [len(b) for b in model.batches]
+    assert sizes[:4] == [8, 7, 6, 5]
+    assert set(sizes[4:]) == {5}
+    assert stats.oom_backoffs == 3
+
+
+def test_the_budget_sizes_each_batch_by_its_longest_chunk():
+    """One budget, many lengths: long chunks go in small batches, short ones in large."""
+    lengths = [4000] * 4 + [1000] * 8 + [250] * 64
+    model = FakeModel()
+    run(lengths, model, start_budget=16000, max_batch=48)
+    assert [len(b) for b in model.batches] == [4, 16, 48, 8]
 
 
 def test_an_item_that_does_not_fit_alone_is_dropped_and_counted():
     model = FakeModel(oom_items={3})
-    results, stats = run([1] * 6, model, start_batch=1)
+    results, stats = run([1] * 6, model, start_budget=1)
     assert results[3] == ""
     assert [r for i, r in enumerate(results) if i != 3] == [f"s{i}" for i in (0, 1, 2, 4, 5)]
     assert stats.empty_oom == 1
@@ -89,7 +108,7 @@ def test_an_item_that_does_not_fit_alone_is_dropped_and_counted():
 
 def test_batch_grows_back_after_a_clean_streak_and_stops_at_the_ceiling():
     model = FakeModel()
-    _, stats = run([1] * 200, model, start_batch=1, grow_after=2, max_batch=5)
+    _, stats = run([1] * 200, model, start_budget=1, grow_after=2, max_batch=5)
     sizes = [len(b) for b in model.batches]
     assert max(sizes) == 5
     assert sizes[:5] == [1, 1, 2, 2, 3]
@@ -104,7 +123,7 @@ def test_max_batch_one_reproduces_one_chunk_at_a_time():
 
 def test_a_non_oom_error_empties_that_batch_and_the_run_continues():
     model = FakeModel(error_items={0})
-    results, stats = run([9, 1, 1, 1], model, start_batch=1)
+    results, stats = run([9, 1, 1, 1], model, start_budget=1)
     assert results[0] == ""
     assert results[1:] == ["s1", "s2", "s3"]
     assert stats.empty_error == 1 and stats.oom_backoffs == 0
@@ -118,8 +137,8 @@ def test_blank_model_output_is_counted_not_hidden():
 
 def test_on_oom_hook_runs_for_every_backoff():
     calls = []
-    run([1] * 8, FakeModel(fits=1), start_batch=8, max_batch=8, on_oom=lambda: calls.append(1))
-    assert len(calls) == 3                            # 8 -> 4 -> 2 -> 1
+    run([1] * 8, FakeModel(fits=1), start_budget=8, max_batch=8, on_oom=lambda: calls.append(1))
+    assert len(calls) == 4                            # 8 -> 7 -> 6 -> 3 -> 1
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +175,7 @@ def test_a_pause_that_never_recovers_times_out_and_drops_to_batch_one():
     model = FakeModel()
     results, stats = run([1] * 6, model, free_mb=lambda: 10, reserve_mb=1024,
                          sleep=clock.sleep, clock=clock, pause_poll_s=5, pause_timeout_s=20,
-                         start_batch=4)
+                         start_budget=4)
     assert results == [f"s{i}" for i in range(6)]
     assert stats.pause_timeouts >= 1
     assert all(len(b) == 1 for b in model.batches)
@@ -174,21 +193,23 @@ def test_growth_carries_across_calls():
     size, streak, sizes = 4, 0, []
     for _ in range(6):
         model = FakeModel()
-        _results, stats = run([1] * 32, model, start_batch=size, start_streak=streak)
+        _results, stats = run([1] * 32, model, start_budget=size, start_streak=streak)
         sizes.append(stats.largest_batch)
-        size, streak = stats.end_batch, stats.end_streak
+        size, streak = stats.end_budget, stats.end_streak
     assert sizes[0] == 4                              # 8 batches of 4: grows only as the call ends
     assert sizes == sorted(sizes) and sizes[-1] >= 7, sizes
 
 
 def test_a_call_that_starts_over_the_ceiling_is_clamped():
-    _results, stats = run([1] * 4, FakeModel(), start_batch=40, max_batch=16)
-    assert stats.largest_batch == 4 and stats.end_batch == 16
+    _results, stats = run([1] * 4, FakeModel(), start_budget=40, max_batch=16)
+    assert stats.largest_batch == 4
+    _results, stats = run([1] * 40, FakeModel(), start_budget=40, max_batch=16)
+    assert stats.largest_batch == 16
 
 
 def test_an_oom_shrinks_the_size_the_next_call_starts_at():
-    _results, stats = run([1] * 8, FakeModel(fits=2), start_batch=8, max_batch=8)
-    assert stats.end_batch == 2 and stats.end_streak > 0
+    _results, stats = run([1] * 8, FakeModel(fits=2), start_budget=8, max_batch=8)
+    assert stats.end_budget <= 2
 
 
 # ---------------------------------------------------------------------------
@@ -204,11 +225,11 @@ def test_stats_merge_adds_counts_and_keeps_maxima():
 
 
 def test_stats_merge_keeps_the_latest_end_state():
-    total = BatchStats(end_batch=8, end_streak=3)
-    total.merge({"end_batch": 6, "end_streak": 1})
-    assert (total.end_batch, total.end_streak) == (6, 1)
+    total = BatchStats(end_budget=8000, end_streak=3)
+    total.merge({"end_budget": 6000, "end_streak": 0})
+    assert (total.end_budget, total.end_streak) == (6000, 0)
     total.merge({})                                   # a failed group reports nothing
-    assert (total.end_batch, total.end_streak) == (6, 1)
+    assert (total.end_budget, total.end_streak) == (6000, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -262,10 +283,10 @@ def make_summarizer(script):
 
 def test_a_large_tier_is_sent_in_bounded_groups():
     summ = make_summarizer([])
-    out = summ.summarize_batch([f"c{i}" for i in range(70)])
-    assert out == [f"sum:c{i}" for i in range(70)]
-    assert FakeExecutor.instances[0].submitted == [32, 32, 6]
-    assert summ.stats.summarized == 70
+    out = summ.summarize_batch([f"c{i}" for i in range(200)])
+    assert out == [f"sum:c{i}" for i in range(200)]
+    assert FakeExecutor.instances[0].submitted == [96, 96, 8]
+    assert summ.stats.summarized == 200
 
 
 def test_a_timeout_kills_the_worker_and_retries_the_group_once():
@@ -292,14 +313,14 @@ def test_the_knobs_reach_the_worker_call():
     seen = {}
 
     class Recorder(FakeExecutor):
-        def submit(self, fn, codes, max_new_tokens, max_batch, reserve):
-            seen.update(fn=fn, max_batch=max_batch, reserve=reserve)
+        def submit(self, fn, codes, max_new_tokens, max_batch, reserve, budget):
+            seen.update(fn=fn, max_batch=max_batch, reserve=reserve, budget=budget)
             return super().submit(fn, codes)
 
     summ = sm.IsolatedChunkSummarizer(device="cuda", max_batch_size=6, vram_reserve_mb=700,
-                                      executor_factory=lambda: Recorder([]))
+                                      token_budget=9000, executor_factory=lambda: Recorder([]))
     summ.summarize_batch(["x"])
-    assert seen == {"fn": sm._worker_summarize, "max_batch": 6, "reserve": 700}
+    assert seen == {"fn": sm._worker_summarize, "max_batch": 6, "reserve": 700, "budget": 9000}
 
 
 # ---------------------------------------------------------------------------
@@ -308,13 +329,15 @@ def test_the_knobs_reach_the_worker_call():
 
 def test_batch_knobs_read_config_and_clamp(tmp_path, monkeypatch):
     (tmp_path / "indexer.toml").write_text(
-        "[summarization]\nmax_batch_size = 0\nvram_reserve_mb = -5\n", encoding="utf-8",
+        "[summarization]\nmax_batch_size = 0\nvram_reserve_mb = -5\nbatch_token_budget = 0\n",
+        encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
     config.reset_config_cache()
     try:
         assert config.summarizer_max_batch_size() == 1
         assert config.summarizer_vram_reserve_mb() == 0
+        assert config.summarizer_batch_token_budget() == 1
         summ = sm.IsolatedChunkSummarizer(device="cpu")
         assert summ._max_batch_size == 1 and summ._reserve_mb == 0
     finally:

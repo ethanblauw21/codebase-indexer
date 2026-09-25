@@ -705,7 +705,7 @@ class _CacheOnlySummarizer:
 
 
 # Chunks per summarize_batch call in pass 1, and per cache write.
-_SUMMARY_SLICE = 64
+_SUMMARY_SLICE = 192
 
 
 def run_summarization_pass(

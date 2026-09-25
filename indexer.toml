@@ -112,9 +112,15 @@ enabled = true
 #
 model_id = "Qwen/Qwen2.5-Coder-1.5B-Instruct"
 
-# ADR-027: on CUDA the summarizer batches chunks, starting at 4 and growing toward
-# this ceiling while batches keep fitting. 1 turns batching off (one chunk at a time).
-max_batch_size = 16
+# ADR-027: on CUDA the summarizer batches chunks. A batch holds batch_token_budget
+# divided by its longest prompt, so long chunks go in small batches and short ones in
+# large batches, never more than max_batch_size. 1 turns batching off.
+max_batch_size = 48
+
+# Prompt tokens per batch to start from. On an 8 GB card, 16000 peaked at ~4.5 GB at
+# every chunk length (2026-09-24 profile). The budget steps down on out-of-memory and
+# grows slowly while batches fit, so this is a starting point, not a limit.
+batch_token_budget = 16000
 
 # GPU memory, in MiB, the summarizer leaves free for the desktop and other programs.
 # The worker caps itself at (what it holds + what is free - this reserve), so running

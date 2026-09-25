@@ -44,8 +44,8 @@ def sample_chunks(n: int, seed: int) -> list[dict]:
 
 def timed(codes: list[str], max_batch: int, reserve_mb: int) -> tuple[list[str], dict, float]:
     # The worker carries its batch size between calls; each timed run starts fresh,
-    # or the batch-1 run would leave the batched run starting at size 1.
-    sm._w_next_batch, sm._w_next_streak = sm._START_BATCH_SIZE, 0
+    # or the batch-1 run would leave the batched run starting from its budget.
+    sm._w_next_budget, sm._w_next_streak = None, 0
     start = time.time()
     results, stats = sm._worker_summarize(codes, sm._MAX_NEW_TOKENS, max_batch, reserve_mb)
     return results, stats, time.time() - start

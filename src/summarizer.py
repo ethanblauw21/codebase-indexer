@@ -61,6 +61,7 @@ from dataclasses import asdict, dataclass, fields
 from typing import Callable, Sequence
 
 from config import (
+    summarizer_batch_token_budget,
     summarizer_max_batch_size,
     summarizer_model_id,
     summarizer_vram_reserve_mb,
@@ -74,8 +75,9 @@ logger = logging.getLogger(__name__)
 # fakes. The worker supplies the model call and the memory probe.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_START_BATCH_SIZE = 4       # first batch; grows toward [summarization].max_batch_size
-_GROW_AFTER       = 8       # clean batches in a row before the batch grows by one
+_TOKEN_BUDGET     = 16_000  # prompt tokens per batch; [summarization].batch_token_budget
+_GROW_AFTER       = 8       # clean batches in a row before the budget grows by one chunk
+_STEP_BACK_TRIES  = 2       # OOMs in a row answered by one chunk fewer, before halving
 _PAUSE_POLL_S     = 5.0     # how often a paused worker re-checks free memory
 _PAUSE_TIMEOUT_S  = 120.0   # after this, stop waiting and carry on at batch size 1
 
@@ -92,7 +94,7 @@ class BatchStats:
     pause_timeouts: int = 0   # pauses that gave up and dropped to batch size 1
     largest_batch:  int = 0
     peak_mb:        int = 0   # peak memory the worker's allocator reserved
-    end_batch:      int = 0   # batch size and clean-batch streak when the call ended;
+    end_budget:     int = 0   # token budget and clean-batch streak when the call ended;
     end_streak:     int = 0   # the worker's next call picks up from here
 
     def merge(self, other: "BatchStats | dict") -> None:
@@ -101,8 +103,8 @@ class BatchStats:
             value = other.get(f.name, 0)
             if f.name in ("largest_batch", "peak_mb"):
                 setattr(self, f.name, max(getattr(self, f.name), value))
-            elif f.name in ("end_batch", "end_streak"):
-                if other.get("end_batch"):      # latest wins; a failed group reports none
+            elif f.name in ("end_budget", "end_streak"):
+                if other.get("end_budget"):     # latest wins; a failed group reports none
                     setattr(self, f.name, value)
             else:
                 setattr(self, f.name, getattr(self, f.name) + value)
@@ -129,24 +131,31 @@ def run_adaptive_batches(
     free_mb:      Callable[[], float] | None = None,
     reserve_mb:   float = 0,
     on_oom:       Callable[[], None] = lambda: None,
-    start_batch:  int = _START_BATCH_SIZE,
+    start_budget: int = _TOKEN_BUDGET,
     start_streak: int = 0,
     grow_after:   int = _GROW_AFTER,
+    step_back_tries: int = _STEP_BACK_TRIES,
     pause_poll_s: float = _PAUSE_POLL_S,
     pause_timeout_s: float = _PAUSE_TIMEOUT_S,
     sleep:        Callable[[float], None] = time.sleep,
     clock:        Callable[[], float] = time.monotonic,
 ) -> tuple[list[str], BatchStats]:
-    """Summarize ``len(lengths)`` items in batches that shrink on OOM and grow back.
+    """Summarize ``len(lengths)`` items in batches sized by a token budget.
 
-    ``run_batch`` gets a list of item indices and returns one string per index.
-    Items go longest first, so each batch holds similar lengths (less padding)
-    and the batch size meets its hardest inputs while it is still small.
+    ``lengths`` are prompt lengths in tokens. ``run_batch`` gets a list of item
+    indices and returns one string per index. Items go longest first, so the
+    first item of a batch sets its padded length, and a batch holds
+    ``budget // that length`` items, at most ``max_batch``. Memory grows with
+    batch size times padded length, so one budget fits every length: long chunks
+    get small batches and short chunks get large ones.
 
-    On OOM the same items are retried at half the batch size; nothing is
-    dropped until a single item fails alone. Before each batch, if ``free_mb``
-    reports less than ``reserve_mb``, another process has taken the memory: wait
-    for it to come back, and if it does not, carry on at batch size 1.
+    On OOM the same items are retried one smaller, and after ``step_back_tries``
+    OOMs in a row, at half the size. The budget drops to what was tried, so later
+    batches do not walk back into the same wall. Nothing is dropped until a single
+    item fails alone. After ``grow_after`` clean batches the budget grows by one
+    item at the current length. Before each batch, if ``free_mb`` reports less than
+    ``reserve_mb``, another process has taken the memory: wait for it to come
+    back, and if it does not, carry on one item at a time.
 
     Returns results in the caller's original order, and what happened.
     """
@@ -155,11 +164,13 @@ def run_adaptive_batches(
     stats = BatchStats()
     order = sorted(range(n), key=lambda i: lengths[i], reverse=True)
     max_batch = max(1, max_batch)
-    size = max(1, min(start_batch, max_batch))
+    budget = max(1, start_budget)
     streak = max(0, start_streak)
+    ooms_in_row = 0
     pos = 0
 
     while pos < n:
+        length = max(1, lengths[order[pos]])
         if free_mb is not None and free_mb() < reserve_mb:
             stats.pauses += 1
             started = clock()
@@ -167,26 +178,32 @@ def run_adaptive_batches(
                 sleep(pause_poll_s)
             if free_mb() < reserve_mb:
                 stats.pause_timeouts += 1
-                size, streak = 1, 0
+                budget, streak = length, 0
 
+        size = max(1, min(max_batch, budget // length))
         batch = order[pos:pos + size]
         try:
             out = run_batch(batch)
         except Exception as exc:  # noqa: BLE001 — sorted into OOM vs everything else below
+            streak = 0
             if is_oom(exc):
                 on_oom()
                 stats.oom_backoffs += 1
-                if size > 1:
-                    size, streak = max(1, size // 2), 0
+                if len(batch) > 1:
+                    ooms_in_row += 1
+                    smaller = (len(batch) - 1 if ooms_in_row <= step_back_tries
+                               else max(1, len(batch) // 2))
+                    budget = smaller * length
                     continue                    # retry the same items, smaller
                 stats.empty_oom += len(batch)
             else:
                 logger.warning("summarizer batch failed: %s", exc)
                 stats.empty_error += len(batch)
+            ooms_in_row = 0
             pos += len(batch)
-            streak = 0
             continue
 
+        ooms_in_row = 0
         for i, text in zip(batch, out):
             results[i] = text
         stats.summarized   += sum(1 for t in out if t)
@@ -194,10 +211,12 @@ def run_adaptive_batches(
         stats.largest_batch = max(stats.largest_batch, len(batch))
         pos += len(batch)
         streak += 1
-        if streak >= grow_after and size < max_batch:
-            size, streak = size + 1, 0
+        if streak >= grow_after:
+            streak = 0
+            if size < max_batch:
+                budget = max(budget, size * length) + length
 
-    stats.end_batch, stats.end_streak = size, streak
+    stats.end_budget, stats.end_streak = budget, streak
     return results, stats
 
 
@@ -210,10 +229,10 @@ def run_adaptive_batches(
 _w_model  = None   # resident in the worker process after _worker_init runs
 _w_tok    = None
 _w_device = None
-# ADR-027: the batch size and clean-batch streak a call ended at. Each call is one group of at most
-# _GROUP_SIZE chunks, and growing takes _GROW_AFTER clean batches, so starting
-# every call over at _START_BATCH_SIZE kept the batch from ever growing.
-_w_next_batch  = _START_BATCH_SIZE
+# ADR-027: the token budget and clean-batch streak a call ended at, or None before
+# the first call. Each call is one group of at most _GROUP_SIZE chunks; starting
+# every call over would throw away what earlier calls learned about the card.
+_w_next_budget: int | None = None
 _w_next_streak = 0
 
 
@@ -315,9 +334,14 @@ def _worker_summarize(
     max_new_tokens: int,
     max_batch_size: int,
     reserve_mb:     int,
+    token_budget:   int = _TOKEN_BUDGET,
 ) -> tuple[list[str], dict]:
-    """Summarize one group of chunks inside the worker. Returns (summaries, stats)."""
-    global _w_next_batch, _w_next_streak
+    """Summarize one group of chunks inside the worker. Returns (summaries, stats).
+
+    ``token_budget`` is where the first call starts; later calls carry on from
+    the budget the previous call ended with.
+    """
+    global _w_next_budget, _w_next_streak
     if _w_model is None:
         return [""] * len(codes), asdict(BatchStats(empty_error=len(codes)))
 
@@ -342,10 +366,10 @@ def _worker_summarize(
             free_mb=_free_mb,
             reserve_mb=reserve_mb,
             on_oom=torch.cuda.empty_cache,
-            start_batch=_w_next_batch,
+            start_budget=_w_next_budget if _w_next_budget is not None else token_budget,
             start_streak=_w_next_streak,
         )
-        _w_next_batch, _w_next_streak = stats.end_batch, stats.end_streak
+        _w_next_budget, _w_next_streak = stats.end_budget, stats.end_streak
         stats.peak_mb = int(torch.cuda.max_memory_reserved() / 2**20)
     else:
         # Batching buys little on CPU and the memory cap means nothing there.
@@ -378,8 +402,9 @@ _MAX_NEW_TOKENS = 160
 
 # ADR-027: chunks per worker job, and how long one job may take. A job of n chunks
 # at batch size 1 runs ~3 s a chunk on an 8 GB card, longer for tier-3 chunks, and
-# may first spend up to _PAUSE_TIMEOUT_S waiting for memory.
-_GROUP_SIZE = 32
+# may first spend up to _PAUSE_TIMEOUT_S waiting for memory. A group also caps the
+# batch, so it is kept at twice max_batch_size's default of 48.
+_GROUP_SIZE = 96
 
 
 def _group_timeout_s(n: int) -> float:
@@ -554,6 +579,7 @@ class IsolatedChunkSummarizer:
         dtype:          str = "float16",
         max_batch_size: int | None = None,
         vram_reserve_mb: int | None = None,
+        token_budget:   int | None = None,
         executor_factory: Callable | None = None,
     ) -> None:
         # ADR-020: device resolves via resolve_device() (CODE_INDEXER_DEVICE-aware)
@@ -572,6 +598,8 @@ class IsolatedChunkSummarizer:
                                    else summarizer_max_batch_size())
         self._reserve_mb = max(0, vram_reserve_mb if vram_reserve_mb is not None
                                else summarizer_vram_reserve_mb())
+        self._token_budget = max(1, token_budget if token_budget is not None
+                                 else summarizer_batch_token_budget())
         self._executor_factory = executor_factory
         self._executor = None
         self._failed   = False
@@ -617,7 +645,7 @@ class IsolatedChunkSummarizer:
                 self._ensure_executor()
                 future = self._executor.submit(
                     _worker_summarize, group, _MAX_NEW_TOKENS,
-                    self._max_batch_size, self._reserve_mb,
+                    self._max_batch_size, self._reserve_mb, self._token_budget,
                 )
                 results, stats = future.result(timeout=timeout)
                 self.stats.merge(stats)
