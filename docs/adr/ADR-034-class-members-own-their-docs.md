@@ -335,7 +335,7 @@ arm 2 unless noted.
 
 | Criterion | Result | |
 |---|---|---|
-| Named p-queue queries | `pq2-constructor` 1→2 (arm 2: `options.ts::Options_part_1` now ranks first); every other ranked query equal or better | **open: @edb to accept or reject** |
+| Named p-queue queries | `pq2-constructor` 1→2 (arm 2: `options.ts::Options_part_1` now ranks first); every other ranked query equal or better | accepted by @edb, 2026-09-25 (see notes) |
 | p-queue original set | 0.554 → 0.709 | pass |
 | Regressions per set | orig 1 (`pq2-on-error`, exempt) · intent 2 · file 0 / 0 | pass |
 | Set means (reported) | orig +0.045\* · intent +0.025 (lower bound −0.0000) · file any +0.004 · file whole −0.006 | reported |
@@ -353,3 +353,12 @@ arm 2 unless noted.
   - No tool declares `readOnlyHint`. CLAUDE.md's Inspector checklist asks for it. This is older than
     ADR-034 and is left for its own change.
 - **Retrieval with no summaries (`none034a4`):** orig +0.047\*, intent +0.027, file whole −0.006\*.
+
+**2026-09-25, `pq2-constructor` accepted (@edb).**
+- Re-run on four indexes: the constructor and `options.ts::Options_part_1` were already ranks 1 and 2
+  before this ADR.
+- Arm 2's new `PQueue.#createIntervalTimeout` (rank 6) matches the query's "interval" and "timeout"
+  words. Apart from it, the list is unchanged from arm 1, so the tie most likely flipped because it
+  took a list position above the constructor. The per-list scores were not pulled.
+- `Options` is a fair first answer to a question about configuration options, and the constructor
+  stays second. Reverting would mean un-indexing the 22 `#` members. The gate now has no open items.
