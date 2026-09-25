@@ -66,12 +66,36 @@ Verification 1 measures what that costs, and the log records it.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] `core.embed_dtype()` and the `model_kwargs` pass-through; the dtype in the load log line
-- [ ] `[embeddings].dtype` in `indexer.toml`, and the drift test
-- [ ] Tests: auto picks bf16 on CUDA with support, fp32 on CPU and without support; explicit values; a bad value raises
-- [ ] Verification 1 (GPU): memory after load, bf16 against fp32 cosine on real chunks, and whether an fp32 index queried in bf16 changes retrieval
+- [x] `core.embed_dtype()` and the `model_kwargs` pass-through; the dtype in the load log line (ea9e8c0)
+- [x] `[embeddings].dtype` in `indexer.toml`, and the drift test
+- [x] Tests (`tests/test_embed_dtype.py`): auto picks bf16 on CUDA with support, fp32 on CPU and without support; explicit values; a bad value raises. Suite: 316 passed
+- [x] Verification 1 (GPU): see notes
 - [ ] MCP Inspector: the server starts and `semantic_code_search` answers with the bf16 embedder
 - [ ] Resolve **Depended on by**: confirm to ADR-028 that its gate is met
 
 **Notes:**
 <!-- 2026-09-25: branch cut from master (1df2b79). -->
+
+**2026-09-25, Verification 1** (`gpu-crash-repro/bf16_check.py`, output in `telemetry/bf16_check_035.txt`).
+- **Setup:** 75 p-queue tier-1 chunks and the 24 p-queue original queries, with the query prefix.
+  - bf16 through the production path.
+  - The fp32 reference on the GPU, loaded alone after the bf16 model was freed, with TF32 off.
+- **Memory:** the production path chose `bfloat16` by itself and holds 2,944 MiB after loading. The
+  fp32 reference peaked at 6,416 MiB with nothing else on the card.
+- **Per-vector cosine, bf16 against fp32:**
+  - Documents: mean 0.985, lowest 0.959.
+  - Queries: mean 0.994, lowest 0.976.
+  - Longer inputs drift more.
+- **An fp32-built index queried in bf16** (the upgrade case):
+  - The top result matches the all-fp32 ranking on 23 of 24 queries.
+  - Top-5 overlap is 0.992.
+  - Existing indexes keep working without a rebuild.
+- **All-bf16 against all-fp32:** top-1 23 of 24 and top-5 overlap 0.917, so the two stacks
+  genuinely differ.
+  - Every retrieval gate since ADR-027 was measured all-bf16, so this ADR makes production match
+    those numbers.
+  - Whether all-fp32 would score better is not measured. It cannot run beside the summarizer on
+    this card anyway.
+- **Gotcha:** in this Git Bash shell, `CUDA_VISIBLE_DEVICES=` (an empty value) left
+  `torch.cuda.device_count()` at 0 while `is_available()` said True. `env -u CUDA_VISIBLE_DEVICES`
+  exposes the card. The user-scope `-1` is unchanged.
