@@ -100,6 +100,33 @@ def load_or_create_token() -> str:
 # Backend: the models. The scheduler calls these from its one thread only.
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _cuda_tensor_census(top: int = 8) -> dict:
+    """Live CUDA tensors the garbage collector can reach, grouped by who refers to them.
+
+    Debug only: served at /v1/debug/cuda-tensors when CODE_INDEXER_HOST_DEBUG is set.
+    """
+    import gc
+    import torch
+    groups: dict[str, list[int]] = {}
+    everything = gc.get_objects()
+    tensors = []
+    for obj in everything:
+        try:
+            if torch.is_tensor(obj) and obj.is_cuda:
+                tensors.append(obj)
+        except Exception:  # noqa: BLE001 - some proxies raise on isinstance checks
+            continue
+    del everything
+    for obj in tensors:
+        owners = [type(r).__name__ for r in gc.get_referrers(obj) if r is not tensors][:3]
+        key = f"{tuple(obj.shape)[:2]} {obj.dtype} <- {','.join(owners)}"
+        g = groups.setdefault(key, [0, 0])
+        g[0] += 1
+        g[1] += obj.numel() * obj.element_size()
+    ranked = sorted(groups.items(), key=lambda kv: -kv[1][1])[:top]
+    return {k: f"{n} tensors, {b >> 20} MiB" for k, (n, b) in ranked}
+
+
 class Backend(Protocol):
     def load(self, model: str) -> None: ...
     def unload(self, model: str) -> None: ...
@@ -131,10 +158,16 @@ class TorchBackend:
 
     def describe(self) -> dict:
         import core
-        return {"device": self.device, "embed_model_id": core.embed_model_id(),
+        info = {"device": self.device, "embed_model_id": core.embed_model_id(),
                 "embed_dimension": core.embed_dimension(),
                 "summarizer_model_id": self.summarizer_model_id,
                 "summary_stats": self.stats.line()}
+        import torch
+        if self.device == "cuda" and torch.cuda.is_initialized():
+            # What the host holds on the card, so "idle holds nothing" can be checked (§6).
+            info["cuda_allocated_mib"] = torch.cuda.memory_allocated() >> 20
+            info["cuda_reserved_mib"] = torch.cuda.memory_reserved() >> 20
+        return info
 
     def load(self, model: str) -> None:
         if model == EMBEDDER:
@@ -155,6 +188,13 @@ class TorchBackend:
         gc.collect()
         if self.device == "cuda":
             import torch
+            # cuBLAS keeps a small workspace (about 9 MiB) per handle, allocated through the
+            # caching allocator. It lands inside the big segments the model used and keeps
+            # them from being released: the first GPU run held 3,392 MiB reserved with 9 MiB
+            # allocated and no model loaded. Drop the workspaces, then the cache.
+            clear = getattr(torch._C, "_cuda_clearCublasWorkspaces", None)
+            if clear is not None:
+                clear()
             torch.cuda.empty_cache()
             # The summarizer caps the process below the card (ADR-027 §2). The cap
             # was sized with the summarizer resident, so lift it for the next model.
@@ -456,6 +496,9 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/v1/status":
             self._send(200, {"pid": os.getpid(), **self.server.describe(),
                              **self.server.scheduler.status()})
+        elif self.path == "/v1/debug/cuda-tensors" and os.environ.get("CODE_INDEXER_HOST_DEBUG"):
+            # Walks every object in the process, which takes seconds: never part of /v1/status.
+            self._send(200, _cuda_tensor_census())
         else:
             self._send(404, {"error": f"no such path {self.path}"})
 
