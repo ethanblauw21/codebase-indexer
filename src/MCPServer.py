@@ -2035,8 +2035,39 @@ def _utf8_stdio() -> None:
             pass    # not a TextIOWrapper (already replaced by a harness); leave it
 
 
+def _detach_stdin() -> None:
+    """Keep the MCP stdin pipe away from every child process (ADR-036).
+
+    On Windows a process started without handle inheritance still gets its
+    parent's standard input handle. The MCP transport keeps a read pending on
+    that pipe, and a spawned child that touches its stdin at startup waits
+    behind that read forever. multiprocessing's bootstrap closes stdin, so the
+    summarizer's worker (IsolatedChunkSummarizer) hung at startup: every
+    watchdog reindex with summaries on stalled at "[summarize]", with the
+    worker at 11 MB and no CPU. ADR-031's git calls hung the same way.
+
+    The transport gets a private, non-inheritable copy of the pipe, and fd 0
+    (and with it the process's standard input handle) becomes NUL. Children
+    then inherit NUL, and nothing else in this process reads stdin.
+    """
+    import io
+    import sys
+    if os.name != "nt":
+        return
+    try:
+        fd = os.dup(0)
+    except OSError:
+        return          # no stdin at all; nothing to protect
+    nul = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(nul, 0)     # the CRT also points STD_INPUT_HANDLE at NUL
+    os.close(nul)
+    sys.stdin = io.TextIOWrapper(io.BufferedReader(io.FileIO(fd, "rb")),
+                                 encoding="utf-8", errors="replace")
+
+
 def main() -> None:
     _utf8_stdio()
+    _detach_stdin()
     start_watchdog()
     mcp.run()
 

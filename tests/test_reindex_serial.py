@@ -5,6 +5,8 @@ which events arrive while a run is in flight. No index, no GPU.
 """
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time
 
@@ -123,3 +125,46 @@ def test_the_server_can_print_the_indexer_banner_to_a_windows_pipe():
                          stdin=subprocess.DEVNULL, timeout=120)
     assert out.returncode == 0, out.stderr.decode("utf-8", "replace")[-400:]
     assert out.stdout.decode("utf-8").strip() == "━━ Incremental Indexer: x ━━"
+
+
+_SPAWN_CHILD = r'''
+import concurrent.futures as cf, sys, threading
+sys.path.insert(0, sys.argv[1])
+import MCPServer
+if __name__ == "__main__":
+    if sys.argv[2] == "detach":
+        MCPServer._detach_stdin()
+    got = []
+    reader = threading.Thread(target=lambda: got.append(sys.stdin.buffer.readline()), daemon=True)
+    reader.start()                      # like the MCP transport: a read pending on the stdin pipe
+    with cf.ProcessPoolExecutor(1) as ex:
+        print("worker", ex.submit(pow, 2, 5).result(timeout=60), flush=True)
+    reader.join(30)
+    print("transport read", got, flush=True)
+'''
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows handle behaviour")
+def test_a_spawned_worker_starts_while_the_transport_reads_stdin(tmp_path):
+    """Found on the way: with a read pending on the MCP stdin pipe, a multiprocessing worker
+    hung at startup, so every watchdog reindex with summaries on stalled at "[summarize]".
+    The line is sent only after the worker answers, so the read is pending while it spawns."""
+    import subprocess
+    script = tmp_path / "child.py"
+    script.write_text(_SPAWN_CHILD, encoding="utf-8")
+    src = os.path.join(os.path.dirname(__file__), "..", "src")
+    p = subprocess.Popen([sys.executable, str(script), src, "detach"], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    first = []
+    t = threading.Thread(target=lambda: first.append(p.stdout.readline()), daemon=True)
+    t.start()
+    t.join(180)
+    if not first:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+        pytest.fail("the worker never started: the stdin pipe is still shared")
+    assert first[0].decode("utf-8", "replace").strip() == "worker 32"
+    p.stdin.write(b'{"jsonrpc": "2.0"}
+')
+    p.stdin.flush()
+    out, err = p.communicate(timeout=60)
+    assert '{"jsonrpc": "2.0"}' in out.decode("utf-8", "replace"), err.decode("utf-8", "replace")[-600:]
