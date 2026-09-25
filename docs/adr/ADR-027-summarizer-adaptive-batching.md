@@ -114,7 +114,8 @@ The PR does not merge until all of these hold on the 8 GB card.
 - [x] §3 revised to a token budget with step-back-one on OOM; `[summarization].batch_token_budget`
 - [x] Verification 3 on the token-budget build (16.3 min, see Notes)
 - [ ] Verification 1 rerun on the token-budget build
-- [ ] Verification 2 noise floor: a second batched run with different batch compositions, to tell whether the 5-query drop is batching or noise
+- [x] Verification 2 noise floor (see Notes: the drop is real, small)
+- [ ] Decision (@edb): accept the small retrieval loss for the speed, or find why batched output differs systematically
 - [x] Unit tests (Verification 6): `tests/test_summarizer_batching.py`, 20 tests, no GPU
 - [x] `tools/summarizer_batch_equivalence.py` for Verification 1 (not run yet)
 - [ ] Verification 1 to 5 on the GPU, results recorded here with provenance
@@ -173,3 +174,19 @@ The PR does not merge until all of these hold on the 8 GB card.
   - Summaries themselves barely move this eval: no summaries against batch size 1 changed 40 queries, 22 up and 18 down, for +0.006 MRR, and zustand got worse with summaries. The batching drop is the same size as the whole benefit of summarizing here.
   - **Verdict: not resolved.** Five down and none up is suggestive (a sign test gives about p = 0.06, and three of the five are one event), but it is not a demonstrated loss. The eval cannot separate the two either way. The missing number is the noise floor: two batched runs with different batch compositions. If those also move about 5 queries against each other, this is noise.
 - 2026-09-24, **separate finding, both batch sizes:** 17.5 percent of summaries are one paragraph, because `_clean()` keeps only the text before the first blank line, and the model often puts one after "Purpose:". Those summaries lose their Inputs, Outputs and Key operations lines. This is independent of batching (17.5 against 17.7 percent), and it probably costs more retrieval than batching does. Not changed here.
+- 2026-09-24, **Verification 2, noise floor and the summary-fields fix** (stages 17 to 19, 77733c0 and `fix/summary-keep-all-fields` at 31a6f3a, telemetry `stress_20260924_224220`, `retrieval/results.json`; the stage 16 file is kept as `results_stage16.json`). Two more fresh builds of the same three repos.
+  - `batched2` is batched with a 12,000-token budget, so the chunks group into different batches.
+  - `fields` is batched with `_clean()` keeping every field.
+
+    | Variant | MRR@10 | nDCG@10 | Queries changed against batch size 1 |
+    |---|---|---|---|
+    | no summaries | 0.4427 | 0.5379 | |
+    | batch size 1 | 0.4490 | 0.5482 | |
+    | batched | 0.4410 | 0.5417 | 5, all down |
+    | batched2 | 0.4330 | 0.5357 | 7, all down |
+    | fields | 0.4344 | 0.5367 | |
+
+  - **The drop is real, not noise.** The two batched builds differ from each other on only 2 queries. Both drop the same 5 queries against batch size 1, and batched2 drops 2 more, 7 of 7 down (a sign test gives about p = 0.016). With different batch groupings, the same chunks come out worded the same way, which suggests something systematic in batched generation (left padding under fp16 is the first suspect), not chance. The loss is small: each query moves one or two places, and MRR falls 0.008 to 0.016. That brings batched summaries down to about the no-summary score.
+  - **Summaries barely help on this eval at any batch size.** The best case, batch size 1, is +0.006 MRR over no summaries, and zustand scores worse with summaries than without.
+  - **The fields fix did not help retrieval.** One-paragraph summaries fell from 17.7 to 0.7 percent and mean length rose from 322 to 467 characters, but MRR fell 0.007 against batched (14 queries changed, 6 up and 8 down; p-queue lost the most). A likely reason is that longer summaries crowd the code out of the embedder's 512-token window for short chunks. So it is not merged, and the branch stays for reference.
+  - @edb's condition was that batching must not reduce retrieval accuracy. **On this eval it does, slightly.** That is recorded as the outcome and left for @edb to decide, with the size of the loss above.
