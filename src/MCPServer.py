@@ -1925,12 +1925,12 @@ class _ReindexDebouncer:
             if self._queued:
                 return          # the queued run scans the disk when it starts, so it sees this change too
             self._queued = True
-        print("\n[Watchdog] Change detected — running incremental reindex...")
         try:
             from incremental_indexer import run_incremental
             with _reindex_lock:
                 with self._lock:
                     self._queued = False    # from here on, a new change needs a new run
+                print("\n[Watchdog] Change detected — running incremental reindex...")
                 run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
                 _reload_indexes()
             print("[Watchdog] Reindex complete — in-memory indexes reloaded.\n")
