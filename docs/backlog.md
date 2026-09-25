@@ -46,6 +46,8 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
+| [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis + grill, 2026-09-25 | M | shaped |
+| [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill, 2026-09-25 | L | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -439,3 +441,142 @@ this observation is from `BAAI/bge-code-v1` (dim 1536), reranker off, `fusion_mo
 98-file index of this repo. It is four queries on one small corpus — a real signal about the score
 *distribution*, not a measurement of retrieval quality. Anything that changes fusion needs the ADR-007
 harness, which needs the T4, which is GPU-gated.
+
+### B-026 — Class members lose their docs, private methods and getters from the index, and a method arrives without its class
+
+**Source:** ADR-030 p-queue diagnosis and a grill with @edb, 2026-09-25 · **Status:** shaped · **Size:** M
+
+**Where it came from.** Under ADR-030's summary fusion, p-queue's original query set scored 0.511
+against 0.537 with no summaries (grader keyed on file and scope; `gpu-crash-repro/telemetry/retrieval/results_file_level.json`).
+Three queries carry the loss: `pq-concurrency`, `pq2-enqueue` and `pq2-on-error`. Each loses to the
+parts of `index.ts`'s class chunk (`PQueue_part_1..7`), which rank in both the code list and the
+summary list. A fusion knob cannot fix it: ADR-030 Verification 3 showed that down-weighting
+whole-file chunks moves as much score off file-level questions as it adds to symbol ones. The fix
+has to be in what the chunks hold.
+
+**What the code already does.** Class chunks are **already skeletons**. Every tree-sitter adapter
+stubs member bodies with ` ...` (`src/adapters/_treesitter.py:33` `skeletonize`, used by
+`ts_adapter.py:303` and `python_adapter.py:111`; C# and C++ have their own at
+`csharp_adapter.py:150` and `cpp_adapter.py:236`). The `PQueue` chunk has 48 stubs. It still runs
+to 11,545 characters in 7 parts because of **JSDoc**: long member doc comments with code examples.
+Line numbers here are at `feature/adr-030-summary-index` e1e9491.
+
+**Four defects, all data loss today, whether or not anything else ships:**
+
+1. **Member doc comments are only in the class skeleton.** A TypeScript method chunk is the
+   `method_definition` node, and its leading `/** … */` is a sibling node, so it is left out.
+   `PQueue.add`, `.concurrency` and `.onIdle` carry no JSDoc; the 24 JSDoc blocks in `index.ts`
+   exist only in `PQueue_part_N`. So `@param` text never sits next to the body it documents, and
+   the skeleton is bloated with it. C# `///` and C++ doc comments sit between members the same way.
+   Python docstrings are inside the body, so Python is not affected.
+2. **Private `#` methods get no chunk.** `_TS_NAME_TYPES` (`ts_adapter.py:101`) lacks
+   `private_property_identifier`. The skeleton stubs their bodies, so the bodies of its 21 `#` methods and accessors
+   of `PQueue` exist in tier 1 nowhere; they are reachable only through the tier-2/3 slices.
+3. **Arrow-function class fields are neither extracted nor stubbed.** Only `const x = () => …`
+   becomes a symbol (`ts_adapter.py:367`). `private doWork = () => {…}` is a `public_field_definition`,
+   so it is not extracted, and `skeletonize` finds no body to stub, so the whole body stays in the
+   skeleton. None occur in the three eval repos, but they are common elsewhere.
+4. **Symbols sharing an FQN overwrite each other.** `chunks` is `UNIQUE(file_id, scope, tier)`
+   (`db.py:176`), so only the last symbol per FQN is kept. Across the three eval repos, **135
+   symbols are dropped this way**. p-queue loses 1: `get concurrency()` is gone and only
+   `set concurrency()` is indexed. zustand loses 92, mostly local components and helpers that are
+   redeclared inside separate test callbacks. click loses 42; its `src/` has 36 `@overload`
+   decorators, which is the likely source. Measured by parsing every file with `parse_file` and
+   counting repeated FQNs.
+
+**The want:** every member reachable on its own with its docs; a class skeleton that is small
+because it holds signatures, not documentation; and a returned method that brings its class context
+with it.
+
+**Plan: two stages, measured apart** (@edb, 2026-09-25). Each stage becomes its own ADR when built.
+
+**Stage 1: parser fixes** (tree-sitter adapters and `ast_chunker.py`; no retrieval change).
+- **Docs move to their member.** Attach each member's leading doc comment to that member's
+  `Symbol.text`, and leave it out of the skeleton. Do this in the shared helper so TypeScript, C#
+  and C++ all get it. Nothing is deleted: the comment moves from the skeleton to the member.
+- **`#` members are extracted,** with their FQN spelled with the `#` (`PQueue.#tryToStartAnother`).
+- **Arrow-function class fields are extracted and stubbed:** `skeletonize` must look inside a field
+  definition for its arrow body.
+- **Same-FQN symbols merge into one chunk** under the existing FQN: a getter with its setter, an
+  overload set, a redeclared test helper. Rejected: suffixing the FQN (`:get`, `~2`). It changes
+  stable ids (`stable_id.py:40` hashes the scope), and the suffix grader (`real_repo_eval.py:117`)
+  would stop matching the 8 gold answers that name an accessor. A merged chunk that grows past the
+  tier-1 limit splits into parts like any other.
+- **Every skeleton part repeats the class header,** meaning the declaration through `{`, so a part
+  never shows signatures without their class, generics and base type. The adapter records the
+  header on the class `Symbol`, where `skeletonize` already has it as its first part.
+- **Comments not attached to a member:** the class's own doc comment stays in the skeleton's first
+  part. Free-floating comments between members leave the skeleton; they remain in the whole-file
+  chunks.
+- **Tests:** add ADR-008 conformance fixtures for TypeScript `#` members, arrow fields and accessor
+  pairs, and for Python `@property` setters and `@overload`. Add unit tests on chunk text for moved
+  docs, the per-part header and merged symbols.
+- **Measure:** build a new variant of the three repos from the branch and compare it with ADR-030's
+  `store` build on all three query sets (`gpu-crash-repro/file_fixtures/` is the file-level set).
+  The summaries of changed chunks must be regenerated, because the cache is keyed on the text hash.
+  Stage 1 passes when:
+  - p-queue's original set is at or above no summaries (0.537);
+  - no set drops beyond noise against `store`: original 0.535, intent 0.555, file 0.811;
+  - the size of the largest skeleton part is reported.
+
+**Stage 2: parent link and grouped results** (retriever and MCP output).
+- **A `parent_id` column on `chunks`,** filled with the parent's stable id. A symbol's parent is
+  its **nearest enclosing extracted symbol**, whatever its kind. TypeScript and Python never look
+  inside a function body (`ts_adapter.py:361`, `python_adapter.py:157`), so a symbol whose parent
+  was never extracted cannot occur in either. Check C# and C++ before relying on this.
+  `Symbol.class_context` already names the class, but only in memory.
+- **Group results under their class.** Returned results are ordered by class: each class group sits
+  at its best member's rank, with the class skeleton at the head of the group. The skeleton is shown
+  once per class. If the skeleton has several parts, include the header plus the part that holds
+  the member's signature (known from line ranges). This keeps the class skeleton directly above
+  its methods, with no references back up the list.
+- **To decide:** does grouping happen in `HybridRetriever.retrieve()` or only in the MCP formatting?
+  In `retrieve()` it changes what the eval grades; in the MCP it is display only.
+- **The MCP Inspector run is required** (global rule for changed MCP servers): list the tools, call
+  the changed search tools, and check that errors come back as `isError`.
+- **Measure** as in stage 1. Also count how many tokens a returned result list uses before and after.
+
+**Pressure-tested and settled in the grill:** there is no new skeleton mechanism, because one
+already exists; docs are moved, not stripped; FQNs do not change; skeleton parts carry the class
+header; results are grouped by class rather than linked by references; a test file's `it(...)`
+blocks and `beforeEach` setup are B-027's question, not this one's.
+
+**Depends on:** ADR-030 (`feature/adr-030-summary-index`, not merged). Both stages are measured
+through its fusion and its file-keyed grader.
+
+### B-027 — Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries
+
+**Source:** same grill, 2026-09-25 · **Status:** raw · **Size:** L
+
+Tier 2 cuts every file into 1,500-token slices and tier 3 into 4,000-token slices
+(`stable_id.py:23-27`, `fallback_token_chunker` with `parent_scope="Full File"`). The embedder reads
+the first 512 tokens (`core.py:51`), so a tier-3 slice's code vector sees about an eighth of its
+text. The file-level eval says the file view is carried almost entirely by the slices' summaries:
+file questions scored 0.500 MRR@10 ("whole-file chunk" grading) with tier-2/3 summaries and under
+0.10 without them (ADR-030 Verification 3). Their scopes are also a bare `Full File_part_N` with no
+path, and tier 2 and tier 3 often hold identical text (B-010).
+
+Files with no symbols, which in practice means most test files, fall back to token slices even at
+tier 1 (`Global_part_N`).
+
+**The want:** a file-level representation that the embedder can actually read, that gives a
+file-level question one strong target instead of N generic slices, and that does not flood symbol
+questions.
+
+**Ideas raised in the grill, not yet decided:**
+- **An outline chunk per file:** imports plus exported signatures, replacing the slices as the
+  file's code vector. The file's meaning then comes from its summary.
+  - A god file, such as a barrel re-exporting 200 modules, needs a size cap or paging.
+  - Open: one summary per file versus today's summary per slice. One per file means summarizing
+    input longer than the model's window.
+- **Test files:** treat `describe`/`it`/`test` blocks as symbols, but only those framework calls,
+  not `useEffect` or `app.get`.
+  - A `describe` skeleton keeps its setup and teardown bodies (`beforeEach` and the rest) and stubs
+    the `it` bodies. A single `it` is then not stranded without its setup.
+  - The list of test names is plausibly the right outline for a test file.
+- **Measure** with the file-level set, where 7 of the 15 gold files are tests or benchmarks. A
+  global fusion weight is ruled out: it trades file questions against symbol ones (ADR-030
+  Verification 3).
+
+**Depends on:** B-026 stage 1, so that tier-1 content is settled first and the two effects can be
+told apart. Related: B-010.
