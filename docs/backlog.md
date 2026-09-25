@@ -54,6 +54,9 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | promoted → ADR-032 |
 | [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
 | [B-025](#b-025) | Appended summaries make intent retrieval worse; the same summaries help when kept apart | retrieval check, 2026-09-25 | M | **promoted → ADR-030** |
+| [B-032](#b-032) | A save during a running watchdog reindex starts a second reindex in parallel | daemon queue review, 2026-09-25 | S | shaped |
+| [B-033](#b-033) | Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place | daemon queue review, 2026-09-25 | M | shaped |
+| [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -828,3 +831,91 @@ to system RAM silently instead of raising an OOM.
   cosine should be measured, not assumed.
 
 **Depends on:** none. **Blocks:** ADR-028.
+
+### B-032 — A save during a running watchdog reindex starts a second reindex in parallel
+
+**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** shaped · **Size:** S · line numbers at `master` 0c8d7a6
+
+`_ReindexDebouncer` (`MCPServer.py:1878-1913`) collapses a burst of watchdog events into a single
+`run_incremental` after 3 s of quiet. A formatter run or a branch switch counts as one burst, which
+is the event-storm half of the problem, and it is handled.
+
+**The gap is overlap.**
+- `_fire` clears the timer and then runs the whole reindex in the timer's thread.
+- An event that arrives during that run schedules a new timer. That timer fires 3 s later and
+  starts a **second** `run_incremental` while the first is still running.
+- Nothing guards it: `_lock` covers only the timer.
+- The two runs race on SQLite writes, on `MultiIndexManager.save_all`, and, with summaries on, for
+  the GPU.
+
+**Fix:**
+- A running flag. An event during a run sets "dirty" instead of starting a timer, and the run
+  schedules one follow-up when it finishes and finds it set.
+- Test: a slow fake `run_incremental` plus events during it gives exactly two sequential runs, never
+  two at once.
+
+**Depends on:** none. Related: B-033, the cross-process version of the same race; ADR-028 §5, save
+path through the host.
+
+### B-033 — Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place
+
+**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** shaped · **Size:** M
+
+Each MCP server process loads its own copy of the FAISS indexes (`MultiIndexManager.load_or_create`,
+`core.py:180`) and starts its own watchdog (`MCPServer.py:1995`).
+- **Within one process, reloads are safe.** `_reload_indexes` builds new objects and swaps them
+  under `_reload_lock`.
+- **Across processes, nothing coordinates.** Two agents each with an MCP server on the same project
+  means two watchdogs and two writers.
+- **SQLite is not the problem.** WAL is on (`db.py:96`), so readers are never blocked by a writer.
+  Two writers still serialize and can time out.
+- **FAISS is the problem.**
+  - `save_all` calls `faiss.write_index` straight onto the live file (`core.py:198-200`). A process
+    loading it at that moment can read a truncated index.
+  - Two writers can each save a version built from different diffs, so the last one to save silently
+    drops the other's vectors. The SQLite rows would then disagree with FAISS, which is the
+    ghost-vector class of bug ADR-031 removed.
+
+**ADR-028 does not cover this.** Its host owns the models only, and by design "never opens a
+project's FAISS or SQLite files".
+
+**Fix:**
+1. **One writer per project.** Take an index lock file (`.code-index/write.lock`, `msvcrt.locking`
+   / `flock`, as ADR-028's `host.lock` does) around `run_incremental`. A second server's watchdog
+   skips the run, or waits for the lock, and just reloads afterwards.
+2. **Atomic saves.** Write `name.faiss.tmp`, then `os.replace` it onto `name.faiss`, so a reader
+   sees the old file or the new one, never half of one.
+3. **Reload on change.** A server that did not write notices the files changed (mtime, or a
+   generation counter in `index_meta`) and runs `_reload_indexes` before its next search.
+
+**Depends on:** none. It becomes more pressing once the watchdog daemon runs live with several
+agents on one repo.
+
+### B-034 — A changed file is re-embedded in full, even chunks whose text did not change
+
+**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** raw · **Size:** S–M
+
+Change detection works per file: an MD5 of the file's content (`compute_diff`,
+`incremental_indexer.py:278`). A modified file has all its chunks removed and every chunk embedded
+again, in every tier.
+- **Line numbers don't drive any of this.** Chunk ids are `stable_id(tier, file, scope)`, and
+  `start_line`/`end_line` are provenance only. A line inserted near the top of a file changes no id.
+- **Summaries, the expensive step, are already reused.** The summary cache is keyed by an MD5 of the
+  chunk's text (`chunk_text_hash`), so an unchanged method keeps its summary even when its lines
+  shift.
+
+**What is left:**
+1. **Tier-1 embeddings.**
+   - Skip re-embedding a chunk whose text hash is unchanged: reuse its vector and update only its
+     line range. That needs vectors to be retrievable by id (`IndexIDMap` over `IndexFlat` can
+     `reconstruct`) or cached by text hash.
+   - Embedding is the cheap step: about 1.5 min for this whole repository on the GPU, against about
+     16 min for summaries. So the gain is on large files that are saved often, under the daemon.
+2. **Tier-2/3 slices.**
+   - These are fixed token windows, so one inserted line changes the text of every slice after it.
+     Their summaries and embeddings are then all redone.
+   - That is the unmerged `feature/adr-029-position-independent-summary-key` branch's territory, and
+     B-027's (whole-file chunk shape).
+   - A structural outline chunk (B-027) would make this item mostly disappear for tiers 2 and 3.
+
+**Depends on:** B-027 for tiers 2 and 3. Tier 1 can go alone.
