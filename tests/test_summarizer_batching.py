@@ -342,3 +342,19 @@ def test_batch_knobs_read_config_and_clamp(tmp_path, monkeypatch):
         assert summ._max_batch_size == 1 and summ._reserve_mb == 0
     finally:
         config.reset_config_cache()
+
+
+def test_after_a_pause_times_out_the_run_does_not_pause_again():
+    """Memory that never comes back cost one pause per batch: one chunk every 120 s (2026-09-24)."""
+    t = [0.0]
+
+    def sleep(dt):
+        t[0] += dt
+
+    results, stats = run_adaptive_batches(
+        [10] * 5, lambda idx: ["s"] * len(idx), is_oom=lambda e: False, max_batch=4,
+        free_mb=lambda: 100.0, reserve_mb=1000, pause_poll_s=5.0, pause_timeout_s=120.0,
+        sleep=sleep, clock=lambda: t[0])
+    assert results == ["s"] * 5
+    assert stats.pauses == 1 and stats.pause_timeouts == 1
+    assert t[0] < 130.0

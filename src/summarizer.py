@@ -155,7 +155,8 @@ def run_adaptive_batches(
     item fails alone. After ``grow_after`` clean batches the budget grows by one
     item at the current length. Before each batch, if ``free_mb`` reports less than
     ``reserve_mb``, another process has taken the memory: wait for it to come
-    back, and if it does not, carry on one item at a time.
+    back, and if it does not, carry on one item at a time without pausing again
+    for the rest of the call.
 
     Returns results in the caller's original order, and what happened.
     """
@@ -168,10 +169,11 @@ def run_adaptive_batches(
     streak = max(0, start_streak)
     ooms_in_row = 0
     pos = 0
+    may_pause = free_mb is not None
 
     while pos < n:
         length = max(1, lengths[order[pos]])
-        if free_mb is not None and free_mb() < reserve_mb:
+        if may_pause and free_mb() < reserve_mb:
             stats.pauses += 1
             started = clock()
             while free_mb() < reserve_mb and clock() - started < pause_timeout_s:
@@ -179,6 +181,11 @@ def run_adaptive_batches(
             if free_mb() < reserve_mb:
                 stats.pause_timeouts += 1
                 budget, streak = length, 0
+                # Carry on without waiting again. Pausing before every batch after a
+                # timeout ran one chunk per pause_timeout_s (2026-09-24, click, with
+                # another process's embedder holding the memory). The memory cap
+                # still turns a real shortage into an OOM that the loop backs off from.
+                may_pause = False
 
         size = max(1, min(max_batch, budget // length))
         batch = order[pos:pos + size]
