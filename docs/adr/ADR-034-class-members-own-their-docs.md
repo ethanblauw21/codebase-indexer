@@ -133,13 +133,17 @@ top-level runs, because helpers redeclared in separate test callbacks are consec
 `skeletonize` treats a `decorated_definition` that wraps a stub type as that stub type. The decorators
 stay in the skeleton and the body becomes ` ...`.
 
-### 5. Split skeleton parts carry the class header and a body line range
+### 5. Split skeleton parts record the source lines they cover
 
-This step is the last arm, and it ships only if its measurement passes.
-- **The header.** Each `_part_N` of an oversized class skeleton begins with the class declaration line,
-  its generics and heritage, without decorators or doc.
-- **The line range.** Each part records the body-only line range it covers in `start_line` and
-  `end_line`, which split parts leave at 0 today. Stage 2 needs that range to pick the right part.
+- **Line ranges.** Each `_part_N` of an oversized class skeleton records, in `start_line` and
+  `end_line`, the source lines it covers. Split parts used to report 0/0. Stubbed bodies break the
+  one-to-one mapping between skeleton and source lines, so `skeleton_with_lines` returns the source
+  line of every skeleton line, and `fallback_token_chunker` maps each part's first and last lines
+  through it. Stage 2 needs these ranges to pick the part that holds a given member.
+- **No repeated header.** The first draft also repeated the class declaration at the top of parts 2
+  to N. Arm 4 measured that and rejected it (see the log), as the earlier probe had done for member
+  chunks: a line shared by many chunks makes them alike. The line ranges are metadata only, so chunk
+  text is unchanged.
 
 ### Measurement: one arm per change
 
@@ -151,7 +155,7 @@ regenerated, and logs its summary-cache hits and misses. Each one is compared wi
 | 1 | doc-move (§1) |
 | 2 | + `#` members and arrow fields (§2) |
 | 3 | + merge (§3) and decorated stubs (§4) |
-| 4 | + skeleton header and line range (§5) |
+| 4 | + skeleton header and line range (§5); the header was rejected, the line range kept |
 
 The kit's `clean_sweep2.py` and `pq_mechanism.py` are rerun on each arm.
 
@@ -229,12 +233,14 @@ Every criterion has a threshold. The final arm must pass all of them.
 - [x] Arm 2 built and measured (see notes)
 - [x] §3 merge and §4 Python decorated stubs: tests (`tests/test_member_merge.py`)
 - [x] Arm 3 built and measured: four variants, 3d kept (see notes)
-- [ ] §5 skeleton header and body line range
-- [ ] Arm 4 built and measured; the gate table filled in
-- [ ] `CHUNKER_VERSION` → 3
-- [ ] MCP Inspector run saved under the repo's test output
+- [x] §5 line ranges kept; the header measured and dropped (`tests/test_skeleton_parts.py`)
+- [x] Arm 4 built and measured; the gate table filled in (see notes)
+- [x] `CHUNKER_VERSION` → 3 (16a5d02). It belonged in each chunk-changing commit; it landed after
+  them, which only matters if the branch is split before merging
+- [x] MCP Inspector run saved: `gpu-crash-repro/telemetry/inspector_034/` (see notes)
 - [ ] Update B-026 in `docs/backlog.md` on `master`: Stage 1 promoted → ADR-034
-- [ ] Resolve **Depended on by**: confirm the body-only line ranges and `class_context` for Stage 2
+- [ ] Resolve **Depended on by**: Stage 2 gets per-part source line ranges (not "body-only": no header is
+  added, so a part's range is simply what it holds) and an unchanged `class_context`
 
 **Notes:**
 <!-- 2026-09-25: branch cut from ADR-033 (0604392); probe found the Python decorated-body defect (§4). -->
@@ -315,3 +321,35 @@ arm 2 unless noted.
   - No member was newly pushed past 500 tokens.
 - **Summaries:** click was re-summarized for the first time in this ADR (368 changed chunks). p-queue
   and zustand did not change.
+
+**2026-09-25, arm 4 (§5; `store034a4`, header and line ranges).**
+- **Against arm 3d:** orig −0.006, file whole −0.021. `click-choice-type` fell 1→7 and
+  `pq-intent-01` 3→14. Intent failed the gate with 3 losers.
+- **Decision:** the repeated class header is rejected. The line ranges are kept: they change no chunk
+  text. A parse of all three repos gives tier-1 text identical to `store034a3d` (1,611 of 1,611
+  chunks), so retrieval is identical as well.
+- **Line-map check:** every line of every class skeleton in the three repos (3,765 lines) maps to the
+  source line holding that text.
+
+**2026-09-25, final (`store034final`, built from 93bcbaa).** The gate, against `store031`:
+
+| Criterion | Result | |
+|---|---|---|
+| Named p-queue queries | `pq2-constructor` 1→2 (arm 2: `options.ts::Options_part_1` now ranks first); every other ranked query equal or better | **open: @edb to accept or reject** |
+| p-queue original set | 0.554 → 0.709 | pass |
+| Regressions per set | orig 1 (`pq2-on-error`, exempt) · intent 2 · file 0 / 0 | pass |
+| Set means (reported) | orig +0.045\* · intent +0.025 (lower bound −0.0000) · file any +0.004 · file whole −0.006 | reported |
+| Skeleton size | `PQueue` 10,105 → 5,407 characters; no skeleton grew except by stub whitespace (+4 to +8 characters on three click classes); click skeletons −14% | pass |
+| Token budget | no member newly past 500 tokens | pass |
+| Chunk integrity | `index_status`: vectors == chunk rows in every tier; `chunker_version: 3 (== current)` | pass |
+| Tests | 378 pass; ADR-008 conformance 1.000/1.000 for Python and TypeScript | pass |
+| MCP Inspector | `tools/list --strict` exit 0; search returns `PQueue.#processQueue`, `#tryToStartAnother` and `#next`; `find_dead_code("#processQueue")` is REFERENCED through 3 resolved callers; `verify_candidate_edges` has no candidates; a missing argument returns `isError: true` (exit 5) for `semantic_code_search` and `find_dead_code` | pass |
+
+- **How Inspector was run:** it drove the unmodified server through `run_server.py`, against a
+  scratch copy of p-queue carrying the final index. The wrapper only loads the embedder in bf16 on
+  the GPU, because `core.py` loads it in fp32 (6.2 GB), which overflows the 8 GB card and pages
+  silently.
+- **Found along the way:**
+  - No tool declares `readOnlyHint`. CLAUDE.md's Inspector checklist asks for it. This is older than
+    ADR-034 and is left for its own change.
+- **Retrieval with no summaries (`none034a4`):** orig +0.047\*, intent +0.027, file whole −0.006\*.
