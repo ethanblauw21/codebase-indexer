@@ -112,7 +112,9 @@ The PR does not merge until all of these hold on the 8 GB card.
 - [x] §5 bounded job groups, worker restart on timeout, end-of-pass counts
 - [x] `[summarization].max_batch_size` and `vram_reserve_mb` in `indexer.toml`, `src/config.py`, and the drift test
 - [x] §3 revised to a token budget with step-back-one on OOM; `[summarization].batch_token_budget`
-- [ ] Verification 3 and 1 rerun on the token-budget build
+- [x] Verification 3 on the token-budget build (16.3 min, see Notes)
+- [ ] Verification 1 rerun on the token-budget build
+- [ ] Verification 2 noise floor: a second batched run with different batch compositions, to tell whether the 5-query drop is batching or noise
 - [x] Unit tests (Verification 6): `tests/test_summarizer_batching.py`, 20 tests, no GPU
 - [x] `tools/summarizer_batch_equivalence.py` for Verification 1 (not run yet)
 - [ ] Verification 1 to 5 on the GPU, results recorded here with provenance
@@ -148,3 +150,26 @@ The PR does not merge until all of these hold on the 8 GB card.
 - 2026-09-24: GPU health across all of the above, about 6 hours of load: 0 WHEA events, 0 PCIe replays, link at Gen5 x4 throughout, 70 C maximum.
 - 2026-09-24, **deviation, §3 revised to a token budget** (suggested by @edb after the profile): batch size is `budget // longest prompt in the batch`, starting at 16,000 prompt tokens, at most 48 chunks. An OOM retries one chunk smaller (twice), then halves, and lowers the budget to what was retried. The budget grows by one chunk's worth after 8 clean batches. Worker groups went from 32 to 96 chunks and pass-1 slices from 64 to 192, because a group caps the batch. 3 new unit tests (sizing by length, step-back to the exact ceiling, step-back then halving); 332 tests pass on CPU, with the 6 pre-existing snapshot failures deselected. Measured on a 200-chunk sample in stage 12 at 4.45 times batch size 1; the full pass has not been run on this build yet.
 - 2026-09-24, **CPU baseline, projected** (no GPU, 14 torch threads, same repository, 1,552 chunks; `gpu-crash-repro/cpu_baseline.py`, `telemetry/cpu_baseline.json`): a full CPU index would pin the CPU for hours, so a few chunks were timed from the short end, the middle, and the long end of the length range, and a straight-line fit of seconds against tokens was applied to every chunk. Summarizer, fp32, batch size 1: 5.1 to 5.4 s at ~143 prompt tokens, 12.4 to 17.8 s at ~290, 57 to 71 s at ~4,000, **projected 6.3 h** for the repository (about 6.1 h for the 1,490 distinct texts). The indexer's CPU default is fp16, and three fp16 chunks timed the same or a little faster (4.0 s, 9.5 s, 15.5 s), so the projection stands for either. Embedder, fp32: 0.19 s at ~26 tokens, 0.73 s at ~168, 2.73 s at the 512-token cap, **projected 31.8 min**. Against the GPU: summarizing 67 min at batch size 1 (about 5.5 times the CPU), 17.2 min after the cross-file fix (**about 21 times the CPU**); embedding 90 s in bf16 (about 21 times). A projection from 6 summarizer points, not a measured full run.
+- 2026-09-24, **Verification 3 on the token budget** (stage 7, 64a38be, fresh index, telemetry `stress_20260924_192215`): pass 1 took 975.5 s (**16.3 min**) for 1,496 distinct texts, 1.53 per second. The batch-1 baseline was 67.0 min, so this is 4.1 to 4.3 times faster. It is only 5 percent faster than the cross-file build (1,030 s).
+  - Largest batch 48, 0 OOM backoffs, 0 pauses, peak 5,898 MiB, shared usage flat at 64 MiB. Pass 2 took 98 s.
+  - From 19:26 to the end, the card sat in P4 at about 1,200 MHz and 30 W while reporting 95 percent utilization. Later, when the laptop's battery ran low during stage 15, utilization fell from about 70 to about 37 percent while the SM clock held at about 2,550 MHz. Both point the same way: the short-chunk tail is limited by the CPU launching kernels, not by the GPU. More batch size will not fix that. `torch.compile` or CUDA graphs might.
+- 2026-09-24, **defect in §4, found and fixed** (5bc3f60): after a pause timed out, the loop paused again before every batch, so memory held by another process ran one chunk every 120 s.
+  - Found when the retrieval driver built three repos in one process and left the embedder from zustand resident while click summarized. Stage 13 crawled and was stopped by the stall guard after 20 min with no output.
+  - The loop now carries on at batch size 1 without waiting again for the rest of the call, as §4 always said it should. There is a test for it.
+  - The driver now frees the embedder between repos, and stage 13 was rerun from scratch.
+- 2026-09-24, **Verification 2, retrieval** (stages 13 to 16, 5bc3f60, telemetry `stress_20260924_202825`, `gpu-crash-repro/telemetry/retrieval/results.json`).
+  - Setup: three pinned eval repos (p-queue, zustand, click), 83 queries, the shipped arm (graph on, reranker off, RRF), and the embedder in bf16 for index and queries alike. Each variant has a fresh index: no summaries, batch size 1, and batched.
+
+    | Variant | MRR@10 | nDCG@10 | p-queue MRR | zustand MRR | click MRR |
+    |---|---|---|---|---|---|
+    | no summaries | 0.4427 | 0.5379 | 0.5500 | 0.3126 | 0.4719 |
+    | batch size 1 | 0.4490 | 0.5482 | 0.5771 | 0.2825 | 0.4935 |
+    | batched | 0.4410 | 0.5417 | 0.5771 | 0.2733 | 0.4805 |
+
+  - Batched against batch size 1: MRR 0.008 lower and nDCG 0.0065 lower. **5 of 83 queries changed, all 5 down**, each by one or two places (3rd to 4th three times, 2nd to 4th, 2nd to 3rd).
+    - The three zustand queries all target `persist.ts`, and in each one a test chunk from `tests/basic.test.tsx`, whose summaries were worded differently, moved into the top 3.
+    - The two click queries moved on a reworded summary: once on the gold chunk's own summary (`UsageError`) and once on a competing test's (`test_getchar`).
+    - Summaries identical between the two runs: 94.6, 93.9 and 92.6 percent per repo. Where they differ, batched is shorter 76 times and longer 67, so there is no systematic bias.
+  - Summaries themselves barely move this eval: no summaries against batch size 1 changed 40 queries, 22 up and 18 down, for +0.006 MRR, and zustand got worse with summaries. The batching drop is the same size as the whole benefit of summarizing here.
+  - **Verdict: not resolved.** Five down and none up is suggestive (a sign test gives about p = 0.06, and three of the five are one event), but it is not a demonstrated loss. The eval cannot separate the two either way. The missing number is the noise floor: two batched runs with different batch compositions. If those also move about 5 queries against each other, this is noise.
+- 2026-09-24, **separate finding, both batch sizes:** 17.5 percent of summaries are one paragraph, because `_clean()` keeps only the text before the first blank line, and the model often puts one after "Purpose:". Those summaries lose their Inputs, Outputs and Key operations lines. This is independent of batching (17.5 against 17.7 percent), and it probably costs more retrieval than batching does. Not changed here.
