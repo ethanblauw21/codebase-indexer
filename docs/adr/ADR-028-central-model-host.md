@@ -200,7 +200,7 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
 - [ ] Watchdog: confirm the MCP server's save path goes through the client end to end. It calls `run_incremental`, so it should.
 - [ ] `index_status` shows the host's view for its project
 - [ ] Reranker through the host
-- [ ] MCP Inspector run on the MCP server with the host enabled (the global CLAUDE.md rule for a changed MCP server)
+- [x] MCP Inspector run on the MCP server with the host enabled (the global CLAUDE.md rule for a changed MCP server). See Notes
 - [x] Verification 1, 2 and 6 on the GPU; 3 measured (the bound it gives is in Notes); 4 and 5 by the unit tests
 - [ ] Verification 4 on a real host: kill it mid-run and check the index still completes
 - [ ] Set status to `accepted` in the PR
@@ -228,3 +228,9 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
   - **Verification 3, search during a summary run:** 8.6–24.6 s over 13 probes. About 5 s is the swap. The rest is the batch in flight, so the longest batch is up to about 20 s. The per-batch timing task stays open: it is what would let the host cap a batch's length when searches are waiting.
   - **Verification 6, vectors:** the host-built index matches the in-process one bit for bit: tier 1 213/213 identical, tier 2 71/71, tier 3 48/48.
   - **Verifications 1 and 2, two projects at once** (p-queue as `proj-pqueue`, zustand as `proj-zustand`, one host): both exit 0. GPU peak 5,783 MiB, so one model on the card at a time held. p-queue finished in 416.4 s and zustand in 508.9 s, while sharing the card. The host's status showed zustand's 94 pending summaries while p-queue finished, then both drained to zero. 5 yields, 12 loads.
+- 2026-09-25, **MCP Inspector with the host enabled** (`gpu-crash-repro/telemetry/inspector_028/`). The server ran as on this branch, against a scratch p-queue index. The only changes: `[model_host].enabled` turned on, and a scratch host directory.
+  - `tools/list --strict` exits 0.
+  - `semantic_code_search("pause the queue so no new tasks start")` returns `PQueue.pause` first. **The host served the query:** its status afterwards showed 2 embeds and 1 load, and there was no in-process fallback line.
+  - `index_status` answers.
+  - A search with no `query` returns `isError: true` (exit 5).
+- 2026-09-25, **the watchdog under an MCP client** (the Watchdog task above) turned up two bugs that had nothing to do with the host. Every watchdog reindex failed on its first print (a cp1252 pipe), and the summarizer's `multiprocessing` worker hung on the MCP stdin pipe. Both are fixed in ADR-036 (#40). The host's own spawn already passes `stdin=DEVNULL`, so it is not affected.
