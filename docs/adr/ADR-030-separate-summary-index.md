@@ -40,7 +40,7 @@ Search already fuses the three tier indexes by RRF over FAISS ids (`HybridRetrie
 - A summary hit shares its chunk's id, so it lifts that chunk.
 - A chunk found only through its summary joins the list with `source = "summary"`.
 - `[retrieval].summary_weight` defaults to 0.5.
-- `[retrieval].file_chunk_weight` (default 0.5) is how much a tier-2/3 chunk counts in the code ranking at this fusion, against 1.0 for tier 1. Its summary still counts in full.
+- `[retrieval].file_chunk_weight` (default 1.0) is how much a tier-2/3 chunk counts in the code ranking at this fusion, against 1.0 for tier 1. Its summary still counts in full.
 - The fused list keeps one chunk per split parent, meaning the same file and the same scope once `_part_N` is stripped, across tiers. The best-scoring part stands for the others.
 - With the index missing or empty, or the weight at 0, `retrieve()` makes exactly today's calls.
 
@@ -144,3 +144,10 @@ An index built before this ADR has summaries appended inside its code vectors an
   - Real build (`retrieval/results_orig030e.json`, `results_intent030e.json`): original 0.567 against 0.436 (+0.131, interval +0.062 to +0.198, 41 up, 9 down). Intent 0.601 against 0.429 (+0.172, interval +0.100 to +0.244, 32 up, 4 down). p-queue original 0.560 against 0.537, so no repo now loses.
   - **Caveat: every query in both sets has a symbol as its answer, so no query can show what demoting whole-file chunks costs.** The file-level query set (Verification 3) must check this knob before it is trusted.
   - Still below baseline: `pq-concurrency`, `pq2-enqueue` and `pq2-on-error`, now behind tier-1 `PQueue_part_N` class-body parts, which this knob does not touch. That is the class-skeleton question.
+- 2026-09-25, **Verification 3 (file-level queries): `file_chunk_weight` back to 1.0, and all three tiers stay summarized.**
+  - 15 queries whose answer is a whole file, 5 per repo, written from the source by one agent per repo, blind to the summaries (`gpu-crash-repro/file_fixtures/`). Graded on the file: "any" counts any chunk of the gold file, "whole" only a tier-2/3 chunk of it. Replayed from the `store` build alongside both symbol sets (`retrieval/results_file_level.json`).
+  - File set, any / whole: no summaries 0.730 / 0.226. Code weight 1 with all tiers summarized 0.811 / 0.500. Code weight 0.5 0.717 / 0.150. Code weight 0 0.694 / 0.060. With tier-1 summaries only, 0.72 / below 0.10 at every code weight.
+  - Symbol sets at code weight 1 / 0.5: original 0.535 / 0.567, intent 0.555 / 0.601.
+  - So the 0.5 weight moved about as much score from file questions to symbol questions as it added, and put file questions below the no-summary baseline. Weight 1.0 with every tier summarized is the only setting here that beats no summaries on all three sets. The knob stays, defaulting to 1.0. Tier-2/3 summaries are what carry file-level questions (whole: 0.500 with them, below 0.10 without), so `[summarization].tiers` stays `[1, 2, 3]`.
+  - n = 15 is small; one query moves the file mean by up to 0.067. Two queries sit near the file name ("Windows console" for `_winconsole.py`), and one gold file is a single function (`ssrSafe.ts`).
+  - Takeaway for the chunk-shape work: a global weight trades one query type against the other. The p-queue symbol loss (0.511 against 0.537) is back at weight 1.0 and needs a structural fix: one outline chunk per file, not N slices.

@@ -95,7 +95,7 @@ _DEFAULT_SPARSE_WEIGHT     = 0.3
 _DEFAULT_SUMMARY_WEIGHT    = 0.5
 # ADR-030: how much a tier-2/3 (whole-file) chunk counts in the code ranking at that
 # fusion, against 1.0 for tier 1. Its summary still counts in full.
-_DEFAULT_FILE_CHUNK_WEIGHT = 0.5
+_DEFAULT_FILE_CHUNK_WEIGHT = 1.0
 _SUMMARY_INDEX_NAME        = "summary"
 _SUMMARY_FUSE_DEPTH        = 30   # candidates from each side of the final fusion
 _PART_SUFFIX = re.compile(r"_part_\d+$")   # ast_chunker's split-chunk scope suffix

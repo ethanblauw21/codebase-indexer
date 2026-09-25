@@ -106,9 +106,10 @@ sparse_weight = 0.3
 # original / intent queries, 1.0 gave 0.548 / 0.531, no summaries 0.443 / 0.436.
 summary_weight = 0.5
 # How much a whole-file (tier-2/3) chunk counts in the code ranking at that fusion,
-# against 1.0 for a symbol chunk; its summary still counts in full. Measured 2026-09-25
-# on symbol-answer queries only, which cannot show what demoting whole files costs.
-file_chunk_weight = 0.5
+# against 1.0 for a symbol chunk; its summary still counts in full. 0.5 lifted symbol
+# queries (0.535 -> 0.567 / 0.555 -> 0.601) but cost file-level queries more
+# (0.811 -> 0.717, below the no-summary 0.730), so it stays 1.0 (2026-09-25).
+file_chunk_weight = 1.0
 
 [summarization]
 # Set to false to skip LLM chunk summarization (faster indexing, lower recall).
