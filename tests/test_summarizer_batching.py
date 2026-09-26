@@ -358,3 +358,19 @@ def test_after_a_pause_times_out_the_run_does_not_pause_again():
     assert results == ["s"] * 5
     assert stats.pauses == 1 and stats.pause_timeouts == 1
     assert t[0] < 130.0
+
+def test_should_yield_stops_between_batches_and_marks_the_rest_unattempted():
+    """ADR-028: the model host stops a summary run at a batch boundary to serve a search."""
+    ran = []
+
+    def run_batch(idx):
+        ran.append(list(idx))
+        return [f"s{i}" for i in idx]
+
+    asked = []
+    results, stats = run_adaptive_batches(
+        [10, 10, 10, 10, 10, 10], run_batch, is_oom=lambda e: False,
+        max_batch=2, start_budget=20, should_yield=lambda: asked.append(1) or len(ran) >= 2)
+    assert len(ran) == 2 and len(asked) == 2        # never asked before the first batch
+    assert results.count(None) == 2 and stats.yielded == 2
+    assert all(r and r.startswith("s") for r in results if r is not None)

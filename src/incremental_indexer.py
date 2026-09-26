@@ -763,7 +763,7 @@ def ingest_file(
                         entry["summary"] = summary
 
         print(f"  [ingest:{rel_path}] {tier_name}: embedding {len(texts_to_embed)} texts...", flush=True)
-        from core import embed_batch
+        from model_client import embed_batch   # ADR-028: host when enabled, else core
         vec_matrix: np.ndarray = embed_batch(texts_to_embed)
         print(f"  [ingest:{rel_path}] {tier_name}: embedding done, shape={vec_matrix.shape}", flush=True)
 
@@ -937,8 +937,9 @@ def run_incremental(
 
     summarizer = None
     if summarization_enabled():
-        from summarizer import IsolatedChunkSummarizer
-        summarizer = IsolatedChunkSummarizer()
+        # ADR-028: the model host's summarizer when [model_host].enabled, else the worker.
+        from model_client import make_summarizer
+        summarizer = make_summarizer()
         print(f"  Chunk summarizer enabled: {summarizer_model_id()} "
               f"(worker process starts on first file processed)")
     else:

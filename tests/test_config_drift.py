@@ -77,6 +77,11 @@ def _wired() -> dict[tuple[str, str], object]:
         ("summarization", "tiers"):        config.DEFAULT_SUMMARIZER_TIERS,
         ("retrieval", "summary_weight"):   hybrid_retriever._DEFAULT_SUMMARY_WEIGHT,
         ("retrieval", "file_chunk_weight"): hybrid_retriever._DEFAULT_FILE_CHUNK_WEIGHT,
+        # ADR-028.
+        ("model_host", "enabled"):         config.DEFAULT_MODEL_HOST_ENABLED,
+        ("model_host", "embed_idle_s"):    config.DEFAULT_MODEL_HOST_EMBED_IDLE_S,
+        ("model_host", "idle_exit_s"):     config.DEFAULT_MODEL_HOST_IDLE_EXIT_S,
+        ("model_host", "spawn_timeout_s"): config.DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S,
     }
 
 

@@ -150,6 +150,23 @@ tiers = [1, 2, 3]
 # Windows pages GPU memory into system RAM instead and the run slows ~50x with no error.
 vram_reserve_mb = 1024
 
+[model_host]
+# ADR-028: one local process owns the GPU models, and every project's MCP server,
+# watchdog and code-indexer run sends it embeds and summaries. Off by default. When on
+# and the host cannot be reached or started, the indexer falls back to loading models
+# in its own process and says so in the log.
+enabled = false
+
+# Seconds the embedder stays loaded after its last request. Searches come in bursts,
+# and each reload costs seconds. Provisional until the swap cost is measured.
+embed_idle_s = 60.0
+
+# Seconds the host process stays up with no model loaded and nothing queued.
+idle_exit_s = 1800.0
+
+# Seconds a client waits for a host it just started to begin listening.
+spawn_timeout_s = 30.0
+
 [eval]
 # ADR-007 — CoIR retrieval benchmark harness (Wave-0 baseline).
 # Data is materialized into benchmarks/coir/<subtask>/ by tools/coir_prepare.py;

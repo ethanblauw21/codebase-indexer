@@ -47,6 +47,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
 | [B-022](#b-022) | The summarizer runs one chunk at a time on the GPU | GPU baseline session, 2026-09-24 | M | **promoted → ADR-027** |
+| [B-023](#b-023) | Several projects watched at once cannot share one 8 GB card | GPU baseline session, 2026-09-24 | L | **promoted → ADR-028** |
 | [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | Stage 1 promoted → ADR-034 |
 | [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L → M (outline idea measured and rejected) | raw |
 | [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
@@ -473,6 +474,16 @@ does not raise an error, it just runs about 50 times slower.
 
 Numbers 012 to 021 are used on other branches; this entry takes the next free number.
 
+---
+
+<a id="b-023"></a>
+### B-023 — Several projects watched at once cannot share one 8 GB card
+
+**Source:** GPU baseline session, 2026-09-24 · **Status:** **promoted → [ADR-028](./adr/ADR-028-central-model-host.md)** · **Size:** L
+
+Every MCP server process loads its own embedder, and one is started per Claude session per project. With the watchdog daemon on for several projects, the card fills with copies of the same model before any summary runs. The daemon also starts a summarizer beside the resident embedder on every save with a cache miss, so the two-pass split does not help it.
+
+**The want:** watch several projects at once on one GPU. Saves should show up in search within seconds, and summaries should catch up in the background, batched across projects, without the models ever spilling into system RAM.
 ### B-025 — Appended summaries make intent retrieval worse; the same summaries help when kept apart
 
 **Source:** retrieval check, 2026-09-25 · **Status:** **promoted → [ADR-030](./adr/ADR-030-separate-summary-index.md)** · **Size:** M
