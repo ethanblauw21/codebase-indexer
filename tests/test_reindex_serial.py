@@ -163,8 +163,7 @@ def test_a_spawned_worker_starts_while_the_transport_reads_stdin(tmp_path):
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
         pytest.fail("the worker never started: the stdin pipe is still shared")
     assert first[0].decode("utf-8", "replace").strip() == "worker 32"
-    p.stdin.write(b'{"jsonrpc": "2.0"}
-')
+    p.stdin.write(b'{"jsonrpc": "2.0"}\n')
     p.stdin.flush()
     out, err = p.communicate(timeout=60)
     assert '{"jsonrpc": "2.0"}' in out.decode("utf-8", "replace"), err.decode("utf-8", "replace")[-600:]
