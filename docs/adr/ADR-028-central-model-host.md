@@ -234,3 +234,24 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
   - `index_status` answers.
   - A search with no `query` returns `isError: true` (exit 5).
 - 2026-09-25, **the watchdog under an MCP client** (the Watchdog task above) turned up two bugs that had nothing to do with the host. Every watchdog reindex failed on its first print (a cp1252 pipe), and the summarizer's `multiprocessing` worker hung on the MCP stdin pipe. Both are fixed in ADR-036 (#40). The host's own spawn already passes `stdin=DEVNULL`, so it is not affected.
+- **2026-09-25: per-save timing of the watchdog through the host.** The branch was merged with ADR-036 in
+  a scratch worktree, run on a scratch p-queue with summaries on, using `gpu-crash-repro/watchdog_timing.py … host`.
+  Each edit appends one line, and the time runs from the write to `Reindex complete`.
+
+  | File | In-process (ADR-036) | Host, first run | Host, after c6352f1 |
+  |---|---|---|---|
+  | small, 556 bytes | 14.6 s | 61.7 s | 14.7 s |
+  | medium, 3,916 bytes | 13.6 s | 61.3 s | 14.0 s |
+  | large, 27,660 bytes | 21.7 s | 68.2 s | 22.1 s |
+
+  - **First run: every save held about 47 s.** Any embed within `embed_idle_s` (60 s) counted as a
+    search burst, so each save's summary job waited behind the previous save's own index embeds.
+  - **The fix (c6352f1): only a `query` embed holds summaries back.** `test_an_indexing_embed_does_not_hold_summaries`
+    fails without it. The suite passes (408).
+  - **After the fix, the host ties in-process; it does not beat it.** A save needs the summarizer and
+    then the embedder. With one model on the card at a time, the host swaps both in on every save:
+    43 loads over the run, the same cycle the in-process two-pass path runs.
+  - **The host's value for the daemon is sharing the card between sessions, not speed on a single
+    save.** A faster save would need both models resident at once. That is bf16 embedder (~3 GB)
+    plus summarizer (~3.8 GB peak in pass 1), tight on 8 GB, and a change to Decision 1. It is not
+    measured.
