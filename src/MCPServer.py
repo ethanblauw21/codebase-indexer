@@ -1145,8 +1145,9 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _get_test_suffixes(source_file: str) -> list[str]:
-    """Return test file suffixes for the language of source_file, or all languages."""
+def _get_test_patterns(source_file: str) -> tuple[list[str], list[str]]:
+    """Return ``(suffixes, globs)`` naming test files for the language of source_file,
+    or for all languages when it has none."""
     import os as _os
     from adapters import REGISTRY, get_adapter
     ext = _os.path.splitext(source_file)[1].lower()
@@ -1154,17 +1155,19 @@ def _get_test_suffixes(source_file: str) -> list[str]:
     if adapter and hasattr(adapter, "test_conventions"):
         tc = adapter.test_conventions()
         if tc:
-            return tc.file_suffixes
-    # Fall back to all known test suffixes across all adapters
+            return list(tc.file_suffixes), list(tc.file_globs)
+    # Fall back to all known test patterns across all adapters
     seen: set[int] = set()
     suffixes: list[str] = []
+    globs: list[str] = []
     for a in REGISTRY.values():
         if id(a) not in seen:
             seen.add(id(a))
             tc = a.test_conventions() if hasattr(a, "test_conventions") else None
             if tc:
                 suffixes.extend(tc.file_suffixes)
-    return suffixes
+                globs.extend(tc.file_globs)
+    return suffixes, globs
 
 
 @mcp.tool()
@@ -1173,7 +1176,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     Finds unit tests that semantically cover a source file or symbol.
 
     Adapts to the language of the source file — TypeScript (.test.ts),
-    C# (Tests.cs / Test.cs), Python (_test.py), etc.  Falls back to all
+    C# (Tests.cs / Test.cs), Python (test_*.py / _test.py), etc.  Falls back to all
     known test file patterns when the language cannot be determined.
 
     Inputs:
@@ -1190,10 +1193,16 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     norm_source = source_file.lower().replace('\\', '/').split('/')[-1]
     source_base = re.sub(r'\.[^.]+$', '', norm_source)
 
-    test_suffixes = [s.lower() for s in _get_test_suffixes(source_file)]
+    from fnmatch import fnmatchcase
+    suffixes, globs = _get_test_patterns(source_file)
+    test_suffixes = [s.lower() for s in suffixes]
+    test_globs = [g.lower() for g in globs]
+    test_patterns = test_suffixes + test_globs     # for messages
 
     def is_test_file(fp: str) -> bool:
-        return any(fp.endswith(s) for s in test_suffixes)
+        name = fp.split('/')[-1]
+        return (any(fp.endswith(s) for s in test_suffixes)
+                or any(fnmatchcase(name, g) for g in test_globs))
 
     # Collect one representative doc per test file
     test_doc_by_file: dict[str, dict] = {}
@@ -1203,17 +1212,19 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
             test_doc_by_file[fp] = doc
 
     if not test_doc_by_file:
-        suffixes_str = ", ".join(test_suffixes) if test_suffixes else "(none)"
+        patterns_str = ", ".join(test_patterns) if test_patterns else "(none)"
         return (
             "--- TEST COVERAGE ANALYSIS ---\n\n"
             f"SOURCE: {source_file}\n\n"
-            f"  [No test files found in the index (searched suffixes: {suffixes_str}) — run reindex first.]\n"
+            f"  [No test files found in the index (searched: {patterns_str}) — run reindex first.]\n"
         )
 
     # --- Tier 1: Direct name match ---
-    # Candidate direct test names: source_base + each test suffix
-    # e.g. "auth" + ".test.ts" → "auth.test.ts";  "AuthService" + "Tests.cs" → "authservicetests.cs"
-    direct_candidates = {f"{source_base}{s}" for s in test_suffixes}
+    # Candidate direct test names: source_base + each test suffix, or each glob with `*`
+    # as source_base. "auth" + ".test.ts" → "auth.test.ts"; "test_*.py" → "test_auth.py"
+    direct_names = ([f"{source_base}{s}" for s in test_suffixes]
+                    + [g.replace("*", source_base) for g in test_globs])
+    direct_candidates = set(direct_names)
     direct_data: list[str] = []
     direct_fps:  set[str]  = set()
     for fp, doc in test_doc_by_file.items():
@@ -1252,7 +1263,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     if target_symbol:
         header += f" | SYMBOL: {target_symbol}"
 
-    direct_label = " | ".join(f"{source_base}{s}" for s in test_suffixes[:2])
+    direct_label = " | ".join(direct_names[:2])
 
     context = f"--- TEST COVERAGE ANALYSIS ---\n\n{header}\n\n"
     context += "1. DIRECT COVERAGE (test file named after source):\n"
@@ -1267,7 +1278,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
             f"  test files were found for '{source_file}'.\n"
         )
 
-    context += f"\nNote: Searched for test files with suffixes: {', '.join(test_suffixes)}\n"
+    context += f"\nNote: Searched for test files named: {', '.join(test_patterns)}\n"
     return context
 
 

@@ -23,6 +23,9 @@ class TestConventions:
     """File naming patterns and in-file markers that identify test code for a language."""
     file_suffixes: list[str]    # path suffixes: ["Tests.cs", ".test.ts", "_test.py"]
     in_file_markers: list[str]  # text substrings in test bodies: ["[Fact]", "describe("]
+    # File-name globs for conventions a suffix cannot express, e.g. pytest's
+    # "test_*.py". `*` stands for the source file's base name in a direct match.
+    file_globs: list[str] = field(default_factory=list)
 
 
 @dataclass

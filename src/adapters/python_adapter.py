@@ -92,8 +92,9 @@ class PythonAdapter:
 
     def test_conventions(self):
         return TestConventions(
-            file_suffixes=["_test.py", "test_.py"],
+            file_suffixes=["_test.py"],
             in_file_markers=["def test_", "class Test", "@pytest.mark"],
+            file_globs=["test_*.py"],   # pytest's default is a prefix; a suffix cannot say it
         )
 
     def project_resolver(self):
