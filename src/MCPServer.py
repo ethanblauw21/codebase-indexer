@@ -284,14 +284,13 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     print(f"\n[MCP] Analyzing blast radius anchored at '{anchor_file}' for '{target_symbol}'")
     _ensure_indexes()
     norm_anchor = anchor_file.lower().replace('\\', '/').split('/')[-1]
-    anchor_base = norm_anchor.replace('.tsx', '').replace('.ts', '').replace('.jsx', '').replace('.js', '')
+    anchor_base = _module_stem(anchor_file)
 
-    # 1. PRE-FETCH ANCHOR TEXT
-    # We must know what the anchor imports to apply the "Primitive Directional Filter"
-    anchor_text = ""
-    for doc in doc_store.docs.values():
-        if norm_anchor in doc['file'].lower() and doc['tier'] == 'tier2_component':
-            anchor_text += doc['text'] + "\n"
+    # Who imports the anchor, and what the anchor imports (the "Primitive Directional
+    # Filter"), computed once up front instead of re-scanning text per file (B-037).
+    texts = _texts_by_file()
+    importers, anchor_imports = _import_relations(anchor_file, texts)
+    anchor_found = any(norm_anchor in f.lower() for f in texts)
 
     query_text = f"Implementation, definition, or usage of {target_symbol}"
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
@@ -313,22 +312,18 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
         seen_files.add(file_path)
 
         norm_path = file_path.lower().replace('\\', '/')
-        file_base = norm_path.split('/')[-1].replace('.tsx', '').replace('.ts', '').replace('.jsx', '').replace('.js', '')
+        file_base = _module_stem(file_path)
         doc_text = doc['text']
-        # Aggregate all chunks for this file so import statements in part_1 are
-        # visible when the FAISS hit landed on part_4.
-        file_full_text = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
 
         # --- STRUCTURAL & SEMANTIC CHECKS ---
         is_anchor = norm_anchor in norm_path
         has_symbol = target_symbol in doc_text
 
         # Structural: Does this file import the anchor? (downstream — true dependent)
-        # re.DOTALL required — TS multi-line imports span `import {` to `} from "..."` across lines
-        imports_anchor = bool(re.search(rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]", file_full_text, re.IGNORECASE | re.DOTALL))
+        imports_anchor = file_path in importers
 
         # Structural: Does the anchor import this file? (upstream — primitive/dependency)
-        is_imported_by_anchor = bool(re.search(rf"(import|require).*?['\"].*?{re.escape(file_base)}.*?['\"]", anchor_text, re.IGNORECASE | re.DOTALL)) if file_base and anchor_text else False
+        is_imported_by_anchor = file_base in anchor_imports
 
         evidence = []
         if has_symbol: evidence.append(f"Contains symbol `{target_symbol}`")
@@ -361,22 +356,18 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
                 parallel_data.append(f"- {file_path}\n  [Evidence]: {evidence_str}\n  [Snippet]: {snippet}\n\n")
 
     # Exhaustive import sweep: catches callers that FAISS ranking missed
-    all_file_paths = {doc['file'] for doc in doc_store.docs.values()}
-    for file_path in all_file_paths:
-        if file_path in seen_files: continue
-        file_full_text = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
-        if not re.search(rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]", file_full_text, re.IGNORECASE | re.DOTALL):
-            continue
+    for file_path in sorted(importers - seen_files):
+        if file_path not in texts: continue     # an edge left by a file no longer indexed
         seen_files.add(file_path)
-        rep_doc = next(d for d in doc_store.docs.values() if d['file'] == file_path)
+        file_full_text = texts[file_path]
         has_symbol = target_symbol in file_full_text
-        snippet = rep_doc['text'][:150].replace('\n', ' ').strip() + "..."
+        snippet = file_full_text[:150].replace('\n', ' ').strip() + "..."
         evidence = [f"Imports `{anchor_base}`"]
         if has_symbol: evidence.append(f"Contains symbol `{target_symbol}`")
         dependents_data.append(f"- {file_path}\n  [Evidence]: {' + '.join(evidence)}\n  [Snippet]: {snippet}\n\n")
 
     # Fallback to force anchor if FAISS missed it
-    if not anchor_data and anchor_text:
+    if not anchor_data and anchor_found:
         anchor_data.append(f"- {anchor_file}\n  [Evidence]: Origin Anchor (Forced via Metadata)\n\n")
 
     # --- PAYLOAD GENERATION ---
@@ -793,6 +784,83 @@ def _caller_evidence(symbol: str, anchor_file: str = "") -> tuple[list, list]:
         if f in verified:
             del candidate[f]
     return list(verified.values()), list(candidate.values())
+
+
+# ---------------------------------------------------------------------------
+# Import relationships for analyze_blast_radius / find_dead_code (B-037)
+# ---------------------------------------------------------------------------
+
+# Extensions a module specifier may carry that are not part of the module's name.
+_MODULE_EXTS = {
+    ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".gs",
+    ".py", ".pyi", ".cs", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
+}
+
+# A quoted module specifier after `from`, `import`, `require(` or `import(`: the forms
+# the JS/TS adapter does not turn into IMPORTS edges (it records `import ... from` only).
+# Negated classes keep one match inside one string on one line. The pattern it replaces,
+# `(import|require).*?['"].*?NAME.*?['"]` with DOTALL, backtracked across the whole file
+# whenever a file did not import NAME: ~20 s for a 150K-char file, 10-20 min per call.
+_SPECIFIER_RE = re.compile(r"""\b(?:from|import|require)\s*\(?\s*(['"])([^'"\r\n]+)\1""")
+
+
+def _module_stem(spec: str) -> str:
+    """The name a module specifier or file path refers to, for matching one to the other.
+
+    './lib/foo.js' → 'foo', '@/lib/bar/index' → 'bar', 'pkg.mod' (Python) → 'mod',
+    'src/scan_policy.py' → 'scan_policy'. Lower-cased. Matching whole names means
+    './foobar' no longer counts as importing 'foo', as the old substring test did.
+    """
+    s = spec.strip().replace("\\", "/").rstrip("/").lower()
+    last = s.rsplit("/", 1)[-1]
+    root, ext = os.path.splitext(last)
+    if ext in _MODULE_EXTS:
+        last = root
+    elif "/" not in s:
+        last = last.rsplit(".", 1)[-1]      # dotted Python path: pkg.mod, .mod → mod
+    if last == "index" and "/" in s:
+        return _module_stem(s.rsplit("/", 1)[0])
+    return last
+
+
+def _texts_by_file() -> dict[str, str]:
+    """Every indexed file's chunk text, joined, in one pass over the doc store."""
+    parts: dict[str, list[str]] = {}
+    for d in doc_store.docs.values():
+        parts.setdefault(d['file'], []).append(d['text'])
+    return {f: "\n".join(p) for f, p in parts.items()}
+
+
+def _specifier_stems(text: str) -> set[str]:
+    return {_module_stem(m.group(2)) for m in _SPECIFIER_RE.finditer(text)}
+
+
+def _import_relations(anchor_file: str, texts: dict[str, str]) -> tuple[set[str], set[str]]:
+    """``(importers, imported)`` for ``anchor_file``.
+
+    ``importers`` are the files that import the anchor; ``imported`` holds the module
+    stems the anchor itself imports. Both come from the graph's IMPORTS edges (every
+    Python import, and ES imports) plus the quoted specifiers in the file text
+    (``require()``, ``import()``, re-exports), so neither source's gaps decide alone.
+    """
+    anchor_stem = _module_stem(anchor_file)
+    anchor_name = anchor_file.lower().replace("\\", "/").split("/")[-1]
+    anchor_paths = {f for f in texts if f.lower().replace("\\", "/").split("/")[-1] == anchor_name}
+
+    importers: set[str] = set()
+    imported: set[str] = set()
+    for source, target, resolved in _db().get_import_edges():
+        if _module_stem(resolved or target) == anchor_stem:
+            importers.add(source)
+        if source in anchor_paths:
+            imported.add(_module_stem(resolved or target))
+    for path, text in texts.items():
+        stems = _specifier_stems(text)
+        if path in anchor_paths:
+            imported |= stems
+        elif anchor_stem in stems:
+            importers.add(path)
+    return importers - anchor_paths, imported
 
 
 def _get_iterative_retriever() -> IterativeRetriever:
@@ -1491,13 +1559,10 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
     print(f"\n[MCP] find_dead_code: symbol='{symbol}' anchor='{anchor_file}'")
     _ensure_indexes()
     norm_anchor = anchor_file.lower().replace('\\', '/').split('/')[-1]
-    anchor_base = re.sub(r'\.[^.]+$', '', norm_anchor)
 
-    # Pre-fetch anchor text for primitive detection
-    anchor_text = ""
-    for _d in doc_store.docs.values():
-        if norm_anchor in _d['file'].lower() and _d['tier'] == 'tier2_component':
-            anchor_text += _d['text'] + "\n"
+    # Files importing the anchor, computed once (B-037).
+    texts = _texts_by_file()
+    importers, _ = _import_relations(anchor_file, texts)
 
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
     # call-graph callers now reach the dead-code scan, so references visible only
@@ -1517,12 +1582,9 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
         norm_path = file_path.lower().replace('\\', '/')
         if norm_anchor in norm_path: continue   # skip the defining file
 
-        file_full = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
+        file_full = texts.get(file_path, c.text)
 
-        imports_anchor = bool(re.search(
-            rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]",
-            file_full, re.IGNORECASE | re.DOTALL
-        ))
+        imports_anchor = file_path in importers
         has_symbol = symbol in file_full
 
         snippet = c.text[:120].replace('\n', ' ').strip() + "..."
@@ -1536,16 +1598,13 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
             parallels.append(entry)
 
     # Exhaustive import sweep to catch callers FAISS ranking missed
-    for file_path in {d['file'] for d in doc_store.docs.values()}:
-        if file_path in seen_files: continue
+    for file_path in sorted(importers - seen_files):
+        if file_path not in texts: continue     # an edge left by a file no longer indexed
         norm_path = file_path.lower().replace('\\', '/')
         if norm_anchor in norm_path: continue
-        file_full = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
-        if not re.search(rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]", file_full, re.IGNORECASE | re.DOTALL):
-            continue
         seen_files.add(file_path)
-        rep_doc = next(d for d in doc_store.docs.values() if d['file'] == file_path)
-        snippet = rep_doc['text'][:120].replace('\n', ' ').strip() + "..."
+        file_full = texts[file_path]
+        snippet = file_full[:120].replace('\n', ' ').strip() + "..."
         entry = f"- {file_path}\n  [Snippet]: {snippet}\n\n"
         if symbol in file_full:
             callers.append(entry)
