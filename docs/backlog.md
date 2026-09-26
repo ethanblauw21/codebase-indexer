@@ -58,6 +58,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-033](#b-033) | Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place | daemon queue review, 2026-09-25 | M | shaped |
 | [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | raw |
 | [B-035](#b-035) | A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever | chunk-shape study, 2026-09-25 | S | shaped |
+| [B-036](#b-036) | A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it | PR test-merge, 2026-09-25 | S | shaped |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -972,3 +973,32 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 `.tmp` left by a killed save must not be loaded.
 
 **Depends on:** none. Related: B-033 (the same row/vector disagreement from two writers), ADR-031.
+
+<a id="b-036"></a>
+### B-036 — A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it
+
+**Source:** found while test-merging PRs #40–#43, 2026-09-25 · **Status:** shaped · **Size:** S
+
+- **The break.** `pyproject.toml` and `requirements.txt` ask for `mcp[cli]` with no version. mcp 2.0
+  renamed `FastMCP` (`mcp.server.fastmcp` is gone), so on a fresh install `src/MCPServer.py:4` raises
+  `ModuleNotFoundError`. The server never starts. Local machines work only because they already have
+  1.x installed (1.28.1 here). mcp 2.2.0 was the latest on 2026-09-25.
+- **Who hits it.** Anyone who installs the repo from GitHub, which is one of the project's two uses.
+- **Why nobody saw it.**
+  - CI's "Run pytest" step has `continue-on-error: true` (ADR-004 made it non-blocking; the job gates
+    on the mutation score), and it pipes into `tee` under `bash -e` with no `pipefail`.
+  - Master's run on 0f39e44 (Actions run 36191999364) stopped at collection with
+    `Interrupted: 2 errors during collection` (`test_search_budget.py`, `test_verdict_edge_evidence.py`,
+    both of which import `MCPServer`). No test ran, and the check was green.
+  - PR #40's run showed a third error, a real syntax error in its own new test (fixed in 707f709), and
+    was green too.
+
+**Fix:**
+1. Pin `mcp[cli]>=1.28,<2` in both `pyproject.toml` and `requirements.txt`. Porting to 2.x is its own
+   item.
+2. Make a pytest collection error fail the job. Collection errors mean no test ran, which is not a
+   score to be advisory about. Keep test failures advisory if ADR-004 still wants that.
+   `pytest --co -q` as its own blocking step does this without changing ADR-004's gate.
+3. Add `set -o pipefail` (or `shell: bash`) to any step that pipes into `tee`.
+
+**Depends on:** none. It should land before anyone is pointed at the repo to install it.
