@@ -146,6 +146,39 @@ checkout and in CI.
 - **Announcement moved:** a queued run used to print "Change detected — running" while it was still
   waiting for the lock. It now prints once it holds the lock (331d647).
 
+**2026-09-25, per-save timing** (`gpu-crash-repro/watchdog_timing.py`,
+`telemetry/watchdog_timing_adr036_pqueue.json`). This is the daemon baseline's step 4.
+- **Setup:** this branch at 0d61623, launched over stdio as above, on a scratch copy of p-queue.
+  Summaries on and models in-process, as shipped (bge-code-v1 bf16, Qwen2.5-Coder-1.5B fp16), on
+  the RTX PRO 1000.
+- **Method:** each edit appends one comment line and waits for `Reindex complete`. Edits are 10 s
+  apart, 5 per file. The time runs from the write to the log line, so it includes the 3 s debounce.
+- **Results:**
+
+| File | Bytes | Median | All five |
+|---|---|---|---|
+| first save (full index of p-queue) | | 166.5 s | one run |
+| `source/queue.ts` (small) | 556 | 14.6 s | 14.9, 14.6, 14.8, 13.1, 14.3 |
+| `source/priority-queue.ts` (medium) | 3,916 | 13.6 s | 15.2, 13.6, 13.5, 13.5, 13.7 |
+| `source/index.ts` (large) | 27,660 | 21.7 s | 22.0, 21.7, 23.6, 21.1, 21.2 |
+
+- **Small and medium files cost the same,** about 14 s. The log shows the fixed part of every run:
+  - the 3 s debounce;
+  - the scan and diff;
+  - Pass 1, which spawns the summarizer worker and loads Qwen2.5-Coder-1.5B ("first run only" is
+    printed on every save, because two-pass summarization unloads it after each run);
+  - Pass 2, which loads the embedder;
+  - then save and reload.
+  The run has no per-step timestamps, so the split between these steps is not measured.
+- **The large file does more work on each save.** An appended line changes only the last tier-2
+  and tier-3 slice, so 2 texts are summarized. But all 59 of the file's chunks are embedded again,
+  code and summary vectors both (B-034), and its 4,000-token slice is a longer summary prompt.
+  Those are the likely sources of the extra ~8 s, not separated here.
+- **ADR-028's host would remove the model loads,** since it keeps models warm between runs. That
+  is the obvious next measurement.
+- **Verdict:** a save is searchable 14–22 s later on this machine. Not instant, but well inside
+  what an agent session notices.
+
 **2026-09-25, MCP Inspector** (`gpu-crash-repro/telemetry/inspector_036/`). The server ran as shipped
 on this branch, with `main()` doing the stdio setup, against a scratch p-queue index.
 - **`tools/list --strict`:** exits 0.
