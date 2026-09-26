@@ -2118,9 +2118,8 @@ def _utf8_stdio() -> None:
     A client that launches this server over stdio on Windows gives it pipes, and a
     pipe's text encoding is the ANSI code page (cp1252), not UTF-8. The indexer's
     first line is a "━━" banner, so every watchdog reindex died on its first print
-    with UnicodeEncodeError. The protocol itself is unaffected: FastMCP writes it
-    through its own UTF-8 wrapper over the same buffer. Line buffering keeps each
-    of our lines whole, so none can land in the middle of a protocol message.
+    with UnicodeEncodeError. The protocol is unaffected: it has its own UTF-8
+    writer on a private copy of the pipe (see _claim_stdout).
     """
     import sys
     for stream in (sys.stdout, sys.stderr):
@@ -2160,11 +2159,49 @@ def _detach_stdin() -> None:
                                  encoding="utf-8", errors="replace")
 
 
+def _claim_stdout():
+    """Keep stdout for the protocol alone; everything else goes to stderr (B-039).
+
+    The MCP spec says a stdio server must not write anything to stdout that is not
+    a protocol message. The tools print progress, a watchdog reindex prints its
+    whole log, and a child process (the summarizer's worker, git) inherits stdout.
+    All of it reached the client as lines that are not JSON-RPC, and the Python
+    client logged a validation error for each one.
+
+    The protocol gets a private, non-inheritable copy of the pipe, and fd 1 (and
+    with it the process's standard output handle) becomes stderr, the channel the
+    spec gives servers for logging. print() and children then write there with no
+    change to them. Returns the protocol's writer, or None to leave stdout alone.
+    """
+    import io
+    import sys
+    try:
+        sys.stdout.flush()
+        fd = os.dup(1)
+        os.dup2(2, 1)
+    except OSError:
+        return None     # no usable stdout/stderr; let the transport use sys.stdout
+    return io.TextIOWrapper(io.BufferedWriter(io.FileIO(fd, "wb")), encoding="utf-8")
+
+
+async def _serve_stdio(protocol_out) -> None:
+    """FastMCP.run_stdio_async, with the protocol written to ``protocol_out``."""
+    import anyio
+    from mcp.server.stdio import stdio_server
+    stdout = anyio.wrap_file(protocol_out) if protocol_out is not None else None
+    async with stdio_server(stdout=stdout) as (read_stream, write_stream):
+        await mcp._mcp_server.run(
+            read_stream, write_stream, mcp._mcp_server.create_initialization_options()
+        )
+
+
 def main() -> None:
+    import anyio
     _utf8_stdio()
     _detach_stdin()
+    protocol_out = _claim_stdout()
     start_watchdog()
-    mcp.run()
+    anyio.run(_serve_stdio, protocol_out)
 
 
 if __name__ == "__main__":
