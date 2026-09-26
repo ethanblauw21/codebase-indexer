@@ -196,8 +196,12 @@ class MultiIndexManager:
         return index
 
     def save_all(self):
-        for name, index in self.indexes.items():
-            faiss.write_index(index, os.path.join(self.base_dir, f"{name}.faiss"))
+        # ADR-037: the summary index goes first. A kill part-way through then leaves some
+        # tier index old, which the next run's reconcile sees as chunks with no vector and
+        # re-indexes, summary vectors included. The other order could lose summary vectors
+        # unseen, because reconcile cannot know which chunks should have one.
+        for name in sorted(self.indexes, key=lambda n: n != "summary"):
+            faiss.write_index(self.indexes[name], os.path.join(self.base_dir, f"{name}.faiss"))
 
 class DocumentStore:
     """In-memory chunk-payload cache backed by the SQLite `chunks` table.

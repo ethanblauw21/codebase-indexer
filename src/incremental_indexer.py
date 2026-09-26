@@ -512,6 +512,66 @@ def purge_stale_vectors(
 
 
 # ---------------------------------------------------------------------------
+# Row/vector reconciliation (ADR-037)
+# ---------------------------------------------------------------------------
+
+def _index_ids(index: faiss.Index) -> Optional[set[int]]:
+    """The ids an IndexIDMap holds, or None for an index type without an id map."""
+    id_map = getattr(index, "id_map", None)
+    if id_map is None:
+        return None
+    return set(faiss.vector_to_array(id_map).tolist())
+
+
+def reconcile_vectors(
+    db:            CodeDB,
+    faiss_indexes: dict[str, faiss.Index],
+    doc_store:     DocumentStore,
+) -> tuple[list[str], int]:
+    """
+    Compare every tier index with the chunk rows, and repair what a killed run left.
+
+    SQLite rows are committed per file during a run, but FAISS is saved only at the
+    end, so a kill in between leaves rows with no vectors. MD5 diffing then skips
+    those files forever (B-035). The reverse also happens: rows deleted and committed,
+    their vectors removed only in memory, and the old vectors still on disk.
+
+    Returns (files with a chunk that has no tier vector, number of surplus ids removed).
+    The caller re-indexes the files. Only tier indexes are checked for missing ids:
+    each chunk row has exactly one tier vector (ADR-031), while a summary vector exists
+    only if summarization was on when the chunk was indexed.
+    """
+    rows = db._conn.execute(
+        "SELECT c.scope, c.tier, f.path FROM chunks c JOIN files f ON f.id = c.file_id"
+    ).fetchall()
+    expected: dict[str, dict[int, str]] = {name: {} for name, _, _ in TIER_CONFIGS}
+    for scope, tier_num, path in rows:
+        name = TIER_NAME[tier_num]
+        expected[name][stable_id(name, path, scope)] = path
+
+    missing_files: set[str] = set()
+    surplus: set[int] = set()
+    for name, _, _ in TIER_CONFIGS:
+        index = faiss_indexes.get(name)
+        actual = _index_ids(index) if index is not None else None
+        if actual is None:
+            continue
+        missing_files.update(p for sid, p in expected[name].items() if sid not in actual)
+        surplus.update(actual - expected[name].keys())
+
+    summary_index = faiss_indexes.get(SUMMARY_INDEX)
+    summary_ids = _index_ids(summary_index) if summary_index is not None else None
+    if summary_ids:
+        all_expected = set().union(*(e.keys() for e in expected.values()))
+        surplus.update(summary_ids - all_expected)
+
+    n_removed = 0
+    if surplus:
+        n_removed = purge_stale_vectors(faiss_indexes, doc_store, to_faiss_ids(sorted(surplus)))
+    return sorted(missing_files), n_removed
+
+
+# ---------------------------------------------------------------------------
 # Project-descriptor ingest: parse edges only — no chunking or embedding
 # ---------------------------------------------------------------------------
 
@@ -918,6 +978,18 @@ def run_incremental(
     if _guard_msg:
         print(_guard_msg)
 
+    # ADR-037: a run killed before its FAISS save leaves rows with no vectors, which the
+    # MD5 diff would skip forever, and vectors whose rows it had already deleted. Files
+    # missing a vector are re-indexed as modified; surplus vectors are removed now.
+    _missing, _n_surplus = reconcile_vectors(db, faiss_indexes, doc_store)
+    _in_diff = set(diff.new) | set(diff.modified) | set(diff.deleted)
+    _heal = [p for p in _missing if p not in _in_diff and p in disk_hashes]
+    if _heal:
+        diff = diff._replace(modified=diff.modified + _heal)
+    if _heal or _n_surplus:
+        print(f"  [reconcile] {len(_heal)} file(s) had chunks with no vector and will be "
+              f"re-indexed; {_n_surplus} vector(s) with no chunk row removed.")
+
     # B-029: a fresh build (nothing indexed yet) is the only run that makes every
     # chunk come from this chunker, so it is the only run that records the version,
     # and only once it has finished. A build killed midway leaves no marker.
@@ -939,6 +1011,8 @@ def run_incremental(
 
     n_changed = len(diff.new) + len(diff.modified) + len(diff.deleted)
     if n_changed == 0:
+        if _n_surplus:
+            index_manager.save_all()
         print("Nothing changed — index is up to date.")
         # ADR-025 §4: still record that we verified the index against this HEAD at
         # this time. The early return fires only AFTER scan_disk hashed every file
@@ -961,6 +1035,17 @@ def run_incremental(
         n_removed = purge_stale_vectors(faiss_indexes, doc_store, stale_ids)
         print(f"  Purged {n_removed} stale vector IDs ({len(stale_paths)} file(s)).")
 
+    # ADR-037: a healed file's content did not change, so it keeps its ADR-025 stamps.
+    _healed_stamps: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    if _heal:
+        _ph = ",".join("?" * len(_heal))
+        _healed_stamps = {
+            p: (cc, au) for p, cc, au in db._conn.execute(
+                f"SELECT path, content_changed_at, authored_at FROM files WHERE path IN ({_ph})",
+                _heal,
+            )
+        }
+
     for path in stale_paths:
         db.delete_file(path)
 
@@ -976,6 +1061,8 @@ def run_incremental(
     _new_set = set(diff.new)
 
     def _content_stamp(rel: str) -> tuple[Optional[str], Optional[str]]:
+        if rel in _healed_stamps:
+            return _healed_stamps[rel]
         committer, author = _git_times.get(rel, (None, None))
         if rel in _new_set:
             # First index of this path → back-date. Rules, in order:
