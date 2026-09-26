@@ -48,7 +48,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
 | [B-022](#b-022) | The summarizer runs one chunk at a time on the GPU | GPU baseline session, 2026-09-24 | M | **promoted → ADR-027** |
 | [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | Stage 1 promoted → ADR-034 |
-| [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L | raw |
+| [B-027](#b-027) | Whole-file chunks are 512-token-blind slices, so file-level retrieval rests on their summaries | same grill + jury, 2026-09-25 | L → M (outline idea measured and rejected) | raw |
 | [B-028](#b-028) | Symbols that share an FQN leave ghost vectors: FAISS holds vectors whose text the database no longer has | jury review, counted 2026-09-25 | S | promoted → ADR-031 |
 | [B-029](#b-029) | Parser and chunker changes never reach existing indexes: incremental re-indexing keys only on file content | jury review, 2026-09-25 | S–M | promoted → ADR-033 |
 | [B-030](#b-030) | MCP search output stops at the first chunk that does not fit the token budget | jury review, 2026-09-25 | S | promoted → ADR-032 |
@@ -57,6 +57,8 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-032](#b-032) | A save during a running watchdog reindex starts a second reindex in parallel | daemon queue review, 2026-09-25 | S | promoted → [ADR-036](adr/ADR-036-one-reindex-at-a-time.md) |
 | [B-033](#b-033) | Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place | daemon queue review, 2026-09-25 | M | shaped |
 | [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | raw |
+| [B-035](#b-035) | A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever | chunk-shape study, 2026-09-25 | S | shaped |
+| [B-036](#b-036) | A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it | PR test-merge, 2026-09-25 | S | shaped |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -377,6 +379,8 @@ that make it the *second* step, not the first:
   landing it.
 - It is an optimization of a decision that has not been made yet — see [B-011](#b-011), which may
   change what tier membership is *for*.
+- **Keep the gate to identical text.** Dropping tier 3 for every file costs whole-file MRR −0.065\*
+  on dev and −0.088\* on held-out (the chunk-shape study, `t2only`, 2026-09-25).
 
 ---
 
@@ -740,6 +744,20 @@ Verification 3).
 - `file_chunk_weight` 0.75 still trades +0.03 to +0.04 on symbol questions for −0.28 on file
   whole, so the trade is confirmed with 40 file questions.
 
+**Measured 2026-09-25, chunk-shape study** ([study](study-chunk-shape-and-embedder.md), on
+`master` 0f39e44 with ADR-034, so it is on B-026 Stage 1's baseline). Dev and held-out repos:
+- **The outline idea is measured and rejected.** An outline per file in place of the slices loses
+  whole-file MRR −0.24\* on dev and −0.17\* on held-out. Adding each symbol's doc sentence changes
+  nothing. Beside the slices, it adds nothing.
+- **Both slice tiers carry weight.** Dropping tier 3 costs whole-file −0.065\* (dev) and −0.088\*
+  (held-out). Dropping tier 2 costs −0.115\* and −0.088\*.
+- **512-token slices** (readable whole) cost intent questions −0.055\*, and their file gain is
+  not significant.
+- **Tier 1:** 500 tokens stays; 1,000 costs symbol questions −0.036\*, and 300 gains nothing
+  significant.
+- **What is left of this item:** test-file blocks (not built: needs the FQN decision above) and a
+  file-level sparse signal. The shipped slices are the baseline either must beat.
+
 **Depends on:** B-026 Stage 1 shipped and gated, with its numbers as the baseline, and B-029.
 Related: B-010.
 
@@ -917,5 +935,70 @@ again, in every tier.
    - That is the unmerged `feature/adr-029-position-independent-summary-key` branch's territory, and
      B-027's (whole-file chunk shape).
    - A structural outline chunk (B-027) would make this item mostly disappear for tiers 2 and 3.
+     **Measured 2026-09-25: the outline loses whole-file retrieval (−0.24\*) and is rejected**
+     ([study](study-chunk-shape-and-embedder.md)), so the slices stay and this route is closed.
 
 **Depends on:** B-027 for tiers 2 and 3. Tier 1 can go alone.
+
+<a id="b-035"></a>
+### B-035 — A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever
+
+**Source:** chunk-shape study, 2026-09-25 (a killed fp32 build) · **Status:** shaped · **Size:** S
+
+`run_incremental` writes each file's chunk rows and its MD5 to SQLite as it goes (`upsert_file`
+commits per file; see the comment at `incremental_indexer.py:1060`). The FAISS indexes are written
+once, by `save_all` at the end (`:1062`).
+- **If the process dies in between, the rows survive and the vectors don't.**
+- **The next run's diff sees those files as unchanged,** by MD5, and skips them. Their chunks
+  never get vectors, and nothing repairs them short of a full rebuild.
+- **Seen for real:** the study's fp32 build of click was killed mid-run. The rebuild in the same
+  directory ended with 1,577 chunk rows but 17% fewer tier-1 vectors. 8 of 15 click file questions
+  then found nothing in the top 50, which looked like a model regression (−0.21 MRR) until the
+  vectors were counted.
+- **Why it matters now:** the watchdog daemon runs reindexes in the background of an MCP server.
+  Closing Claude Code, a crash or a reboot during a run is ordinary, not exceptional. With
+  summaries on, a first index of a project takes minutes, which is a wide window.
+- **Detection exists:** `index_status` prints `MISMATCH — rebuild the index` when a tier's vector
+  count differs from its chunk rows (`MCPServer.py:1450`). Nothing acts on it.
+
+**Fix options:**
+1. **Reconcile at the start of every run.** Compare each tier's FAISS ids with the chunk ids.
+   Any file with a chunk that has no vector joins the diff as modified. This is cheap, and it
+   heals indexes that are already damaged.
+2. **Stamp the MD5 only after the save.** Write rows as now, and record each file's MD5 only after
+   `save_all` succeeds. A killed run then retries those files. It does not heal existing damage.
+3. **Save FAISS periodically** during long runs. This narrows the window without closing it.
+
+Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's atomic saves: a
+`.tmp` left by a killed save must not be loaded.
+
+**Depends on:** none. Related: B-033 (the same row/vector disagreement from two writers), ADR-031.
+
+<a id="b-036"></a>
+### B-036 — A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it
+
+**Source:** found while test-merging PRs #40–#43, 2026-09-25 · **Status:** shaped · **Size:** S
+
+- **The break.** `pyproject.toml` and `requirements.txt` ask for `mcp[cli]` with no version. mcp 2.0
+  renamed `FastMCP` (`mcp.server.fastmcp` is gone), so on a fresh install `src/MCPServer.py:4` raises
+  `ModuleNotFoundError`. The server never starts. Local machines work only because they already have
+  1.x installed (1.28.1 here). mcp 2.2.0 was the latest on 2026-09-25.
+- **Who hits it.** Anyone who installs the repo from GitHub, which is one of the project's two uses.
+- **Why nobody saw it.**
+  - CI's "Run pytest" step has `continue-on-error: true` (ADR-004 made it non-blocking; the job gates
+    on the mutation score), and it pipes into `tee` under `bash -e` with no `pipefail`.
+  - Master's run on 0f39e44 (Actions run 36191999364) stopped at collection with
+    `Interrupted: 2 errors during collection` (`test_search_budget.py`, `test_verdict_edge_evidence.py`,
+    both of which import `MCPServer`). No test ran, and the check was green.
+  - PR #40's run showed a third error, a real syntax error in its own new test (fixed in 707f709), and
+    was green too.
+
+**Fix:**
+1. Pin `mcp[cli]>=1.28,<2` in both `pyproject.toml` and `requirements.txt`. Porting to 2.x is its own
+   item.
+2. Make a pytest collection error fail the job. Collection errors mean no test ran, which is not a
+   score to be advisory about. Keep test failures advisory if ADR-004 still wants that.
+   `pytest --co -q` as its own blocking step does this without changing ADR-004's gate.
+3. Add `set -o pipefail` (or `shell: bash`) to any step that pipes into `tee`.
+
+**Depends on:** none. It should land before anyone is pointed at the repo to install it.
