@@ -1016,7 +1016,7 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     Internally runs the full Retrieve-Traverse-Rerank pipeline:
       1. Semantic Search  — FAISS tier-1 index, top-50 by cosine similarity.
       2. Graph Expansion  — one-hop call-graph traversal via SQLite for top-5 seeds.
-      3. CrossEncoder Reranking — jina-reranker-v2-base-code scores every candidate.
+      3. Ranking — Reciprocal Rank Fusion; a reranker model only when enabled in indexer.toml.
 
     When deep=True, runs up to 3 iterative retrieval rounds with explored-node memory
     and query enrichment from prior evidence, stopping early when the score plateau
@@ -1063,16 +1063,19 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
         sections[rel_map[rel]].append(chunk)
 
     # --- Build Markdown report ---
+    # Say what actually ranked the results: reranking is off by default (ADR-007),
+    # and an enabled reranker that fails to load falls back to RRF.
+    retriever = _get_hybrid_retriever()
+    reranked = retriever._reranker_enabled and not retriever._reranker_failed
+    rank_step = f"Reranking ({retriever._reranker_model_id})" if reranked else "RRF Fusion"
     pipeline_label = (
-        "Iterative Semantic Search → Graph Expansion → CrossEncoder Reranking"
-        if deep else
-        "Semantic Search → Graph Expansion → CrossEncoder Reranking"
+        f"{'Iterative ' if deep else ''}Semantic Search → Graph Expansion → {rank_step}"
     )
     header_lines: list[str] = [
         f"# Architectural Investigation: `{target_concept}`",
         "",
         f"> **Pipeline**: {pipeline_label}  ",
-        f"> **Results**: {len(chunks)} candidates retrieved and reranked.",
+        f"> **Results**: {len(chunks)} candidates retrieved and {'reranked' if reranked else 'ranked'}.",
     ]
     if session is not None:
         header_lines.append(
