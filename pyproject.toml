@@ -22,7 +22,7 @@ dependencies = [
     "tree-sitter-javascript",
     "tree-sitter-c-sharp",
     "tree-sitter-cpp",
-    "mcp[cli]",
+    "mcp[cli]>=1.28,<2",  # 2.x removed mcp.server.fastmcp (B-036)
     "watchdog",
     "textual",
     "rich",
