@@ -1,0 +1,1352 @@
+{
+ "orig": {
+  "p-queue/pq-add": {
+   "sym": 0.16666666666666666,
+   "rank": 6
+  },
+  "p-queue/pq-add-all": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-pause": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-on-idle": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-concurrency": {
+   "sym": 0.0,
+   "rank": 0
+  },
+  "p-queue/pq-lowerbound": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-setpriority": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-dequeue": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "p-queue/pq-start": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-clear": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-remove": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-on-empty": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "p-queue/pq-saturated": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-sizeby": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-running-tasks": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "p-queue/pq-on-size-less-than": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq2-constructor": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq2-pending": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "p-queue/pq2-is-paused": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq2-on-error": {
+   "sym": 0.0,
+   "rank": 14
+  },
+  "p-queue/pq2-on-pending-zero": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq2-is-rate-limited": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq2-filter": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq2-enqueue": {
+   "sym": 0.0,
+   "rank": 12
+  },
+  "zustand/zus-create-store": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-use-store": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-persist": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-devtools": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "zustand/zus-combine": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-subscribe-selector": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-shallow": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-json-storage": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-use-shallow": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-redux": {
+   "sym": 0.2,
+   "rank": 5
+  },
+  "zustand/zus-immer": {
+   "sym": 0.16666666666666666,
+   "rank": 6
+  },
+  "zustand/zus-use-store-equality-fn": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-create-impl": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-ssr-safe": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-compare-entries": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-to-thenable": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-compare-iterables": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-store-api": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-state-creator": {
+   "sym": 0.0,
+   "rank": 13
+  },
+  "zustand/zus2-extract-state": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-parse-json": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-find-caller": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-extract-connection": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-is-iterable": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-has-iterable-entries": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-persist-options": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus2-state-storage": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "click/click-echo": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click-prompt": {
+   "sym": 0.1111111111111111,
+   "rank": 9
+  },
+  "click/click-progressbar": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click-confirm": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "click/click-option-decorator": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-argument-decorator": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-command": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-group": {
+   "sym": 0.0,
+   "rank": 15
+  },
+  "click/click-option-class": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click-secho": {
+   "sym": 0.1,
+   "rank": 10
+  },
+  "click/click-get-current-context": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-version-option": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-style": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-choice-type": {
+   "sym": 0.14285714285714285,
+   "rank": 7
+  },
+  "click/click-intrange-type": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-launch": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "click/click-bad-parameter": {
+   "sym": 0.0,
+   "rank": 0
+  },
+  "click/click-split-arg-string": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click2-context-invoke": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click2-context-forward": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click2-parameter-base": {
+   "sym": 0.0,
+   "rank": 18
+  },
+  "click/click2-argument-class": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click2-path-type": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click2-file-type": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "click/click2-command-decorator": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "click/click2-password-option": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click2-echo-via-pager": {
+   "sym": 0.2,
+   "rank": 5
+  },
+  "click/click2-getchar": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click2-usage-error": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "click/click2-missing-parameter": {
+   "sym": 0.0,
+   "rank": 32
+  },
+  "click/click2-help-formatter": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "click/click2-cli-runner": {
+   "sym": 0.0,
+   "rank": 34
+  },
+  "lru-cache/lru-sym-01": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "lru-cache/lru-sym-02": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-03": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-06": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "lru-cache/lru-sym-07": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "lru-cache/lru-sym-08": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "lru-cache/lru-sym-09": {
+   "sym": 0.16666666666666666,
+   "rank": 6
+  },
+  "lru-cache/lru-sym-10": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "lru-cache/lru-sym-11": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-12": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-13": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-15": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-16": {
+   "sym": 0.0,
+   "rank": 14
+  },
+  "lru-cache/lru-sym-17": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-18": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-19": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-sym-20": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-01": {
+   "sym": 0.0,
+   "rank": 0
+  },
+  "bullmq/bmq-sym-02": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-03": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "bullmq/bmq-sym-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-06": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-07": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-08": {
+   "sym": 0.1,
+   "rank": 10
+  },
+  "bullmq/bmq-sym-09": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-10": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-11": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "bullmq/bmq-sym-12": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "bullmq/bmq-sym-13": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-15": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-16": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "bullmq/bmq-sym-17": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-18": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-sym-19": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "bullmq/bmq-sym-20": {
+   "sym": 0.5,
+   "rank": 2
+  }
+ },
+ "intent": {
+  "p-queue/pq-intent-01": {
+   "sym": 0.0,
+   "rank": 16
+  },
+  "p-queue/pq-intent-02": {
+   "sym": 0.0,
+   "rank": 13
+  },
+  "p-queue/pq-intent-03": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-05": {
+   "sym": 0.0,
+   "rank": 0
+  },
+  "p-queue/pq-intent-06": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "p-queue/pq-intent-07": {
+   "sym": 0.14285714285714285,
+   "rank": 7
+  },
+  "p-queue/pq-intent-08": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-09": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-10": {
+   "sym": 0.0,
+   "rank": 28
+  },
+  "p-queue/pq-intent-11": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-12": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-13": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-15": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-v2-01": {
+   "sym": 0.0,
+   "rank": 12
+  },
+  "p-queue/pq-intent-v2-02": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-v2-03": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "p-queue/pq-intent-v2-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-v2-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-v2-06": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-v2-07": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-v2-08": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "p-queue/pq-intent-v2-09": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "p-queue/pq-intent-v2-10": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-01": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-02": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-intent-03": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-04": {
+   "sym": 0.0,
+   "rank": 12
+  },
+  "zustand/zus-intent-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-06": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "zustand/zus-intent-07": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-08": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "zustand/zus-intent-09": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-10": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-11": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-12": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-13": {
+   "sym": 0.125,
+   "rank": 8
+  },
+  "zustand/zus-intent-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-15": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-16": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-17": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-intent-18": {
+   "sym": 0.0,
+   "rank": 12
+  },
+  "zustand/zus-intent-19": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-20": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-01": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-02": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-intent-v2-03": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-intent-v2-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-06": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-07": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-intent-v2-08": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-09": {
+   "sym": 0.0,
+   "rank": 32
+  },
+  "zustand/zus-intent-v2-10": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-11": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "zustand/zus-intent-v2-12": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "zustand/zus-intent-v2-13": {
+   "sym": 0.16666666666666666,
+   "rank": 6
+  },
+  "zustand/zus-intent-v2-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "zustand/zus-intent-v2-15": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click-intent-01": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click-intent-02": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-03": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-06": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click-intent-07": {
+   "sym": 0.0,
+   "rank": 15
+  },
+  "click/click-intent-08": {
+   "sym": 0.0,
+   "rank": 17
+  },
+  "click/click-intent-09": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-10": {
+   "sym": 0.2,
+   "rank": 5
+  },
+  "click/click-intent-11": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "click/click-intent-12": {
+   "sym": 0.0,
+   "rank": 18
+  },
+  "click/click-intent-13": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "click/click-intent-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-15": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-16": {
+   "sym": 0.0,
+   "rank": 24
+  },
+  "click/click-intent-17": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "click/click-intent-18": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-19": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-20": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "click/click-intent-v2-01": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-02": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-03": {
+   "sym": 0.2,
+   "rank": 5
+  },
+  "click/click-intent-v2-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-05": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "click/click-intent-v2-06": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-07": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-08": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-09": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-10": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-11": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "click/click-intent-v2-12": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "click/click-intent-v2-13": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "click/click-intent-v2-14": {
+   "sym": 0.14285714285714285,
+   "rank": 7
+  },
+  "click/click-intent-v2-15": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-01": {
+   "sym": 0.1111111111111111,
+   "rank": 9
+  },
+  "lru-cache/lru-intent-02": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-03": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "lru-cache/lru-intent-04": {
+   "sym": 0.1111111111111111,
+   "rank": 9
+  },
+  "lru-cache/lru-intent-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-06": {
+   "sym": 0.0,
+   "rank": 14
+  },
+  "lru-cache/lru-intent-07": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-08": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-09": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-10": {
+   "sym": 0.2,
+   "rank": 5
+  },
+  "lru-cache/lru-intent-11": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-12": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-13": {
+   "sym": 0.1,
+   "rank": 10
+  },
+  "lru-cache/lru-intent-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-15": {
+   "sym": 0.25,
+   "rank": 4
+  },
+  "lru-cache/lru-intent-16": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-17": {
+   "sym": 0.3333333333333333,
+   "rank": 3
+  },
+  "lru-cache/lru-intent-18": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-19": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "lru-cache/lru-intent-20": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-01": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-02": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-03": {
+   "sym": 0.0,
+   "rank": 29
+  },
+  "bullmq/bmq-intent-04": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-05": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-06": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "bullmq/bmq-intent-07": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "bullmq/bmq-intent-08": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-09": {
+   "sym": 0.16666666666666666,
+   "rank": 6
+  },
+  "bullmq/bmq-intent-10": {
+   "sym": 0.5,
+   "rank": 2
+  },
+  "bullmq/bmq-intent-11": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-12": {
+   "sym": 0.0,
+   "rank": 12
+  },
+  "bullmq/bmq-intent-13": {
+   "sym": 0.1,
+   "rank": 10
+  },
+  "bullmq/bmq-intent-14": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-15": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-16": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-17": {
+   "sym": 0.0,
+   "rank": 15
+  },
+  "bullmq/bmq-intent-18": {
+   "sym": 0.0,
+   "rank": 12
+  },
+  "bullmq/bmq-intent-19": {
+   "sym": 1.0,
+   "rank": 1
+  },
+  "bullmq/bmq-intent-20": {
+   "sym": 0.5,
+   "rank": 2
+  }
+ },
+ "file": {
+  "p-queue/pq-file-01": {
+   "any": 1.0,
+   "whole": 0.2,
+   "rank_any": 1,
+   "rank_whole": 5
+  },
+  "p-queue/pq-file-02": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "p-queue/pq-file-03": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "p-queue/pq-file-04": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "p-queue/pq-file-05": {
+   "any": 0.5,
+   "whole": 0.5,
+   "rank_any": 2,
+   "rank_whole": 2
+  },
+  "p-queue/pq-file-v2-01": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "p-queue/pq-file-v2-02": {
+   "any": 1.0,
+   "whole": 0.3333333333333333,
+   "rank_any": 1,
+   "rank_whole": 3
+  },
+  "p-queue/pq-file-v2-03": {
+   "any": 0.5,
+   "whole": 0.5,
+   "rank_any": 2,
+   "rank_whole": 2
+  },
+  "p-queue/pq-file-v2-04": {
+   "any": 0.5,
+   "whole": 0.5,
+   "rank_any": 2,
+   "rank_whole": 2
+  },
+  "p-queue/pq-file-v2-05": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "zustand/zus-file-01": {
+   "any": 1.0,
+   "whole": 0.125,
+   "rank_any": 1,
+   "rank_whole": 8
+  },
+  "zustand/zus-file-02": {
+   "any": 0.5,
+   "whole": 0.3333333333333333,
+   "rank_any": 2,
+   "rank_whole": 3
+  },
+  "zustand/zus-file-03": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "zustand/zus-file-04": {
+   "any": 0.5,
+   "whole": 0.25,
+   "rank_any": 2,
+   "rank_whole": 4
+  },
+  "zustand/zus-file-05": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "zustand/zus-file-v2-01": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "zustand/zus-file-v2-02": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "zustand/zus-file-v2-03": {
+   "any": 0.5,
+   "whole": 0.5,
+   "rank_any": 2,
+   "rank_whole": 2
+  },
+  "zustand/zus-file-v2-04": {
+   "any": 0.5,
+   "whole": 0.5,
+   "rank_any": 2,
+   "rank_whole": 2
+  },
+  "zustand/zus-file-v2-05": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "zustand/zus-file-v2-06": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "zustand/zus-file-v2-07": {
+   "any": 1.0,
+   "whole": 0.16666666666666666,
+   "rank_any": 1,
+   "rank_whole": 6
+  },
+  "zustand/zus-file-v2-08": {
+   "any": 1.0,
+   "whole": 0.3333333333333333,
+   "rank_any": 1,
+   "rank_whole": 3
+  },
+  "zustand/zus-file-v2-09": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "zustand/zus-file-v2-10": {
+   "any": 1.0,
+   "whole": 0.25,
+   "rank_any": 1,
+   "rank_whole": 4
+  },
+  "click/click-file-01": {
+   "any": 1.0,
+   "whole": 0.16666666666666666,
+   "rank_any": 1,
+   "rank_whole": 6
+  },
+  "click/click-file-02": {
+   "any": 1.0,
+   "whole": 0.3333333333333333,
+   "rank_any": 1,
+   "rank_whole": 3
+  },
+  "click/click-file-03": {
+   "any": 1.0,
+   "whole": 0.0,
+   "rank_any": 1,
+   "rank_whole": 9
+  },
+  "click/click-file-04": {
+   "any": 0.25,
+   "whole": 0.25,
+   "rank_any": 4,
+   "rank_whole": 4
+  },
+  "click/click-file-05": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "click/click-file-v2-01": {
+   "any": 1.0,
+   "whole": 0.2,
+   "rank_any": 1,
+   "rank_whole": 5
+  },
+  "click/click-file-v2-02": {
+   "any": 1.0,
+   "whole": 0.25,
+   "rank_any": 1,
+   "rank_whole": 4
+  },
+  "click/click-file-v2-03": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "click/click-file-v2-04": {
+   "any": 1.0,
+   "whole": 0.14285714285714285,
+   "rank_any": 1,
+   "rank_whole": 7
+  },
+  "click/click-file-v2-05": {
+   "any": 1.0,
+   "whole": 0.16666666666666666,
+   "rank_any": 1,
+   "rank_whole": 6
+  },
+  "click/click-file-v2-06": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "click/click-file-v2-07": {
+   "any": 0.5,
+   "whole": 0.5,
+   "rank_any": 2,
+   "rank_whole": 2
+  },
+  "click/click-file-v2-08": {
+   "any": 1.0,
+   "whole": 0.16666666666666666,
+   "rank_any": 1,
+   "rank_whole": 6
+  },
+  "click/click-file-v2-09": {
+   "any": 1.0,
+   "whole": 0.25,
+   "rank_any": 1,
+   "rank_whole": 4
+  },
+  "click/click-file-v2-10": {
+   "any": 1.0,
+   "whole": 0.0,
+   "rank_any": 1,
+   "rank_whole": 13
+  },
+  "bullmq/bmq-file-01": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "bullmq/bmq-file-02": {
+   "any": 0.0,
+   "whole": 0.0,
+   "rank_any": 0,
+   "rank_whole": 0
+  },
+  "bullmq/bmq-file-03": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "bullmq/bmq-file-04": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  },
+  "bullmq/bmq-file-05": {
+   "any": 1.0,
+   "whole": 0.2,
+   "rank_any": 1,
+   "rank_whole": 5
+  },
+  "bullmq/bmq-file-06": {
+   "any": 1.0,
+   "whole": 0.3333333333333333,
+   "rank_any": 1,
+   "rank_whole": 3
+  },
+  "bullmq/bmq-file-07": {
+   "any": 1.0,
+   "whole": 1.0,
+   "rank_any": 1,
+   "rank_whole": 1
+  },
+  "bullmq/bmq-file-08": {
+   "any": 1.0,
+   "whole": 0.2,
+   "rank_any": 1,
+   "rank_whole": 5
+  },
+  "bullmq/bmq-file-09": {
+   "any": 0.5,
+   "whole": 0.5,
+   "rank_any": 2,
+   "rank_whole": 2
+  },
+  "bullmq/bmq-file-10": {
+   "any": 0.3333333333333333,
+   "whole": 0.3333333333333333,
+   "rank_any": 3,
+   "rank_whole": 3
+  },
+  "bullmq/bmq-file-11": {
+   "any": 1.0,
+   "whole": 0.25,
+   "rank_any": 1,
+   "rank_whole": 4
+  },
+  "bullmq/bmq-file-12": {
+   "any": 1.0,
+   "whole": 0.5,
+   "rank_any": 1,
+   "rank_whole": 2
+  }
+ }
+}
