@@ -1444,9 +1444,9 @@ def index_status(since: str = "1d") -> str:
     else:
         lines.append("last_indexed_commit: (none recorded)")
 
-    # B-028: each FAISS index must hold exactly one vector per chunk row. A surplus
-    # means vectors whose text the database has since replaced; only a rebuild
-    # removes them.
+    # B-028: each FAISS index must hold exactly one vector per chunk row. Since
+    # ADR-037 every reindex repairs a difference (a run killed before its save), so a
+    # mismatch that survives a reindex is a bug.
     _ensure_indexes()
     with CodeDB(db_path) as db:
         row_counts = dict(db._conn.execute(
@@ -1459,7 +1459,7 @@ def index_status(since: str = "1d") -> str:
         else:
             lines.append(
                 f"tier{tier_num}_vectors:       {idx.ntotal}  chunk rows: {rows_n}  "
-                "⚠️ MISMATCH — rebuild the index"
+                "⚠️ MISMATCH — the next reindex repairs it (ADR-037)"
             )
 
     lines.append(f"\nfiles with content changed since {cutoff}  ({len(rows)}):")
