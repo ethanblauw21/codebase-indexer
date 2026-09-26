@@ -1,6 +1,6 @@
 # ADR-028: One Local Model Host Owns the GPU, With One Queue for Embeds and Summaries
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-24
 **Branch:** `feature/adr-028-central-model-host` (rebased 2026-09-24 onto `feature/adr-027-summarizer-adaptive-batching` at 64a38be, the token-budget build)
 **Reviewer:** @edb
@@ -203,7 +203,7 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
 - [x] MCP Inspector run on the MCP server with the host enabled (the global CLAUDE.md rule for a changed MCP server). See Notes
 - [x] Verification 1, 2 and 6 on the GPU; 3 measured (the bound it gives is in Notes); 4 and 5 by the unit tests
 - [ ] Verification 4 on a real host: kill it mid-run and check the index still completes
-- [ ] Set status to `accepted` in the PR
+- [x] Set status to `accepted` in the PR
 
 **Notes:**
 
