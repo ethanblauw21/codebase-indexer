@@ -6,6 +6,8 @@ most one model on the card at a time:
 
 - Embeds are small and urgent. They always go first, and the embedder stays
   loaded for ``embed_idle_s`` after the last one because searches come in bursts.
+  Only a recent search holds summaries back; an indexing embed does not, because
+  the run that sent it is the one waiting for the summaries.
 - Summaries are large and can wait. The summarizer loads once the embedder is
   gone, drains every project's queue in one longest-first run through ADR-027's
   batching loop, and stops at the next batch boundary when an embed arrives
@@ -260,6 +262,7 @@ class HostScheduler:
         self._stopping = False
         self.loaded: str | None = None
         self._last_embed = float("-inf")
+        self._last_query = float("-inf")
         self._last_summary = float("-inf")
         self._last_work = clock()
         self.counters = {"embeds": 0, "embed_texts": 0, "summaries": 0,
@@ -350,8 +353,11 @@ class HostScheduler:
             # more often than embed_idle_s kept the embedder warm forever and summaries never ran
             # (ADR-028 log, first GPU run). Past it the summarizer loads, and a later search
             # preempts it at the next batch boundary instead.
+            # Only a search counts as a burst. After an indexing embed the summaries swap in at
+            # once: the watchdog's next save otherwise held ~45 s behind its own previous save's
+            # embeds (ADR-028 log, daemon timing).
             oldest = min(job.queued_at for job in jobs)
-            if (self.loaded == EMBEDDER and now - self._last_embed < self._embed_idle_s
+            if (self.loaded == EMBEDDER and now - self._last_query < self._embed_idle_s
                     and now - oldest < self._embed_idle_s):
                 return "hold"
             self._run_summaries(jobs)
@@ -384,6 +390,8 @@ class HostScheduler:
         self.counters["embeds"] += len(batch)
         self.counters["embed_texts"] += len(texts)
         self._last_embed = self._last_work = self._clock()
+        if batch[0].kind == "query":
+            self._last_query = self._last_embed
 
     def _run_summaries(self, jobs: list[_SummaryJob]) -> None:
         # One run over every project's pending texts. A text repeated within or

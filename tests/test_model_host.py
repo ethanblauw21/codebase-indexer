@@ -116,6 +116,26 @@ def test_steady_searches_cannot_hold_summaries_back_forever():
     assert s.result() == ["sum:a"]
 
 
+def test_an_indexing_embed_does_not_hold_summaries():
+    """Daemon timing (2026-09-25): each watchdog save's summaries held ~45 s behind the previous
+    save's index embeds, so a save took 61 s through the host against 14 s in-process. Only a
+    search is a burst worth protecting."""
+    b = FakeBackend()
+    sched, clock = make(b, embed_idle_s=10.0)
+    sched.submit_embed(["x"], "index")
+    sched.step()
+    clock.t = 1.0
+    s = sched.submit_summary(["a"])
+    assert sched.step() == "summarize"
+    assert s.result() == ["sum:a"]
+    # A search after that still holds the next job while the embedder is warm.
+    clock.t = 2.0
+    sched.submit_embed(["q"], "query")
+    assert sched.step() == "embed"
+    sched.submit_summary(["b"])
+    assert sched.step() == "hold"
+
+
 def test_an_embed_preempts_a_summary_run_at_the_next_batch_boundary():
     holder = {}
     b = FakeBackend(on_batch=lambda n: n == 2 and holder.setdefault(
