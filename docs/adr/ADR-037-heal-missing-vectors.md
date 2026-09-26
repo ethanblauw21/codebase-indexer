@@ -1,6 +1,6 @@
 # ADR-037: Every Run Heals Chunks That Have No Vector
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-037-heal-missing-vectors`
 **Reviewer:** @edb
