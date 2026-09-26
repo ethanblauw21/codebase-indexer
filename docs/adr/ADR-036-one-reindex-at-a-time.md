@@ -1,6 +1,6 @@
 # ADR-036: One Reindex at a Time, and a Watchdog Reindex That Runs Under an MCP Client
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-25
 **Branch:** `feature/adr-036-one-reindex-at-a-time`
 **Reviewer:** @edb
