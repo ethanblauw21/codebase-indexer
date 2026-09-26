@@ -79,13 +79,53 @@ save, not this.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] `reconcile_vectors()` and its call in `run_incremental`
-- [ ] `save_all` writes the summary index first
-- [ ] `index_status` message
-- [ ] Tests: a run killed before its save, then an ordinary run, gives vectors equal to chunk rows
-  in every tier, with search finding the healed file; surplus ids are removed; an intact index
-  reconciles to nothing; summaries off does not flag files
-- [ ] Suite
+- [x] `reconcile_vectors()` and its call in `run_incremental`
+- [x] `save_all` writes the summary index first
+- [x] `index_status` message
+- [x] Tests (`tests/test_heal_missing_vectors.py`, 5). Each drives `run_incremental` with a stubbed
+  embedder and kills a run by raising `KeyboardInterrupt` from `ingest_file`:
+  - A build killed before its save. Without the fix, tier 1 ends with 1 vector for 3 rows.
+  - A modify killed before its save. Without the fix, 4 vectors and 3 distinct ids for 3 rows: the
+    file's old vector comes back as a duplicate, a second bug B-035 had not named.
+  - A stray vector on an unchanged repo is removed and saved.
+  - An intact index with summaries off reconciles to nothing.
+  - `save_all` writes the summary index first.
+  - The four bug tests fail without the fix.
+- [x] Suite: 389 passed, 1 skipped. The 6 `test_adapter_snapshots` failures are the known worktree
+  path issue (they pass in the main checkout and CI).
+- [x] End to end on the GPU
+- [x] MCP Inspector
 
 **Notes:**
 <!-- 2026-09-25: branch cut from master (0f39e44). -->
+
+**2026-09-25, cost.** `reconcile_vectors` on a copy of a real 1,601-chunk index (bullmq, summaries
+on) takes 3 ms. It found nothing on the intact copy. After every tier-1 vector of two files was
+removed, it flagged exactly those two files.
+
+**2026-09-25, end to end** (`gpu-crash-repro/kill_heal_e2e.py`, results in
+`telemetry/kill_heal/`). A real `run_incremental` (GPU, summaries on, as shipped) on a scratch
+p-queue is killed hard (`TerminateProcess`) after pass 2 has ingested 5 of 14 files. The same run
+is then started again and left to finish.
+
+| After the kill and one ordinary run | tier 1 | tier 2 | tier 3 |
+|---|---|---|---|
+| `master` (vectors / chunk rows) | 24 / 94 | 30 / 40 | 15 / 21 |
+| this branch | 94 / 94 | 40 / 40 | 21 / 21 |
+
+- **`master`:** the resume indexes the 9 files it had not reached and skips the 5 it had. Their 70
+  tier-1 chunks stay unsearchable.
+- **This branch:** the resume prints `[reconcile] 5 file(s) had chunks with no vector and will be
+  re-indexed` and re-indexes them (Δ 9 new, 5 modified). It took 175 s against master's 164 s.
+- The harness first reported 0 vectors for both. It read the id map from a temporary index that
+  Python freed at once. It was fixed and the saved indexes recounted.
+
+**2026-09-25, MCP Inspector** (`gpu-crash-repro/telemetry/inspector_037/`). This branch's server
+ran on CPU against the scratch p-queue index.
+- `tools/list --strict` exits 0 and lists 13 tools. `index_status` answers, with vectors equal to
+  chunk rows in every tier.
+- **Found, not fixed here; both predate this branch:**
+  - No tool in `MCPServer.py` declares `readOnlyHint`.
+  - `index_status(since="notaduration")` returns a normal report with 0 changed files instead of
+    an error. `_parse_since` passes an unparsed value through as the cutoff, and SQLite compares
+    it as text.
