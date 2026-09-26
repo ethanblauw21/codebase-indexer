@@ -1460,8 +1460,20 @@ def index_status(since: str = "1d") -> str:
     if not os.path.exists(db_path):
         return "No index found — run reindex first."
 
-    def _parse_since(s: str) -> str:
-        """Relative window → absolute ISO cutoff; pass an ISO string through as-is."""
+    def _utc(ts: str) -> datetime | None:
+        """An ISO-8601 timestamp as an aware UTC datetime; naive means UTC."""
+        try:
+            dt = datetime.fromisoformat(ts.strip())
+        except ValueError:
+            return None
+        return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+    def _parse_since(s: str) -> datetime:
+        """A relative window ("7d", "12h", "30m") or an ISO-8601 timestamp → UTC cutoff.
+
+        Anything else is an error. It used to pass through as a text cutoff, so
+        since="garbage" reported "0 files changed" as if that were an answer.
+        """
         s = (s or "").strip()
         m = re.fullmatch(r"(\d+)\s*([dhm])", s)
         if m:
@@ -1471,22 +1483,32 @@ def index_status(since: str = "1d") -> str:
                 "h": timedelta(hours=n),
                 "m": timedelta(minutes=n),
             }[unit]
-            return (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return s
+            return datetime.now(timezone.utc) - delta
+        dt = _utc(s)
+        if dt is None:
+            raise ValueError(
+                f"since={s!r} is not a window like '7d', '12h', '30m' or an "
+                "ISO-8601 timestamp like '2026-07-15T00:00:00Z'"
+            )
+        return dt
 
-    cutoff = _parse_since(since)
+    cutoff_dt = _parse_since(since)
+    cutoff = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with CodeDB(db_path) as db:
         last_verified = db.meta_get("last_verified_at") or "(never recorded)"
         last_commit   = db.meta_get("last_indexed_commit")
         files_total   = db.meta_get("files_total") or "?"
         version_warning = chunker_version_warning(db)
-        rows = db._conn.execute(
-            "SELECT path, content_changed_at FROM files "
-            "WHERE content_changed_at IS NOT NULL AND content_changed_at > ? "
-            "ORDER BY content_changed_at DESC",
-            (cutoff,),
+        stamped = db._conn.execute(
+            "SELECT path, content_changed_at FROM files WHERE content_changed_at IS NOT NULL"
         ).fetchall()
+    # Compared as instants, not strings: stamps carry the committer's offset
+    # ("…T16:30:47-05:00") and a text comparison against a UTC cutoff was off by it.
+    recent = [(path, ts, _utc(ts)) for path, ts in stamped]
+    rows = [(path, ts) for path, ts, dt in sorted(
+        (r for r in recent if r[2] is not None and r[2] > cutoff_dt),
+        key=lambda r: r[2], reverse=True)]
 
     lines = [
         "--- INDEX STATUS ---",
