@@ -111,3 +111,57 @@ def test_anchor_is_not_its_own_importer(wired_db):
     texts = {"src/sheet.js": "// re-export\nexport * from './sheet';"}
     importers, _ = M._import_relations("sheet.js", texts)
     assert importers == set()
+
+
+@pytest.mark.parametrize("path, is_anchor", [
+    ("src/scan_policy.py", True),
+    ("SRC\Scan_Policy.py", True),
+    ("tests/test_scan_policy.py", False),     # a substring test called this the anchor
+    ("src/scan_policy.pyi", False),
+])
+def test_anchor_path_matches_the_whole_file_name(path, is_anchor):
+    assert M._is_anchor_path("scan_policy.py", path) is is_anchor
+
+
+def test_a_test_named_after_the_anchor_is_an_importer(wired_db):
+    """tests/test_scan_policy.py imports scan_policy: it is a dependent, not the anchor."""
+    _add_import(wired_db, "tests/test_scan_policy.py", "scan_policy")
+    texts = {"src/scan_policy.py": "", "tests/test_scan_policy.py": ""}
+    importers, _ = M._import_relations("scan_policy.py", texts)
+    assert importers == {"tests/test_scan_policy.py"}
+
+
+@pytest.fixture
+def stub_tools(wired_db, monkeypatch):
+    """The two tools over a stub doc store, with no model: `_search` returns `hits`."""
+    from types import SimpleNamespace
+    files = {"src/scan_policy.py": "def helper():\n    pass",
+             "tests/test_scan_policy.py": "import scan_policy\nscan_policy.helper()"}
+    monkeypatch.setattr(M, "doc_store", SimpleNamespace(docs={
+        i: {"file": f, "tier": "tier1_surgical", "scope": "Full File_part_1", "text": t}
+        for i, (f, t) in enumerate(files.items())}))
+    monkeypatch.setattr(M, "_ensure_indexes", lambda: None)
+    monkeypatch.setattr(M, "_caller_evidence", lambda s, a="": ([], []))
+    _add_import(wired_db, "tests/test_scan_policy.py", "scan_policy")
+    hits = []
+    monkeypatch.setattr(M, "_search", lambda q, top_n=10: hits)
+    return files, hits
+
+
+def test_dead_code_counts_a_test_named_after_the_anchor(stub_tools):
+    """A symbol whose only user is tests/test_scan_policy.py is referenced, not dead.
+    The substring test skipped that file as 'the defining file'."""
+    out = M.find_dead_code("helper", "scan_policy.py")
+    assert "SYMBOL IS REFERENCED" in out
+    assert "tests/test_scan_policy.py" in out
+
+
+def test_blast_radius_lists_a_test_named_after_the_anchor_as_a_dependent(stub_tools):
+    from types import SimpleNamespace
+    files, hits = stub_tools
+    hits += [SimpleNamespace(file=f, scope="Full File_part_1", text=t) for f, t in files.items()]
+    out = M.analyze_blast_radius("scan_policy.py", "helper")
+    origin, rest = out.split("2. DIRECT DEPENDENTS")
+    dependents = rest.split("3. PARALLEL")[0]
+    assert "tests/test_scan_policy.py" not in origin
+    assert "tests/test_scan_policy.py" in dependents

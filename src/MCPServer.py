@@ -283,14 +283,13 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     """
     print(f"\n[MCP] Analyzing blast radius anchored at '{anchor_file}' for '{target_symbol}'")
     _ensure_indexes()
-    norm_anchor = anchor_file.lower().replace('\\', '/').split('/')[-1]
     anchor_base = _module_stem(anchor_file)
 
     # Who imports the anchor, and what the anchor imports (the "Primitive Directional
     # Filter"), computed once up front instead of re-scanning text per file (B-037).
     texts = _texts_by_file()
     importers, anchor_imports = _import_relations(anchor_file, texts)
-    anchor_found = any(norm_anchor in f.lower() for f in texts)
+    anchor_found = any(_is_anchor_path(anchor_file, f) for f in texts)
 
     query_text = f"Implementation, definition, or usage of {target_symbol}"
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
@@ -311,12 +310,11 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
         if file_path in seen_files: continue
         seen_files.add(file_path)
 
-        norm_path = file_path.lower().replace('\\', '/')
         file_base = _module_stem(file_path)
         doc_text = doc['text']
 
         # --- STRUCTURAL & SEMANTIC CHECKS ---
-        is_anchor = norm_anchor in norm_path
+        is_anchor = _is_anchor_path(anchor_file, file_path)
         has_symbol = target_symbol in doc_text
 
         # Structural: Does this file import the anchor? (downstream — true dependent)
@@ -835,6 +833,17 @@ def _specifier_stems(text: str) -> set[str]:
     return {_module_stem(m.group(2)) for m in _SPECIFIER_RE.finditer(text)}
 
 
+def _is_anchor_path(anchor_file: str, path: str) -> bool:
+    """Whether ``path`` is the anchor file: same file name, compared whole.
+
+    A substring test counted 'tests/test_scan_policy.py' as the anchor 'scan_policy.py',
+    so blast radius listed that importer as the origin and find_dead_code skipped it.
+    """
+    def name(p: str) -> str:
+        return p.lower().replace("\\", "/").split("/")[-1]
+    return name(path) == name(anchor_file)
+
+
 def _import_relations(anchor_file: str, texts: dict[str, str]) -> tuple[set[str], set[str]]:
     """``(importers, imported)`` for ``anchor_file``.
 
@@ -844,8 +853,7 @@ def _import_relations(anchor_file: str, texts: dict[str, str]) -> tuple[set[str]
     (``require()``, ``import()``, re-exports), so neither source's gaps decide alone.
     """
     anchor_stem = _module_stem(anchor_file)
-    anchor_name = anchor_file.lower().replace("\\", "/").split("/")[-1]
-    anchor_paths = {f for f in texts if f.lower().replace("\\", "/").split("/")[-1] == anchor_name}
+    anchor_paths = {f for f in texts if _is_anchor_path(anchor_file, f)}
 
     importers: set[str] = set()
     imported: set[str] = set()
@@ -1594,8 +1602,6 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
     """
     print(f"\n[MCP] find_dead_code: symbol='{symbol}' anchor='{anchor_file}'")
     _ensure_indexes()
-    norm_anchor = anchor_file.lower().replace('\\', '/').split('/')[-1]
-
     # Files importing the anchor, computed once (B-037).
     texts = _texts_by_file()
     importers, _ = _import_relations(anchor_file, texts)
@@ -1615,8 +1621,7 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
         if file_path in seen_files: continue
         seen_files.add(file_path)
 
-        norm_path = file_path.lower().replace('\\', '/')
-        if norm_anchor in norm_path: continue   # skip the defining file
+        if _is_anchor_path(anchor_file, file_path): continue   # skip the defining file
 
         file_full = texts.get(file_path, c.text)
 
@@ -1636,8 +1641,7 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
     # Exhaustive import sweep to catch callers FAISS ranking missed
     for file_path in sorted(importers - seen_files):
         if file_path not in texts: continue     # an edge left by a file no longer indexed
-        norm_path = file_path.lower().replace('\\', '/')
-        if norm_anchor in norm_path: continue
+        if _is_anchor_path(anchor_file, file_path): continue
         seen_files.add(file_path)
         file_full = texts[file_path]
         snippet = file_full[:120].replace('\n', ' ').strip() + "..."
