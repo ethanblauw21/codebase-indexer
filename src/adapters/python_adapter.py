@@ -1,13 +1,17 @@
 """PythonAdapter — tree-sitter Python parser."""
 from __future__ import annotations
 
+import re
+
 from typing import Optional
 
 from tree_sitter import Language, Parser, Node
 import tree_sitter_python as tspython
 
 from adapters.base import Edge, ParseResult, Reference, Symbol, TestConventions, build_fqn
-from adapters._treesitter import node_text, run_query, skeletonize
+from adapters._treesitter import (
+    merge_adjacent_same_fqn, node_text, run_query, skeleton_with_lines,
+)
 from category_tagger import tag_symbol
 
 
@@ -26,6 +30,18 @@ _CALL_QUERY = """
     (attribute attribute: (identifier) @name)
   ])
 """
+
+
+_OVERLOAD_DECORATOR = re.compile(r"@(?:[\w.]+\.)?overload\b")
+
+
+def _is_overload(node: Node, src: bytes) -> bool:
+    """Is this function_definition an `@overload` stub? Its decorators are siblings under a
+    decorated_definition, outside the symbol's own text."""
+    parent = node.parent
+    return (parent is not None and parent.type == "decorated_definition"
+            and any(_OVERLOAD_DECORATOR.match(node_text(c, src))
+                    for c in parent.children if c.type == "decorator"))
 
 
 def _extract_calls(node: Node, src: bytes) -> list[str]:
@@ -91,6 +107,7 @@ class PythonAdapter:
         self, root: Node, src: bytes, file_path: str
     ) -> tuple[list[Symbol], list[Edge]]:
         symbols: list[Symbol] = []
+        rank_of: dict[int, tuple[int, int]] = {}
         edges:   list[Edge]   = []
 
         def walk(node: Node, class_ctx: Optional[str]) -> None:
@@ -108,8 +125,10 @@ class PythonAdapter:
                         class_context = None,
                         start_line    = node.start_point[0] + 1,
                         end_line      = node.end_point[0] + 1,
-                        text          = skeletonize(node, src, {"function_definition"}),
+                        text          = "",
                     )
+                    sym.text, sym.line_map = skeleton_with_lines(
+                        node, src, {"function_definition", "decorated_definition"})
                     symbols.append(sym)
                     # Inheritance: `class Dog(Animal, base.Mixin):` -> extends edges.
                     # The superclass list is an `argument_list` child; each positional
@@ -148,6 +167,10 @@ class PythonAdapter:
                         end_line      = node.end_point[0] + 1,
                         text          = node_text(node, src),
                     )
+                    # A merged run (ADR-034 §3): `@overload` stubs last, then the member with
+                    # the most code first, so the implementation stays inside the embedder's
+                    # window whether a property's logic is in its getter or its setter.
+                    rank_of[id(sym)] = (1 if _is_overload(node, src) else 0, -len(sym.text))
                     symbols.append(sym)
                     for call_name in _extract_calls(node, src):
                         edges.append(Edge(source_fqn=fqn, target=call_name, kind="call"))
@@ -160,7 +183,16 @@ class PythonAdapter:
                 walk(child, class_ctx)
 
         walk(root, None)
-        return symbols, edges
+        # `@overload` stubs are signatures without bodies, and the implementation's own
+        # signature subsumes them; merging them in only diluted its vector (ADR-034 arm 3).
+        # They are dropped when an implementation of the same name exists, kept otherwise.
+        stubs = {id(s) for s in symbols if rank_of.get(id(s), (0, 0))[0] == 1}
+        implemented = {(s.fqn, s.class_context) for s in symbols if id(s) not in stubs}
+        symbols = [s for s in symbols
+                   if id(s) not in stubs or (s.fqn, s.class_context) not in implemented]
+        merged = [m for m, _ in merge_adjacent_same_fqn(
+            symbols, lambda s: rank_of.get(id(s), (0, 0)), merge_top_level=True)]
+        return merged, edges
 
     def _extract_references(
         self, root: Node, src: bytes, symbols: list[Symbol]

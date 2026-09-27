@@ -44,7 +44,16 @@ jobs:
       - name: Install project with dev extras
         run: pip install -e ".[dev]"
 
+      # Blocking, unlike the run below. A collection error means no test ran at all,
+      # which is not a score to be advisory about (ADR-004 keeps test *failures*
+      # advisory). Master's check went green over `Interrupted: 2 errors during
+      # collection` because the step below swallows everything (B-036).
+      - name: Collect tests (blocking)
+        run: pytest --co -q
+
+      # `shell: bash` adds pipefail, so pytest's exit code survives the pipe into tee.
       - name: Run pytest
+        shell: bash
         run: pytest --tb=short -q 2>&1 | tee pytest_output.txt
         continue-on-error: true
 

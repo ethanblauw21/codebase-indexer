@@ -18,7 +18,9 @@ import tree_sitter_typescript as tstypescript
 import tree_sitter_javascript as tsjavascript
 
 from adapters.base import Edge, ParseResult, Reference, Symbol, SymbolType, TestConventions, build_fqn
-from adapters._treesitter import node_text, run_query, skeletonize
+from adapters._treesitter import (
+    leading_doc, merge_adjacent_same_fqn, node_text, run_query, skeleton_with_lines,
+)
 from category_tagger import tag_symbol
 
 
@@ -61,6 +63,7 @@ _CALL_QUERY = """
   function: [
     (identifier) @name
     (member_expression property: (property_identifier) @name)
+    (member_expression property: (private_property_identifier) @name)
   ])
 """
 
@@ -98,8 +101,20 @@ _GEN_RE    = re.compile(r'function\s*\*|async\s*\*')
 # Internal node-type sets
 # ---------------------------------------------------------------------------
 
-_TS_NAME_TYPES = frozenset(("identifier", "type_identifier", "property_identifier"))
-_TS_STUB_TYPES: set[str] = {"method_definition", "function_declaration", "arrow_function"}
+# private_property_identifier: `#name` members keep the `#` in their name and FQN (ADR-034 §2).
+_TS_NAME_TYPES = frozenset(("identifier", "type_identifier", "property_identifier",
+                            "private_property_identifier"))
+# Field definitions are stubbed when their value is a function (ADR-034 §2): `skeletonize`
+# looks one level down for the body. TS says public_field_definition, JS field_definition.
+_TS_FIELD_TYPES = frozenset(("public_field_definition", "field_definition"))
+_TS_FUNCTION_VALUES = ("arrow_function", "function_expression")
+_TS_STUB_TYPES: set[str] = {"method_definition", "function_declaration", "arrow_function",
+                            "function_expression", *_TS_FIELD_TYPES}
+
+
+def _ts_impl_rank(sym: Symbol) -> int:
+    """The member with the most code leads a merged accessor pair (ADR-034 §3)."""
+    return -len(sym.text)
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +263,8 @@ class _WebAdapter:
     ) -> tuple[list[Symbol], list[Edge], list[SymbolType]]:
         symbols:      list[Symbol]     = []
         edges:        list[Edge]       = []
-        symbol_types: list[SymbolType] = []
+        type_of:      dict[int, SymbolType] = {}   # id(Symbol) -> its type row
+        moved_docs:   Optional[set[int]] = None   # doc comments moved out of the class being walked
 
         def emit(
             node: Node,
@@ -259,14 +275,23 @@ class _WebAdapter:
             type_node: Optional[Node]  = None,
         ) -> Symbol:
             fqn = build_fqn(file_path, class_ctx, name)
+            # A class member's leading JSDoc moves into the member's own chunk, placed after
+            # the code, and the class skeleton leaves it out (ADR-034 §1). After, not before:
+            # a long doc ahead of a short body diluted the body's vector (arm 1 of ADR-034).
+            doc = leading_doc(node, src) if class_ctx and moved_docs is not None else None
+            text = node_text(node, src)
+            if doc:
+                moved_docs.add(doc.start_byte)
+                code = src[doc.end_byte:node.end_byte].decode("utf-8", errors="replace").lstrip()
+                text = f"{code}\n{node_text(doc, src)}"
             sym = Symbol(
                 fqn           = fqn,
                 kind          = kind,
                 name          = name,
                 class_context = class_ctx,
-                start_line    = node.start_point[0] + 1,
+                start_line    = (doc or node).start_point[0] + 1,
                 end_line      = node.end_point[0] + 1,
-                text          = node_text(node, src),
+                text          = text,
             )
             symbols.append(sym)
             scope_node = call_scope or node
@@ -278,10 +303,11 @@ class _WebAdapter:
                 edges.append(Edge(source_fqn=class_fqn, target=fqn, kind="owns"))
             st = _extract_ts_type(type_node or node, src, fqn)
             if st:
-                symbol_types.append(st)
+                type_of[id(sym)] = st
             return sym
 
         def walk(node: Node, class_ctx: Optional[str]) -> None:
+            nonlocal moved_docs
             t = node.type
 
             if t == "export_statement":
@@ -300,7 +326,7 @@ class _WebAdapter:
                         class_context = None,
                         start_line    = node.start_point[0] + 1,
                         end_line      = node.end_point[0] + 1,
-                        text          = skeletonize(node, src, _TS_STUB_TYPES),
+                        text          = "",   # the skeleton, once the members have taken their docs
                     )
                     symbols.append(sym)
                     for child in node.children:
@@ -326,9 +352,12 @@ class _WebAdapter:
                     class_body = next(
                         (c for c in node.children if c.type == "class_body"), None
                     )
+                    outer, moved_docs = moved_docs, set()
                     if class_body:
                         for child in class_body.children:
                             walk(child, name)
+                    sym.text, sym.line_map = skeleton_with_lines(node, src, _TS_STUB_TYPES, drop=moved_docs)
+                    moved_docs = outer
                 return
 
             if t == "interface_declaration":
@@ -364,6 +393,15 @@ class _WebAdapter:
                     emit(node, "method", name, class_ctx, type_node=node)
                 return
 
+            if t in _TS_FIELD_TYPES and class_ctx:
+                # An arrow-function or function-expression field is a method in all but
+                # syntax, whatever its access modifier (ADR-034 §2).
+                value = next((c for c in node.children if c.type in _TS_FUNCTION_VALUES), None)
+                name = _ts_decl_name(node, src)
+                if value and name:
+                    emit(node, "arrow_function", name, class_ctx, call_scope=value, type_node=value)
+                    return
+
             if t == "lexical_declaration":
                 for decl in node.children:
                     if decl.type != "variable_declarator":
@@ -397,14 +435,23 @@ class _WebAdapter:
                             edges.append(Edge(source_fqn=class_fqn, target=fqn, kind="owns"))
                         st = _extract_ts_type(value_node, src, fqn)
                         if st:
-                            symbol_types.append(st)
+                            type_of[id(sym)] = st
                 return
 
             for child in node.children:
                 walk(child, class_ctx)
 
         walk(root, None)
-        return symbols, edges, symbol_types
+        # An accessor pair is one member: one symbol, the one with more code first (ADR-034 §3).
+        merged = merge_adjacent_same_fqn(symbols, _ts_impl_rank)
+        # One type row per FQN; for an accessor pair the getter's, which carries the type.
+        types: dict[str, SymbolType] = {}
+        for sym in symbols:
+            st = type_of.get(id(sym))
+            if st and (sym.fqn not in types or types[sym.fqn].return_type is None):
+                types[sym.fqn] = st
+        symbol_types = list(types.values())
+        return [m for m, _ in merged], edges, symbol_types
 
     def _extract_references(
         self,

@@ -95,21 +95,38 @@ def semantic_code_search(query: str) -> str:
     # Context Packing (Protecting your 8GB Local Model's VRAM)
     # 8B models easily crash if you feed them more than 8k tokens.
     # We cap the returned context strictly at 4000 tokens to be safe.
-    context = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
-    current_tokens = 0
-    MAX_TOKENS = 4000
+    header = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
+    # B-029: say so when the index predates the current chunker. A warning, not an
+    # error: the results are still the best this index has.
+    from incremental_indexer import chunker_version_warning
+    version_warning = chunker_version_warning(_db())
+    if version_warning:
+        header = f"{version_warning}\n\n" + header
+    return _pack_results(header, chunks, jina_tokenizer.count_tokens, max_tokens=4000)
 
+
+def _pack_results(header: str, chunks, count_tokens, max_tokens: int) -> str:
+    """Fill the token budget in rank order, skipping any chunk that does not fit.
+
+    B-030: this used to stop at the first chunk that did not fit, so one large
+    chunk hid every result ranked below it. Skipped chunks are listed by location
+    so the caller can still open them.
+    """
+    context = header
+    used = 0
+    skipped: list[str] = []
     for c in chunks:
         chunk_text = f"--- FILE: {c.file} | SCOPE: {c.scope} ---\n{c.text}\n\n"
-        tokens = jina_tokenizer.count_tokens(chunk_text)
-
-        if current_tokens + tokens < MAX_TOKENS:
+        tokens = count_tokens(chunk_text)
+        if used + tokens < max_tokens:
             context += chunk_text
-            current_tokens += tokens
+            used += tokens
         else:
-            context += "[Note: Further context truncated to protect token limits.]\n"
-            break
-
+            skipped.append(f"{c.file} | {c.scope}")
+    if skipped:
+        context += (f"[Note: {len(skipped)} result(s) did not fit the {max_tokens}-token "
+                    "budget and were left out:]\n")
+        context += "".join(f"  - {s}\n" for s in skipped)
     return context
 
 @mcp.tool()
@@ -1202,6 +1219,13 @@ def reindex(changed_files_only: bool = False) -> str:
 
     Returns a summary of chunks added/updated/removed, then reloads the in-memory indexes.
     """
+    # ADR-036: a watchdog reindex in flight finishes first; this one then runs alone.
+    with _reindex_lock:
+        return _reindex(changed_files_only)
+
+
+def _reindex(changed_files_only: bool) -> str:
+    """The body of `reindex`. Call it holding `_reindex_lock`."""
     import sys
     import io
     import os
@@ -1234,12 +1258,12 @@ def reindex(changed_files_only: bool = False) -> str:
         if _last_hash:
             try:
                 _curr_hash = subprocess.check_output(
-                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
                 ).strip()
                 if _last_hash != _curr_hash:
                     _changed = subprocess.check_output(
                         ["git", "diff", "--name-only", _last_hash, "HEAD"],
-                        text=True, stderr=subprocess.DEVNULL
+                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
                     ).strip()
                     if _changed:
                         _stale_warning = (
@@ -1350,7 +1374,7 @@ def index_status(since: str = "1d") -> str:
     import os
     import subprocess
     from datetime import datetime, timedelta, timezone
-    from incremental_indexer import INDEX_DIR
+    from incremental_indexer import INDEX_DIR, CHUNKER_VERSION, chunker_version_warning
     from db import CodeDB
 
     db_path = os.path.join(INDEX_DIR, "graph.db")
@@ -1377,6 +1401,7 @@ def index_status(since: str = "1d") -> str:
         last_verified = db.meta_get("last_verified_at") or "(never recorded)"
         last_commit   = db.meta_get("last_indexed_commit")
         files_total   = db.meta_get("files_total") or "?"
+        version_warning = chunker_version_warning(db)
         rows = db._conn.execute(
             "SELECT path, content_changed_at FROM files "
             "WHERE content_changed_at IS NOT NULL AND content_changed_at > ? "
@@ -1388,12 +1413,13 @@ def index_status(since: str = "1d") -> str:
         "--- INDEX STATUS ---",
         f"last_verified_at:    {last_verified}",
         f"files_total:         {files_total}",
+        version_warning or f"chunker_version:     {CHUNKER_VERSION} (== current)",
     ]
 
     if last_commit:
         try:
             curr = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
             ).strip()
             if curr == last_commit:
                 lines.append(f"last_indexed_commit: {last_commit[:8]} (== HEAD; index current)")
@@ -1404,7 +1430,7 @@ def index_status(since: str = "1d") -> str:
                 try:
                     diverged = subprocess.check_output(
                         ["git", "diff", "--name-only", last_commit, "HEAD"],
-                        text=True, stderr=subprocess.DEVNULL,
+                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                     ).strip()
                     for f in diverged.splitlines():
                         if f:
@@ -1417,6 +1443,24 @@ def index_status(since: str = "1d") -> str:
             )
     else:
         lines.append("last_indexed_commit: (none recorded)")
+
+    # B-028: each FAISS index must hold exactly one vector per chunk row. Since
+    # ADR-037 every reindex repairs a difference (a run killed before its save), so a
+    # mismatch that survives a reindex is a bug.
+    _ensure_indexes()
+    with CodeDB(db_path) as db:
+        row_counts = dict(db._conn.execute(
+            "SELECT tier, COUNT(*) FROM chunks GROUP BY tier"
+        ).fetchall())
+    for tier_num, idx in ((1, t1_index), (2, t2_index), (3, t3_index)):
+        rows_n = row_counts.get(tier_num, 0)
+        if idx.ntotal == rows_n:
+            lines.append(f"tier{tier_num}_vectors:       {idx.ntotal} (== chunk rows)")
+        else:
+            lines.append(
+                f"tier{tier_num}_vectors:       {idx.ntotal}  chunk rows: {rows_n}  "
+                "⚠️ MISMATCH — the next reindex repairs it (ADR-037)"
+            )
 
     lines.append(f"\nfiles with content changed since {cutoff}  ({len(rows)}):")
     if rows:
@@ -1935,6 +1979,13 @@ def map_module_communities(target_path: str = "", min_community_size: int = 3,
 # File watchdog — auto-reindex on source changes
 # ---------------------------------------------------------------------------
 
+# ADR-036: one run_incremental at a time in this process. The watchdog and the
+# reindex tool both take it, so a save during a running reindex waits for that
+# run to finish instead of starting a second one beside it (B-032). Other
+# processes on the same index are B-033.
+_reindex_lock = threading.Lock()
+
+
 def _reload_indexes() -> None:
     """Hot-swap the in-memory FAISS + doc-store state after a reindex run.
 
@@ -1973,12 +2024,18 @@ class _ReindexDebouncer:
     separate run_incremental() invocation that races the previous one for the
     SQLite lock.  Instead, every incoming event resets a timer; the reindex
     fires only after `delay` seconds of silence.
+
+    The timer only collapses a burst. An event that arrives while a reindex is
+    running starts a new timer, so the run itself takes `_reindex_lock`: the
+    follow-up waits for the one in flight (ADR-036). At most one run waits;
+    later events fold into it, since it reads the disk only once it starts.
     """
 
     def __init__(self, delay: float = 3.0) -> None:
         self._delay  = delay
         self._timer: threading.Timer | None = None
         self._lock   = threading.Lock()
+        self._queued = False    # a fired run is waiting for _reindex_lock
 
     def schedule(self) -> None:
         with self._lock:
@@ -1991,11 +2048,17 @@ class _ReindexDebouncer:
     def _fire(self) -> None:
         with self._lock:
             self._timer = None
-        print("\n[Watchdog] Change detected — running incremental reindex...")
+            if self._queued:
+                return          # the queued run scans the disk when it starts, so it sees this change too
+            self._queued = True
         try:
             from incremental_indexer import run_incremental
-            run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
-            _reload_indexes()
+            with _reindex_lock:
+                with self._lock:
+                    self._queued = False    # from here on, a new change needs a new run
+                print("\n[Watchdog] Change detected — running incremental reindex...")
+                run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
+                _reload_indexes()
             print("[Watchdog] Reindex complete — in-memory indexes reloaded.\n")
         except Exception as exc:
             print(f"[Watchdog] Reindex failed: {exc}\n")
@@ -2080,7 +2143,57 @@ def start_watchdog(repo_path: str | None = None, debounce_seconds: float = 3.0):
     return observer
 
 
+def _utf8_stdio() -> None:
+    """Make print() safe for the indexer's own output under an MCP client (ADR-036).
+
+    A client that launches this server over stdio on Windows gives it pipes, and a
+    pipe's text encoding is the ANSI code page (cp1252), not UTF-8. The indexer's
+    first line is a "━━" banner, so every watchdog reindex died on its first print
+    with UnicodeEncodeError. The protocol itself is unaffected: FastMCP writes it
+    through its own UTF-8 wrapper over the same buffer. Line buffering keeps each
+    of our lines whole, so none can land in the middle of a protocol message.
+    """
+    import sys
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+        except (AttributeError, ValueError):
+            pass    # not a TextIOWrapper (already replaced by a harness); leave it
+
+
+def _detach_stdin() -> None:
+    """Keep the MCP stdin pipe away from every child process (ADR-036).
+
+    On Windows a process started without handle inheritance still gets its
+    parent's standard input handle. The MCP transport keeps a read pending on
+    that pipe, and a spawned child that touches its stdin at startup waits
+    behind that read forever. multiprocessing's bootstrap closes stdin, so the
+    summarizer's worker (IsolatedChunkSummarizer) hung at startup: every
+    watchdog reindex with summaries on stalled at "[summarize]", with the
+    worker at 11 MB and no CPU. ADR-031's git calls hung the same way.
+
+    The transport gets a private, non-inheritable copy of the pipe, and fd 0
+    (and with it the process's standard input handle) becomes NUL. Children
+    then inherit NUL, and nothing else in this process reads stdin.
+    """
+    import io
+    import sys
+    if os.name != "nt":
+        return
+    try:
+        fd = os.dup(0)
+    except OSError:
+        return          # no stdin at all; nothing to protect
+    nul = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(nul, 0)     # the CRT also points STD_INPUT_HANDLE at NUL
+    os.close(nul)
+    sys.stdin = io.TextIOWrapper(io.BufferedReader(io.FileIO(fd, "rb")),
+                                 encoding="utf-8", errors="replace")
+
+
 def main() -> None:
+    _utf8_stdio()
+    _detach_stdin()
     start_watchdog()
     mcp.run()
 

@@ -38,7 +38,7 @@ class _FakeST:
     """Stand-in for SentenceTransformer that records the device it was constructed with."""
     last_device = None
 
-    def __init__(self, model_id, trust_remote_code=False, device=None):
+    def __init__(self, model_id, trust_remote_code=False, device=None, model_kwargs=None):
         _FakeST.last_device = device
         self.max_seq_length = None
 

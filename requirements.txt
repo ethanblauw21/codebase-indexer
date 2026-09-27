@@ -27,7 +27,7 @@ networkx>=3.0
 # python-igraph
 
 # MCP server
-mcp[cli]
+mcp[cli]>=1.28,<2  # 2.x removed mcp.server.fastmcp (B-036)
 
 # File-system change monitoring (optional — enables auto-reindex)
 watchdog

@@ -79,7 +79,7 @@ import numpy as np
 
 from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
 from call_resolver import resolve_call_edges
-from config import summarization_enabled, summarizer_model_id
+from config import summarization_enabled, summarizer_model_id, summarizer_tiers
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
@@ -92,6 +92,12 @@ from stable_id import stable_id, to_faiss_ids, TIER_CONFIGS, TIER_NUM, TIER_NAME
 
 REPO_PATH = os.getcwd()
 INDEX_DIR = ".code-index"
+
+# ADR-030: summaries have their own FAISS index, keyed by their chunk's id, and the
+# code vectors hold code only. index_meta records the layout so an index built
+# before it (summaries appended to the code) can be told apart.
+SUMMARY_INDEX = "summary"
+EMBED_LAYOUT = "code+summary-index"
 DB_PATH   = f"{INDEX_DIR}/graph.db"
 
 # Summarization is config-driven (ADR-026): the gate is [summarization].enabled in
@@ -317,7 +323,7 @@ def git_change_times(repo_path: str) -> dict[str, tuple[str, str]]:
     try:
         out = subprocess.check_output(
             ["git", "log", "--format=@@@%cI|%aI", "--name-only", "--no-merges"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return {}
@@ -344,7 +350,7 @@ def git_dirty_paths(repo_path: str) -> set[str]:
     try:
         out = subprocess.check_output(
             ["git", "diff", "--name-only", "HEAD"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return set()
@@ -356,7 +362,7 @@ def git_head_commit(repo_path: str) -> Optional[str]:
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
-            cwd=repo_path, text=True, stderr=subprocess.DEVNULL,
+            cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.SubprocessError):
         return None
@@ -379,6 +385,34 @@ def _backfill_null_stamps(db: CodeDB, git_times: dict[str, tuple[str, str]]) -> 
         )
         n += cur.rowcount
     return n
+
+
+# B-029: the generation of the parser and chunker that built an index. Bump it in the
+# same commit as any change to what chunks a file produces (their scope, text, count or
+# ids), and add a line here. Incremental runs key on file content only, so without this
+# an index silently mixes chunks from old and new code.
+#   (no marker)  built before ADR-033
+#   2            ADR-031: one chunk per (file, scope, tier), so one vector per row
+#   3            ADR-034: member docs moved to members, # members and function fields,
+#                same-FQN siblings merged, split skeleton parts carry header and lines
+CHUNKER_VERSION = 3
+CHUNKER_VERSION_KEY = "chunker_version"
+
+
+def chunker_version_warning(db: CodeDB) -> Optional[str]:
+    """A one-line warning when the index was built by another chunker, else None.
+
+    Never triggers a rebuild: at MCP startup that could block the first search for
+    minutes (hours with summaries on), and a run cut off midway would leave a mixed
+    index. The user runs a full re-index when they choose.
+    """
+    recorded = db.meta_get(CHUNKER_VERSION_KEY)
+    if recorded == str(CHUNKER_VERSION):
+        return None
+    built = f"chunker v{recorded}" if recorded else "a chunker older than v2"
+    return (f"⚠️ This index was built by {built}; the current chunker is v{CHUNKER_VERSION}. "
+            "Results may mix old and new chunks. Run a full re-index "
+            "(reindex(changed_files_only=False) or a fresh code-indexer build).")
 
 
 def _write_index_meta(db: CodeDB, repo_path: str) -> None:
@@ -478,6 +512,66 @@ def purge_stale_vectors(
 
 
 # ---------------------------------------------------------------------------
+# Row/vector reconciliation (ADR-037)
+# ---------------------------------------------------------------------------
+
+def _index_ids(index: faiss.Index) -> Optional[set[int]]:
+    """The ids an IndexIDMap holds, or None for an index type without an id map."""
+    id_map = getattr(index, "id_map", None)
+    if id_map is None:
+        return None
+    return set(faiss.vector_to_array(id_map).tolist())
+
+
+def reconcile_vectors(
+    db:            CodeDB,
+    faiss_indexes: dict[str, faiss.Index],
+    doc_store:     DocumentStore,
+) -> tuple[list[str], int]:
+    """
+    Compare every tier index with the chunk rows, and repair what a killed run left.
+
+    SQLite rows are committed per file during a run, but FAISS is saved only at the
+    end, so a kill in between leaves rows with no vectors. MD5 diffing then skips
+    those files forever (B-035). The reverse also happens: rows deleted and committed,
+    their vectors removed only in memory, and the old vectors still on disk.
+
+    Returns (files with a chunk that has no tier vector, number of surplus ids removed).
+    The caller re-indexes the files. Only tier indexes are checked for missing ids:
+    each chunk row has exactly one tier vector (ADR-031), while a summary vector exists
+    only if summarization was on when the chunk was indexed.
+    """
+    rows = db._conn.execute(
+        "SELECT c.scope, c.tier, f.path FROM chunks c JOIN files f ON f.id = c.file_id"
+    ).fetchall()
+    expected: dict[str, dict[int, str]] = {name: {} for name, _, _ in TIER_CONFIGS}
+    for scope, tier_num, path in rows:
+        name = TIER_NAME[tier_num]
+        expected[name][stable_id(name, path, scope)] = path
+
+    missing_files: set[str] = set()
+    surplus: set[int] = set()
+    for name, _, _ in TIER_CONFIGS:
+        index = faiss_indexes.get(name)
+        actual = _index_ids(index) if index is not None else None
+        if actual is None:
+            continue
+        missing_files.update(p for sid, p in expected[name].items() if sid not in actual)
+        surplus.update(actual - expected[name].keys())
+
+    summary_index = faiss_indexes.get(SUMMARY_INDEX)
+    summary_ids = _index_ids(summary_index) if summary_index is not None else None
+    if summary_ids:
+        all_expected = set().union(*(e.keys() for e in expected.values()))
+        surplus.update(summary_ids - all_expected)
+
+    n_removed = 0
+    if surplus:
+        n_removed = purge_stale_vectors(faiss_indexes, doc_store, to_faiss_ids(sorted(surplus)))
+    return sorted(missing_files), n_removed
+
+
+# ---------------------------------------------------------------------------
 # Project-descriptor ingest: parse edges only — no chunking or embedding
 # ---------------------------------------------------------------------------
 
@@ -523,6 +617,55 @@ def ingest_project_file(
 # Single-file ingest: parse → chunk → embed → add_with_ids → SQLite upsert
 # ---------------------------------------------------------------------------
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Chunking — single source of truth for both passes
+# ─────────────────────────────────────────────────────────────────────────────
+def chunk_all_tiers(rel_path: str, content: str) -> dict[str, list]:
+    """Produce the three-tier chunk sets for one file.
+
+    Both ingest_file() and run_summarization_pass() call this, and that is a
+    correctness requirement rather than a convenience. The summary cache is
+    keyed by an md5 of the chunk text, so if the two passes chunked even
+    slightly differently, every lookup in the embedding pass would miss, the
+    LLM would reload, and both models would be resident at once — precisely the
+    failure the two-pass split exists to prevent.
+    """
+    tier_chunks: dict[str, list] = {}
+    for tier_name, max_tokens, overlap in TIER_CONFIGS:
+        if tier_name == "tier1_surgical":
+            tier_chunks[tier_name] = chunk_file_ast(rel_path, content, max_tokens, overlap)
+        else:
+            tier_chunks[tier_name] = fallback_token_chunker(
+                content, rel_path, max_tokens, overlap, parent_scope="Full File"
+            )
+    # B-028: two symbols can share a scope (a getter/setter pair, an overload set, a
+    # redeclared test helper). They share a stable id, and SQLite keeps only the last
+    # row per (file, scope, tier), so embedding both would leave a FAISS vector whose
+    # text belongs to the other symbol.
+    for tier_name, chunks in tier_chunks.items():
+        kept = dedupe_chunks_by_scope(chunks)
+        if len(kept) != len(chunks):
+            print(f"  [chunk:{rel_path}] {tier_name}: dropped "
+                  f"{len(chunks) - len(kept)} chunk(s) with a duplicate scope", flush=True)
+            tier_chunks[tier_name] = kept
+    return tier_chunks
+
+
+def chunk_text_hash(text: str) -> str:
+    """Cache key for one chunk's summary. Must agree across both passes."""
+    return hashlib.md5(text.encode()).hexdigest()
+
+
+def dedupe_chunks_by_scope(chunks: list) -> list:
+    """Keep one chunk per scope: the last, which is the row `INSERT OR REPLACE` keeps.
+
+    The kept chunk stays where the last occurrence was, so order otherwise follows
+    the chunker's.
+    """
+    last = {chunk.scope: i for i, chunk in enumerate(chunks)}
+    return [chunk for i, chunk in enumerate(chunks) if last[chunk.scope] == i]
+
+
 def ingest_file(
     rel_path:      str,
     content:       str,
@@ -543,14 +686,7 @@ def ingest_file(
     """
 
     print(f"  [ingest:{rel_path}] chunking...", flush=True)
-    tier_chunks: dict[str, list] = {}
-    for tier_name, max_tokens, overlap in TIER_CONFIGS:
-        if tier_name == "tier1_surgical":
-            tier_chunks[tier_name] = chunk_file_ast(rel_path, content, max_tokens, overlap)
-        else:
-            tier_chunks[tier_name] = fallback_token_chunker(
-                content, rel_path, max_tokens, overlap, parent_scope="Full File"
-            )
+    tier_chunks: dict[str, list] = chunk_all_tiers(rel_path, content)
     print(f"  [ingest:{rel_path}] chunks: " +
           " | ".join(f"{n}={len(c)}" for n, c in tier_chunks.items()), flush=True)
 
@@ -593,12 +729,12 @@ def ingest_file(
             print(f"  [ingest:{rel_path}] {tier_name}: no chunks, skipping", flush=True)
             continue
 
-        embed_texts = texts_to_embed
-        if summarizer is not None:
+        # ADR-030: code vectors are code only. Summaries get their own vectors in
+        # the summary index, under the chunk's id, added below.
+        summary_pairs: list[tuple[int, str]] = []
+        if summarizer is not None and TIER_NUM[tier_name] in summarizer_tiers():
             print(f"  [ingest:{rel_path}] {tier_name}: summarizing {len(texts_to_embed)} chunks...", flush=True)
-            text_hashes = [
-                hashlib.md5(t.encode()).hexdigest() for t in texts_to_embed
-            ]
+            text_hashes = [chunk_text_hash(t) for t in texts_to_embed]
             cached = db.get_cached_summaries(text_hashes)
 
             uncached_idx = [i for i, h in enumerate(text_hashes) if h not in cached]
@@ -618,20 +754,17 @@ def ingest_file(
                         cached[text_hashes[i]] = s
             print(f"  [ingest:{rel_path}] {tier_name}: summarization done", flush=True)
 
-            embed_texts = []
-            for fid, original, h in zip(all_ids, texts_to_embed, text_hashes):
+            for fid, h in zip(all_ids, text_hashes):
                 summary = cached.get(h, "")
                 if summary:
-                    embed_texts.append(f"{original}\n\n# Summary\n{summary}")
+                    summary_pairs.append((fid, summary))
                     entry = doc_store.get(fid)
                     if entry is not None:
                         entry["summary"] = summary
-                else:
-                    embed_texts.append(original)
 
-        print(f"  [ingest:{rel_path}] {tier_name}: embedding {len(embed_texts)} texts...", flush=True)
-        from core import embed_batch
-        vec_matrix: np.ndarray = embed_batch(embed_texts)
+        print(f"  [ingest:{rel_path}] {tier_name}: embedding {len(texts_to_embed)} texts...", flush=True)
+        from model_client import embed_batch   # ADR-028: host when enabled, else core
+        vec_matrix: np.ndarray = embed_batch(texts_to_embed)
         print(f"  [ingest:{rel_path}] {tier_name}: embedding done, shape={vec_matrix.shape}", flush=True)
 
         faiss.normalize_L2(vec_matrix)
@@ -640,6 +773,14 @@ def ingest_file(
         faiss_idx.add_with_ids(vec_matrix, id_array)
         del vec_matrix, id_array  # FAISS copied the data; free embedding matrix per tier
         print(f"  [ingest:{rel_path}] {tier_name}: FAISS add done", flush=True)
+
+        summary_idx = faiss_indexes.get(SUMMARY_INDEX)
+        if summary_pairs and summary_idx is not None:
+            svecs: np.ndarray = embed_batch([s for _fid, s in summary_pairs])
+            faiss.normalize_L2(svecs)
+            summary_idx.add_with_ids(svecs, to_faiss_ids([fid for fid, _s in summary_pairs]))
+            del svecs
+            print(f"  [ingest:{rel_path}] {tier_name}: {len(summary_pairs)} summary vectors added", flush=True)
 
     print(f"  [ingest:{rel_path}] writing SQLite...", flush=True)
     db.upsert_file(
@@ -664,6 +805,101 @@ def ingest_file(
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
+
+class _CacheOnlySummarizer:
+    """Stand-in for the summarizer during the embedding pass.
+
+    Presents the same duck-type but never starts a worker process, so the LLM
+    cannot become resident while the embedding model is loaded. A chunk the
+    pre-pass failed to cache yields an empty summary, which ingest_file already
+    handles by embedding the raw chunk text. Misses are counted rather than
+    ignored: a non-zero count means the two passes disagreed about chunking,
+    which is the one way this design can silently degrade.
+    """
+
+    def __init__(self) -> None:
+        self.misses = 0
+
+    def summarize_batch(self, codes: list[str]) -> list[str]:
+        self.misses += len(codes)
+        return [""] * len(codes)
+
+
+# Chunks per summarize_batch call in pass 1, and per cache write.
+_SUMMARY_SLICE = 192
+
+
+def run_summarization_pass(
+    to_index:   list[str],
+    repo_path:  str,
+    db:         CodeDB,
+    summarizer: object,
+) -> None:
+    """Summarize every chunk of every file before any embedding begins.
+
+    The summarizer (Qwen2.5-Coder-1.5B) and the embedder (bge-code-v1) do not
+    fit on an 8 GB card together. The main loop interleaves them per file and
+    per tier — roughly 350 alternations over a 118-file repository — so both end
+    up resident. Windows does not raise an out-of-memory error in that state:
+    the display driver pages GPU memory back through system RAM, and throughput
+    collapses by roughly fifty times with nothing in the log to show for it.
+    Measured on this repository, 77 chunks took 18 minutes instead of seconds,
+    with 4260 MiB spilled to system RAM.
+
+    Summaries persist in chunk_summaries keyed by content hash, so filling that
+    cache up front lets the embedding pass run with the LLM unloaded entirely.
+    Peak GPU memory becomes max(summarizer, embedder) instead of their sum.
+
+    Unloading between every tier instead would mean reloading a 3 GB model on
+    each alternation, which costs far more than the thrashing it avoids.
+    """
+    print("━━ Pass 1 of 2: summarization (embedding model not loaded) ━━", flush=True)
+    # ADR-027: collect every uncached chunk in the repository first, then
+    # summarize them together, longest first. Calling the summarizer per file
+    # and tier handed it ~4 chunks at a time, so the batch never grew past its
+    # starting size and each batch mixed short and long chunks.
+    total_chunks = 0
+    pending: dict[str, str] = {}          # hash -> text; one entry per distinct text
+    for n, rel_path in enumerate(to_index, 1):
+        ext = Path(rel_path).suffix.lower()
+        if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
+            continue                      # descriptor files carry edges, never chunks
+        try:
+            with open(os.path.join(repo_path, rel_path), "r",
+                      encoding="utf-8", errors="ignore") as fh:
+                content = fh.read()
+        except OSError:
+            continue                      # pass 2 reports the read failure properly
+        for tier_name, chunks in chunk_all_tiers(rel_path, content).items():
+            texts = [c.text for c in chunks]
+            if not texts or TIER_NUM[tier_name] not in summarizer_tiers():
+                continue
+            total_chunks += len(texts)
+            hashes = [chunk_text_hash(t) for t in texts]
+            cached = db.get_cached_summaries(hashes)
+            for h, t in zip(hashes, texts):
+                if h not in cached:
+                    pending.setdefault(h, t)
+    print(f"  [summarize] {total_chunks} chunks in {len(to_index)} files, "
+          f"{len(pending)} distinct texts to summarize", flush=True)
+
+    # Written to the cache one slice at a time, so a crash keeps what was done.
+    todo = sorted(pending.items(), key=lambda kv: len(kv[1]), reverse=True)
+    total_new = 0
+    for start in range(0, len(todo), _SUMMARY_SLICE):
+        part = todo[start:start + _SUMMARY_SLICE]
+        summaries = summarizer.summarize_batch([t for _h, t in part])
+        pairs = [(h, sm) for (h, _t), sm in zip(part, summaries) if sm]
+        db.cache_summaries(pairs)
+        total_new += len(pairs)
+        print(f"  [summarize {start + len(part)}/{len(todo)}]", flush=True)
+    print(f"  Pass 1 done: {total_chunks} chunks seen, {total_new} newly summarized",
+          flush=True)
+    # ADR-027: empty summaries leave no cache row, so without this line a partly
+    # failed pass is only visible by counting chunk_summaries afterward.
+    if hasattr(summarizer, "stats_line"):
+        print(f"  Pass 1 summarizer: {summarizer.stats_line()}", flush=True)
+
 
 def run_incremental(
     repo_path: str = REPO_PATH,
@@ -701,8 +937,9 @@ def run_incremental(
 
     summarizer = None
     if summarization_enabled():
-        from summarizer import IsolatedChunkSummarizer
-        summarizer = IsolatedChunkSummarizer()
+        # ADR-028: the model host's summarizer when [model_host].enabled, else the worker.
+        from model_client import make_summarizer
+        summarizer = make_summarizer()
         print(f"  Chunk summarizer enabled: {summarizer_model_id()} "
               f"(worker process starts on first file processed)")
     else:
@@ -712,6 +949,21 @@ def run_incremental(
         name: index_manager.load_or_create(name)
         for name, _, _ in TIER_CONFIGS
     }
+    # ADR-030: summaries in their own index, under their chunk's id. Being in this
+    # dict is what makes purge_stale_vectors and save_all cover it too.
+    faiss_indexes[SUMMARY_INDEX] = index_manager.load_or_create(SUMMARY_INDEX)
+
+    # ADR-030 §5: an index built before this layout has summaries inside its code
+    # vectors. It still works, but only a full re-index moves it over. A run that
+    # starts from an empty index writes the new layout.
+    _fresh_index = db._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+    if not _fresh_index and db.meta_get("embed_layout") != EMBED_LAYOUT:
+        print(f"  [index] This index was built before ADR-030, with summaries appended to "
+              f"the code vectors. Delete {INDEX_DIR} and re-index to get the separate "
+              f"summary index. Cached summaries are reused, so it costs an embed pass, "
+              f"not a summarizer pass.")
+    elif _fresh_index:
+        db.meta_set("embed_layout", EMBED_LAYOUT)
 
     print("Scanning files...")
     disk_hashes = scan_disk(repo_path)
@@ -727,6 +979,27 @@ def run_incremental(
     if _guard_msg:
         print(_guard_msg)
 
+    # ADR-037: a run killed before its FAISS save leaves rows with no vectors, which the
+    # MD5 diff would skip forever, and vectors whose rows it had already deleted. Files
+    # missing a vector are re-indexed as modified; surplus vectors are removed now.
+    _missing, _n_surplus = reconcile_vectors(db, faiss_indexes, doc_store)
+    _in_diff = set(diff.new) | set(diff.modified) | set(diff.deleted)
+    _heal = [p for p in _missing if p not in _in_diff and p in disk_hashes]
+    if _heal:
+        diff = diff._replace(modified=diff.modified + _heal)
+    if _heal or _n_surplus:
+        print(f"  [reconcile] {len(_heal)} file(s) had chunks with no vector and will be "
+              f"re-indexed; {_n_surplus} vector(s) with no chunk row removed.")
+
+    # B-029: a fresh build (nothing indexed yet) is the only run that makes every
+    # chunk come from this chunker, so it is the only run that records the version,
+    # and only once it has finished. A build killed midway leaves no marker.
+    _fresh_build = _n_indexed == 0
+    if not _fresh_build:
+        _version_warning = chunker_version_warning(db)
+        if _version_warning:
+            print(f"  {_version_warning}")
+
     # ADR-025 §2: one git pass up front. Reused for back-dating new files, dirty
     # detection, and the §1 one-time backfill of legacy NULL stamps. Done before the
     # no-op check so a quiet repo with legacy rows still gets its stamps backfilled.
@@ -739,6 +1012,8 @@ def run_incremental(
 
     n_changed = len(diff.new) + len(diff.modified) + len(diff.deleted)
     if n_changed == 0:
+        if _n_surplus:
+            index_manager.save_all()
         print("Nothing changed — index is up to date.")
         # ADR-025 §4: still record that we verified the index against this HEAD at
         # this time. The early return fires only AFTER scan_disk hashed every file
@@ -761,6 +1036,17 @@ def run_incremental(
         n_removed = purge_stale_vectors(faiss_indexes, doc_store, stale_ids)
         print(f"  Purged {n_removed} stale vector IDs ({len(stale_paths)} file(s)).")
 
+    # ADR-037: a healed file's content did not change, so it keeps its ADR-025 stamps.
+    _healed_stamps: dict[str, tuple[Optional[str], Optional[str]]] = {}
+    if _heal:
+        _ph = ",".join("?" * len(_heal))
+        _healed_stamps = {
+            p: (cc, au) for p, cc, au in db._conn.execute(
+                f"SELECT path, content_changed_at, authored_at FROM files WHERE path IN ({_ph})",
+                _heal,
+            )
+        }
+
     for path in stale_paths:
         db.delete_file(path)
 
@@ -776,6 +1062,8 @@ def run_incremental(
     _new_set = set(diff.new)
 
     def _content_stamp(rel: str) -> tuple[Optional[str], Optional[str]]:
+        if rel in _healed_stamps:
+            return _healed_stamps[rel]
         committer, author = _git_times.get(rel, (None, None))
         if rel in _new_set:
             # First index of this path → back-date. Rules, in order:
@@ -789,6 +1077,14 @@ def run_incremental(
             # Modified since last index → the content changed now, as far as we saw.
             changed = _run_now
         return changed, (author or None)
+
+    # Two-pass split: summarize everything, release the LLM, then embed. See
+    # run_summarization_pass() for why interleaving the two models does not fit.
+    if summarizer is not None:
+        run_summarization_pass(to_index, repo_path, db, summarizer)
+        summarizer.shutdown()          # child process exits; its GPU memory returns
+        summarizer = _CacheOnlySummarizer()
+        print("━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
 
     errors = 0
     for rel_path in to_index:
@@ -839,6 +1135,11 @@ def run_incremental(
     # Traverse step has real neighbours to walk. Runs once here, over the now-complete
     # symbols table; precision-first (only provably-unique targets), recomputes every
     # run so a name that became ambiguous is demoted back to unresolved.
+    if isinstance(summarizer, _CacheOnlySummarizer) and summarizer.misses:
+        print(f"  WARNING: {summarizer.misses} chunks missed the summary cache in pass 2 "
+              "— the two passes disagree about chunking, and those chunks were "
+              "embedded without a summary.")
+
     res = resolve_call_edges(db)
     print(f"  Call resolution: {res['resolved']} resolved | "
           f"{res['typed']} typed | {res['ambiguous']} ambiguous | {res['external']} external")
@@ -851,6 +1152,10 @@ def run_incremental(
     # ADR-025 §4/§5: record run-level freshness facts from this one chokepoint that
     # all four triggers (CLI, MCP reindex, watchdog, startup) share, so they agree.
     _write_index_meta(db, repo_path)
+    if _fresh_build:
+        # Files that failed above are retried on the next run with this same chunker,
+        # so the index is still one generation.
+        db.meta_set(CHUNKER_VERSION_KEY, str(CHUNKER_VERSION))
     db.close()
 
     with CodeDB(DB_PATH) as verify_db:
