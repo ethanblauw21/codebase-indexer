@@ -953,6 +953,13 @@ class CodeDB:
         ).fetchall()
         return [r[0] for r in rows]
 
+    def get_import_edges(self) -> list[tuple[str, str, Optional[str]]]:
+        """Every IMPORTS edge as ``(source_fqn, target, resolved_target)``."""
+        rows = self._conn.execute(
+            "SELECT source_fqn, target, resolved_target FROM edges WHERE kind = 'IMPORTS'"
+        ).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
+
     def get_importers_resolved(self, canonical_path: str) -> list[str]:
         """
         Return file paths that import `canonical_path`, checking resolved_target

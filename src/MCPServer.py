@@ -283,15 +283,13 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     """
     print(f"\n[MCP] Analyzing blast radius anchored at '{anchor_file}' for '{target_symbol}'")
     _ensure_indexes()
-    norm_anchor = anchor_file.lower().replace('\\', '/').split('/')[-1]
-    anchor_base = norm_anchor.replace('.tsx', '').replace('.ts', '').replace('.jsx', '').replace('.js', '')
+    anchor_base = _module_stem(anchor_file)
 
-    # 1. PRE-FETCH ANCHOR TEXT
-    # We must know what the anchor imports to apply the "Primitive Directional Filter"
-    anchor_text = ""
-    for doc in doc_store.docs.values():
-        if norm_anchor in doc['file'].lower() and doc['tier'] == 'tier2_component':
-            anchor_text += doc['text'] + "\n"
+    # Who imports the anchor, and what the anchor imports (the "Primitive Directional
+    # Filter"), computed once up front instead of re-scanning text per file (B-037).
+    texts = _texts_by_file()
+    importers, anchor_imports = _import_relations(anchor_file, texts)
+    anchor_found = any(_is_anchor_path(anchor_file, f) for f in texts)
 
     query_text = f"Implementation, definition, or usage of {target_symbol}"
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
@@ -312,23 +310,18 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
         if file_path in seen_files: continue
         seen_files.add(file_path)
 
-        norm_path = file_path.lower().replace('\\', '/')
-        file_base = norm_path.split('/')[-1].replace('.tsx', '').replace('.ts', '').replace('.jsx', '').replace('.js', '')
+        file_base = _module_stem(file_path)
         doc_text = doc['text']
-        # Aggregate all chunks for this file so import statements in part_1 are
-        # visible when the FAISS hit landed on part_4.
-        file_full_text = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
 
         # --- STRUCTURAL & SEMANTIC CHECKS ---
-        is_anchor = norm_anchor in norm_path
+        is_anchor = _is_anchor_path(anchor_file, file_path)
         has_symbol = target_symbol in doc_text
 
         # Structural: Does this file import the anchor? (downstream — true dependent)
-        # re.DOTALL required — TS multi-line imports span `import {` to `} from "..."` across lines
-        imports_anchor = bool(re.search(rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]", file_full_text, re.IGNORECASE | re.DOTALL))
+        imports_anchor = file_path in importers
 
         # Structural: Does the anchor import this file? (upstream — primitive/dependency)
-        is_imported_by_anchor = bool(re.search(rf"(import|require).*?['\"].*?{re.escape(file_base)}.*?['\"]", anchor_text, re.IGNORECASE | re.DOTALL)) if file_base and anchor_text else False
+        is_imported_by_anchor = file_base in anchor_imports
 
         evidence = []
         if has_symbol: evidence.append(f"Contains symbol `{target_symbol}`")
@@ -361,22 +354,18 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
                 parallel_data.append(f"- {file_path}\n  [Evidence]: {evidence_str}\n  [Snippet]: {snippet}\n\n")
 
     # Exhaustive import sweep: catches callers that FAISS ranking missed
-    all_file_paths = {doc['file'] for doc in doc_store.docs.values()}
-    for file_path in all_file_paths:
-        if file_path in seen_files: continue
-        file_full_text = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
-        if not re.search(rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]", file_full_text, re.IGNORECASE | re.DOTALL):
-            continue
+    for file_path in sorted(importers - seen_files):
+        if file_path not in texts: continue     # an edge left by a file no longer indexed
         seen_files.add(file_path)
-        rep_doc = next(d for d in doc_store.docs.values() if d['file'] == file_path)
+        file_full_text = texts[file_path]
         has_symbol = target_symbol in file_full_text
-        snippet = rep_doc['text'][:150].replace('\n', ' ').strip() + "..."
+        snippet = file_full_text[:150].replace('\n', ' ').strip() + "..."
         evidence = [f"Imports `{anchor_base}`"]
         if has_symbol: evidence.append(f"Contains symbol `{target_symbol}`")
         dependents_data.append(f"- {file_path}\n  [Evidence]: {' + '.join(evidence)}\n  [Snippet]: {snippet}\n\n")
 
     # Fallback to force anchor if FAISS missed it
-    if not anchor_data and anchor_text:
+    if not anchor_data and anchor_found:
         anchor_data.append(f"- {anchor_file}\n  [Evidence]: Origin Anchor (Forced via Metadata)\n\n")
 
     # --- PAYLOAD GENERATION ---
@@ -795,6 +784,93 @@ def _caller_evidence(symbol: str, anchor_file: str = "") -> tuple[list, list]:
     return list(verified.values()), list(candidate.values())
 
 
+# ---------------------------------------------------------------------------
+# Import relationships for analyze_blast_radius / find_dead_code (B-037)
+# ---------------------------------------------------------------------------
+
+# Extensions a module specifier may carry that are not part of the module's name.
+_MODULE_EXTS = {
+    ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".gs",
+    ".py", ".pyi", ".cs", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp",
+}
+
+# A quoted module specifier after `from`, `import`, `require(` or `import(`: the forms
+# the JS/TS adapter does not turn into IMPORTS edges (it records `import ... from` only).
+# Negated classes keep one match inside one string on one line. The pattern it replaces,
+# `(import|require).*?['"].*?NAME.*?['"]` with DOTALL, backtracked across the whole file
+# whenever a file did not import NAME: ~20 s for a 150K-char file, 10-20 min per call.
+_SPECIFIER_RE = re.compile(r"""\b(?:from|import|require)\s*\(?\s*(['"])([^'"\r\n]+)\1""")
+
+
+def _module_stem(spec: str) -> str:
+    """The name a module specifier or file path refers to, for matching one to the other.
+
+    './lib/foo.js' → 'foo', '@/lib/bar/index' → 'bar', 'pkg.mod' (Python) → 'mod',
+    'src/scan_policy.py' → 'scan_policy'. Lower-cased. Matching whole names means
+    './foobar' no longer counts as importing 'foo', as the old substring test did.
+    """
+    s = spec.strip().replace("\\", "/").rstrip("/").lower()
+    last = s.rsplit("/", 1)[-1]
+    root, ext = os.path.splitext(last)
+    if ext in _MODULE_EXTS:
+        last = root
+    elif "/" not in s:
+        last = last.rsplit(".", 1)[-1]      # dotted Python path: pkg.mod, .mod → mod
+    if last == "index" and "/" in s:
+        return _module_stem(s.rsplit("/", 1)[0])
+    return last
+
+
+def _texts_by_file() -> dict[str, str]:
+    """Every indexed file's chunk text, joined, in one pass over the doc store."""
+    parts: dict[str, list[str]] = {}
+    for d in doc_store.docs.values():
+        parts.setdefault(d['file'], []).append(d['text'])
+    return {f: "\n".join(p) for f, p in parts.items()}
+
+
+def _specifier_stems(text: str) -> set[str]:
+    return {_module_stem(m.group(2)) for m in _SPECIFIER_RE.finditer(text)}
+
+
+def _is_anchor_path(anchor_file: str, path: str) -> bool:
+    """Whether ``path`` is the anchor file: same file name, compared whole.
+
+    A substring test counted 'tests/test_scan_policy.py' as the anchor 'scan_policy.py',
+    so blast radius listed that importer as the origin and find_dead_code skipped it.
+    """
+    def name(p: str) -> str:
+        return p.lower().replace("\\", "/").split("/")[-1]
+    return name(path) == name(anchor_file)
+
+
+def _import_relations(anchor_file: str, texts: dict[str, str]) -> tuple[set[str], set[str]]:
+    """``(importers, imported)`` for ``anchor_file``.
+
+    ``importers`` are the files that import the anchor; ``imported`` holds the module
+    stems the anchor itself imports. Both come from the graph's IMPORTS edges (every
+    Python import, and ES imports) plus the quoted specifiers in the file text
+    (``require()``, ``import()``, re-exports), so neither source's gaps decide alone.
+    """
+    anchor_stem = _module_stem(anchor_file)
+    anchor_paths = {f for f in texts if _is_anchor_path(anchor_file, f)}
+
+    importers: set[str] = set()
+    imported: set[str] = set()
+    for source, target, resolved in _db().get_import_edges():
+        if _module_stem(resolved or target) == anchor_stem:
+            importers.add(source)
+        if source in anchor_paths:
+            imported.add(_module_stem(resolved or target))
+    for path, text in texts.items():
+        stems = _specifier_stems(text)
+        if path in anchor_paths:
+            imported |= stems
+        elif anchor_stem in stems:
+            importers.add(path)
+    return importers - anchor_paths, imported
+
+
 def _get_iterative_retriever() -> IterativeRetriever:
     global _iterative_retriever
     if _iterative_retriever is None:
@@ -948,7 +1024,7 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     Internally runs the full Retrieve-Traverse-Rerank pipeline:
       1. Semantic Search  — FAISS tier-1 index, top-50 by cosine similarity.
       2. Graph Expansion  — one-hop call-graph traversal via SQLite for top-5 seeds.
-      3. CrossEncoder Reranking — jina-reranker-v2-base-code scores every candidate.
+      3. Ranking — Reciprocal Rank Fusion; a reranker model only when enabled in indexer.toml.
 
     When deep=True, runs up to 3 iterative retrieval rounds with explored-node memory
     and query enrichment from prior evidence, stopping early when the score plateau
@@ -995,16 +1071,19 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
         sections[rel_map[rel]].append(chunk)
 
     # --- Build Markdown report ---
+    # Say what actually ranked the results: reranking is off by default (ADR-007),
+    # and an enabled reranker that fails to load falls back to RRF.
+    retriever = _get_hybrid_retriever()
+    reranked = retriever._reranker_enabled and not retriever._reranker_failed
+    rank_step = f"Reranking ({retriever._reranker_model_id})" if reranked else "RRF Fusion"
     pipeline_label = (
-        "Iterative Semantic Search → Graph Expansion → CrossEncoder Reranking"
-        if deep else
-        "Semantic Search → Graph Expansion → CrossEncoder Reranking"
+        f"{'Iterative ' if deep else ''}Semantic Search → Graph Expansion → {rank_step}"
     )
     header_lines: list[str] = [
         f"# Architectural Investigation: `{target_concept}`",
         "",
         f"> **Pipeline**: {pipeline_label}  ",
-        f"> **Results**: {len(chunks)} candidates retrieved and reranked.",
+        f"> **Results**: {len(chunks)} candidates retrieved and {'reranked' if reranked else 'ranked'}.",
     ]
     if session is not None:
         header_lines.append(
@@ -1077,8 +1156,9 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     return "\n".join(lines)
 
 
-def _get_test_suffixes(source_file: str) -> list[str]:
-    """Return test file suffixes for the language of source_file, or all languages."""
+def _get_test_patterns(source_file: str) -> tuple[list[str], list[str]]:
+    """Return ``(suffixes, globs)`` naming test files for the language of source_file,
+    or for all languages when it has none."""
     import os as _os
     from adapters import REGISTRY, get_adapter
     ext = _os.path.splitext(source_file)[1].lower()
@@ -1086,17 +1166,19 @@ def _get_test_suffixes(source_file: str) -> list[str]:
     if adapter and hasattr(adapter, "test_conventions"):
         tc = adapter.test_conventions()
         if tc:
-            return tc.file_suffixes
-    # Fall back to all known test suffixes across all adapters
+            return list(tc.file_suffixes), list(tc.file_globs)
+    # Fall back to all known test patterns across all adapters
     seen: set[int] = set()
     suffixes: list[str] = []
+    globs: list[str] = []
     for a in REGISTRY.values():
         if id(a) not in seen:
             seen.add(id(a))
             tc = a.test_conventions() if hasattr(a, "test_conventions") else None
             if tc:
                 suffixes.extend(tc.file_suffixes)
-    return suffixes
+                globs.extend(tc.file_globs)
+    return suffixes, globs
 
 
 @mcp.tool()
@@ -1105,7 +1187,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     Finds unit tests that semantically cover a source file or symbol.
 
     Adapts to the language of the source file — TypeScript (.test.ts),
-    C# (Tests.cs / Test.cs), Python (_test.py), etc.  Falls back to all
+    C# (Tests.cs / Test.cs), Python (test_*.py / _test.py), etc.  Falls back to all
     known test file patterns when the language cannot be determined.
 
     Inputs:
@@ -1122,10 +1204,16 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     norm_source = source_file.lower().replace('\\', '/').split('/')[-1]
     source_base = re.sub(r'\.[^.]+$', '', norm_source)
 
-    test_suffixes = [s.lower() for s in _get_test_suffixes(source_file)]
+    from fnmatch import fnmatchcase
+    suffixes, globs = _get_test_patterns(source_file)
+    test_suffixes = [s.lower() for s in suffixes]
+    test_globs = [g.lower() for g in globs]
+    test_patterns = test_suffixes + test_globs     # for messages
 
     def is_test_file(fp: str) -> bool:
-        return any(fp.endswith(s) for s in test_suffixes)
+        name = fp.split('/')[-1]
+        return (any(fp.endswith(s) for s in test_suffixes)
+                or any(fnmatchcase(name, g) for g in test_globs))
 
     # Collect one representative doc per test file
     test_doc_by_file: dict[str, dict] = {}
@@ -1135,17 +1223,19 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
             test_doc_by_file[fp] = doc
 
     if not test_doc_by_file:
-        suffixes_str = ", ".join(test_suffixes) if test_suffixes else "(none)"
+        patterns_str = ", ".join(test_patterns) if test_patterns else "(none)"
         return (
             "--- TEST COVERAGE ANALYSIS ---\n\n"
             f"SOURCE: {source_file}\n\n"
-            f"  [No test files found in the index (searched suffixes: {suffixes_str}) — run reindex first.]\n"
+            f"  [No test files found in the index (searched: {patterns_str}) — run reindex first.]\n"
         )
 
     # --- Tier 1: Direct name match ---
-    # Candidate direct test names: source_base + each test suffix
-    # e.g. "auth" + ".test.ts" → "auth.test.ts";  "AuthService" + "Tests.cs" → "authservicetests.cs"
-    direct_candidates = {f"{source_base}{s}" for s in test_suffixes}
+    # Candidate direct test names: source_base + each test suffix, or each glob with `*`
+    # as source_base. "auth" + ".test.ts" → "auth.test.ts"; "test_*.py" → "test_auth.py"
+    direct_names = ([f"{source_base}{s}" for s in test_suffixes]
+                    + [g.replace("*", source_base) for g in test_globs])
+    direct_candidates = set(direct_names)
     direct_data: list[str] = []
     direct_fps:  set[str]  = set()
     for fp, doc in test_doc_by_file.items():
@@ -1184,7 +1274,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     if target_symbol:
         header += f" | SYMBOL: {target_symbol}"
 
-    direct_label = " | ".join(f"{source_base}{s}" for s in test_suffixes[:2])
+    direct_label = " | ".join(direct_names[:2])
 
     context = f"--- TEST COVERAGE ANALYSIS ---\n\n{header}\n\n"
     context += "1. DIRECT COVERAGE (test file named after source):\n"
@@ -1199,7 +1289,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
             f"  test files were found for '{source_file}'.\n"
         )
 
-    context += f"\nNote: Searched for test files with suffixes: {', '.join(test_suffixes)}\n"
+    context += f"\nNote: Searched for test files named: {', '.join(test_patterns)}\n"
     return context
 
 
@@ -1381,8 +1471,20 @@ def index_status(since: str = "1d") -> str:
     if not os.path.exists(db_path):
         return "No index found — run reindex first."
 
-    def _parse_since(s: str) -> str:
-        """Relative window → absolute ISO cutoff; pass an ISO string through as-is."""
+    def _utc(ts: str) -> datetime | None:
+        """An ISO-8601 timestamp as an aware UTC datetime; naive means UTC."""
+        try:
+            dt = datetime.fromisoformat(ts.strip())
+        except ValueError:
+            return None
+        return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+    def _parse_since(s: str) -> datetime:
+        """A relative window ("7d", "12h", "30m") or an ISO-8601 timestamp → UTC cutoff.
+
+        Anything else is an error. It used to pass through as a text cutoff, so
+        since="garbage" reported "0 files changed" as if that were an answer.
+        """
         s = (s or "").strip()
         m = re.fullmatch(r"(\d+)\s*([dhm])", s)
         if m:
@@ -1392,22 +1494,32 @@ def index_status(since: str = "1d") -> str:
                 "h": timedelta(hours=n),
                 "m": timedelta(minutes=n),
             }[unit]
-            return (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
-        return s
+            return datetime.now(timezone.utc) - delta
+        dt = _utc(s)
+        if dt is None:
+            raise ValueError(
+                f"since={s!r} is not a window like '7d', '12h', '30m' or an "
+                "ISO-8601 timestamp like '2026-07-15T00:00:00Z'"
+            )
+        return dt
 
-    cutoff = _parse_since(since)
+    cutoff_dt = _parse_since(since)
+    cutoff = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     with CodeDB(db_path) as db:
         last_verified = db.meta_get("last_verified_at") or "(never recorded)"
         last_commit   = db.meta_get("last_indexed_commit")
         files_total   = db.meta_get("files_total") or "?"
         version_warning = chunker_version_warning(db)
-        rows = db._conn.execute(
-            "SELECT path, content_changed_at FROM files "
-            "WHERE content_changed_at IS NOT NULL AND content_changed_at > ? "
-            "ORDER BY content_changed_at DESC",
-            (cutoff,),
+        stamped = db._conn.execute(
+            "SELECT path, content_changed_at FROM files WHERE content_changed_at IS NOT NULL"
         ).fetchall()
+    # Compared as instants, not strings: stamps carry the committer's offset
+    # ("…T16:30:47-05:00") and a text comparison against a UTC cutoff was off by it.
+    recent = [(path, ts, _utc(ts)) for path, ts in stamped]
+    rows = [(path, ts) for path, ts, dt in sorted(
+        (r for r in recent if r[2] is not None and r[2] > cutoff_dt),
+        key=lambda r: r[2], reverse=True)]
 
     lines = [
         "--- INDEX STATUS ---",
@@ -1490,14 +1602,9 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
     """
     print(f"\n[MCP] find_dead_code: symbol='{symbol}' anchor='{anchor_file}'")
     _ensure_indexes()
-    norm_anchor = anchor_file.lower().replace('\\', '/').split('/')[-1]
-    anchor_base = re.sub(r'\.[^.]+$', '', norm_anchor)
-
-    # Pre-fetch anchor text for primitive detection
-    anchor_text = ""
-    for _d in doc_store.docs.values():
-        if norm_anchor in _d['file'].lower() and _d['tier'] == 'tier2_component':
-            anchor_text += _d['text'] + "\n"
+    # Files importing the anchor, computed once (B-037).
+    texts = _texts_by_file()
+    importers, _ = _import_relations(anchor_file, texts)
 
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
     # call-graph callers now reach the dead-code scan, so references visible only
@@ -1514,15 +1621,11 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
         if file_path in seen_files: continue
         seen_files.add(file_path)
 
-        norm_path = file_path.lower().replace('\\', '/')
-        if norm_anchor in norm_path: continue   # skip the defining file
+        if _is_anchor_path(anchor_file, file_path): continue   # skip the defining file
 
-        file_full = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
+        file_full = texts.get(file_path, c.text)
 
-        imports_anchor = bool(re.search(
-            rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]",
-            file_full, re.IGNORECASE | re.DOTALL
-        ))
+        imports_anchor = file_path in importers
         has_symbol = symbol in file_full
 
         snippet = c.text[:120].replace('\n', ' ').strip() + "..."
@@ -1536,16 +1639,12 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
             parallels.append(entry)
 
     # Exhaustive import sweep to catch callers FAISS ranking missed
-    for file_path in {d['file'] for d in doc_store.docs.values()}:
-        if file_path in seen_files: continue
-        norm_path = file_path.lower().replace('\\', '/')
-        if norm_anchor in norm_path: continue
-        file_full = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
-        if not re.search(rf"(import|require).*?['\"].*?{re.escape(anchor_base)}.*?['\"]", file_full, re.IGNORECASE | re.DOTALL):
-            continue
+    for file_path in sorted(importers - seen_files):
+        if file_path not in texts: continue     # an edge left by a file no longer indexed
+        if _is_anchor_path(anchor_file, file_path): continue
         seen_files.add(file_path)
-        rep_doc = next(d for d in doc_store.docs.values() if d['file'] == file_path)
-        snippet = rep_doc['text'][:120].replace('\n', ' ').strip() + "..."
+        file_full = texts[file_path]
+        snippet = file_full[:120].replace('\n', ' ').strip() + "..."
         entry = f"- {file_path}\n  [Snippet]: {snippet}\n\n"
         if symbol in file_full:
             callers.append(entry)
@@ -2149,9 +2248,8 @@ def _utf8_stdio() -> None:
     A client that launches this server over stdio on Windows gives it pipes, and a
     pipe's text encoding is the ANSI code page (cp1252), not UTF-8. The indexer's
     first line is a "━━" banner, so every watchdog reindex died on its first print
-    with UnicodeEncodeError. The protocol itself is unaffected: FastMCP writes it
-    through its own UTF-8 wrapper over the same buffer. Line buffering keeps each
-    of our lines whole, so none can land in the middle of a protocol message.
+    with UnicodeEncodeError. The protocol is unaffected: it has its own UTF-8
+    writer on a private copy of the pipe (see _claim_stdout).
     """
     import sys
     for stream in (sys.stdout, sys.stderr):
@@ -2191,11 +2289,49 @@ def _detach_stdin() -> None:
                                  encoding="utf-8", errors="replace")
 
 
+def _claim_stdout():
+    """Keep stdout for the protocol alone; everything else goes to stderr (B-039).
+
+    The MCP spec says a stdio server must not write anything to stdout that is not
+    a protocol message. The tools print progress, a watchdog reindex prints its
+    whole log, and a child process (the summarizer's worker, git) inherits stdout.
+    All of it reached the client as lines that are not JSON-RPC, and the Python
+    client logged a validation error for each one.
+
+    The protocol gets a private, non-inheritable copy of the pipe, and fd 1 (and
+    with it the process's standard output handle) becomes stderr, the channel the
+    spec gives servers for logging. print() and children then write there with no
+    change to them. Returns the protocol's writer, or None to leave stdout alone.
+    """
+    import io
+    import sys
+    try:
+        sys.stdout.flush()
+        fd = os.dup(1)
+        os.dup2(2, 1)
+    except OSError:
+        return None     # no usable stdout/stderr; let the transport use sys.stdout
+    return io.TextIOWrapper(io.BufferedWriter(io.FileIO(fd, "wb")), encoding="utf-8")
+
+
+async def _serve_stdio(protocol_out) -> None:
+    """FastMCP.run_stdio_async, with the protocol written to ``protocol_out``."""
+    import anyio
+    from mcp.server.stdio import stdio_server
+    stdout = anyio.wrap_file(protocol_out) if protocol_out is not None else None
+    async with stdio_server(stdout=stdout) as (read_stream, write_stream):
+        await mcp._mcp_server.run(
+            read_stream, write_stream, mcp._mcp_server.create_initialization_options()
+        )
+
+
 def main() -> None:
+    import anyio
     _utf8_stdio()
     _detach_stdin()
+    protocol_out = _claim_stdout()
     start_watchdog()
-    mcp.run()
+    anyio.run(_serve_stdio, protocol_out)
 
 
 if __name__ == "__main__":

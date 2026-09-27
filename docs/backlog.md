@@ -70,6 +70,15 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | raw |
 | [B-035](#b-035) | A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever | chunk-shape study, 2026-09-25 | S | shaped |
 | [B-036](#b-036) | A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it | PR test-merge, 2026-09-25 | S | shaped |
+| [B-037](#b-037) | `analyze_blast_radius` and `find_dead_code` take 10–20 minutes per call | dogfood of all 13 tools, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
+| [B-038](#b-038) | `find_test_coverage` never finds a pytest file | same dogfood, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
+| [B-039](#b-039) | The stdio server writes logs and child-process output to the protocol pipe | same dogfood, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
+| [B-040](#b-040) | `index_status` answers a bad `since` with "0 files", and compares timestamps as text | Inspector run 2026-09-25, dogfood 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
+| [B-041](#b-041) | `investigate_architecture` reports a reranking step that did not run | same dogfood, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
+| [B-042](#b-042) | `trace_data_flow` only understands Firestore and Next.js code | same dogfood, 2026-09-26 | M | raw |
+| [B-043](#b-043) | `map_module_communities` fills communities with names from outside the repo | same dogfood, 2026-09-26 | S–M | raw |
+| [B-044](#b-044) | After the first search, every in-process reindex runs out of VRAM and skips summaries | same dogfood, 2026-09-26 | S | shaped |
+| [B-045](#b-045) | No tool declares `readOnlyHint` | Inspector run, 2026-09-25 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -1267,3 +1276,113 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 3. Add `set -o pipefail` (or `shell: bash`) to any step that pipes into `tee`.
 
 **Depends on:** none. It should land before anyone is pointed at the repo to install it.
+
+---
+
+> **B-037 to B-045** come from one dogfood session on 2026-09-26: a full reindex of this repo on
+> master cf30557 (120 files, 1,830 chunks, 17.6 min with summaries on the GPU), then every MCP tool
+> called over a real stdio session with a question whose answer is known. Every tool answered in under
+> a second except the ones below.
+
+### B-037 — `analyze_blast_radius` and `find_dead_code` take 10–20 minutes per call
+
+**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+
+- Both tools asked "does this file import the anchor?" with `(import|require).*?['"].*?NAME.*?['"]`
+  under `DOTALL`, over every indexed file's joined chunk text (3 M chars on this repo). On a file that
+  does not import the anchor, the three lazy spans backtrack across the whole text. `db.py`'s 149 K
+  chars took 18.6 s alone, and `MCPServer.py` is 300 K. The server sat on one core and the client
+  waited.
+- It could not match a Python import at all: Python imports have no quotes, and `.py` was never
+  stripped from the anchor name.
+- **Fix:** importers come from the IMPORTS edges plus a linear scan for quoted specifiers
+  (`require()`, `import()` and re-exports, which the JS adapter does not record). Names match whole.
+  Both tools now answer in 0.1 s.
+
+### B-038 — `find_test_coverage` never finds a pytest file
+
+**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+
+- The Python adapter listed `"test_.py"` as a file *suffix*, and the tool matches suffixes with
+  `endswith`. pytest's convention is the prefix `test_*.py`, so no Python source ever had tests.
+- **Fix:** `TestConventions.file_globs`, and Python declares `test_*.py`.
+
+### B-039 — The stdio server writes logs and child-process output to the protocol pipe
+
+**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+
+- The MCP spec says a stdio server must not write anything to stdout that is not a protocol message.
+  Tool progress prints, a watchdog reindex's whole log, and child processes (the summarizer worker,
+  git) all went there. The Python client logged a validation error for each line. ADR-036 made the
+  lines safe to write; this moves them off the protocol channel.
+- **Fix:** the protocol writes to a private copy of the pipe, and fd 1 points at stderr.
+
+### B-040 — `index_status` answers a bad `since` with "0 files", and compares timestamps as text
+
+**Source:** MCP Inspector run, 2026-09-25 (recorded in ADR-037's notes); dogfood, 2026-09-26 ·
+**Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+
+- `since="garbage"` passed through as a text cutoff and reported 0 changed files.
+- `content_changed_at` keeps the committer's offset (`…T16:30:47-05:00`) and was compared as a string
+  to a UTC cutoff, so the window was off by the offset.
+- **Fix:** a bad `since` is a tool error; both sides are compared as UTC instants.
+
+### B-041 — `investigate_architecture` reports a reranking step that did not run
+
+**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+
+- The report header always said "CrossEncoder Reranking … retrieved and reranked", and the docstring
+  named jina-reranker-v2. Reranking has been off by default since ADR-007.
+- **Fix:** the header names RRF, or the reranker model when one is enabled and loaded.
+
+### B-042 — `trace_data_flow` only understands Firestore and Next.js code
+
+**Source:** dogfood, 2026-09-26 · **Status:** raw · **Size:** M
+
+- Its layers are path tests (`firebase/admin`, `functions/src`, `page.tsx`), a definition is
+  `export interface|type|class`, and a producer is a Firestore `.set/.add/.update` call. On this repo,
+  `trace_data_flow("chunk_summaries")` found no definition and no producer, and listed the writers
+  (`cache_summaries`) as consumers.
+- It will do the same on Apps Script: no `export`, and writes are `setValue`, `appendRow`,
+  `setProperty`.
+- A real fix is per-language producer and definition rules, likely from the adapters or
+  `indexer.toml`. That is a design decision, not a patch.
+
+### B-043 — `map_module_communities` fills communities with names from outside the repo
+
+**Source:** dogfood, 2026-09-26 · **Status:** raw · **Size:** S–M
+
+- `get_graph_edges()` falls back to an edge's raw `target` when it did not resolve, so unresolved calls
+  (`append`, `bool`, `ArgumentParser`) become graph nodes and show up as community members.
+- Dropping unresolved targets is not free. None of this repo's 557 IMPORTS edges resolve (Python
+  imports get no `resolved_target`), so the same filter would also remove every import link. Either
+  resolve Python imports to files first, or drop unresolved CALLS targets only. Either one changes
+  ADR-006's output and its modularity numbers.
+
+### B-044 — After the first search, every in-process reindex runs out of VRAM and skips summaries
+
+**Source:** dogfood, 2026-09-26 · **Status:** shaped · **Size:** S
+
+- Any search tool loads the embedder into the MCP server (~3.4 GB bf16). A later reindex, from the
+  `reindex` tool or a watchdog save, starts the summarizer in a worker process (another ~3.4 GB). On
+  the 8 GB card the summarizer runs out of memory, backs off, waits out its pause timeout, and skips
+  the summaries.
+- **Measured** on a one-file reindex: 15.7 s and summarized with no search first; **127.5 s and not
+  summarized** after one search (`oom 1`, `1 pauses (1 timed out)`, peak 6.8 GB). The run still ends
+  in "Done successfully", with only a WARNING about the summary cache.
+- **What it costs:** in a live session, every save after the first search is ~8× slower and gets no
+  summary vector. Nothing says so except that warning.
+- **Existing fix:** ADR-028's model host. With `[model_host] enabled = true`, the same scenario
+  summarized "via model host", peaked at 3.6 GB, and every summary vector was written. The host is
+  off by default; turn it on in each live project's `indexer.toml`, or change the shipped default
+  (which reverses ADR-028 Decision 1).
+- **Also seen in that host run:** the watchdog fired twice, once while the host was starting, where
+  the in-process runs fired zero times. It re-indexed a file that had really changed, so it did no
+  harm, but something the host does touches a watched path.
+
+### B-045 — No tool declares `readOnlyHint`
+
+**Source:** MCP Inspector run, 2026-09-25 (recorded in ADR-037's notes) · **Status:** raw · **Size:** S
+
+- Eleven of the thirteen tools only read. Declaring `readOnlyHint` lets a client auto-approve them.
+  `reindex` writes; `index_status` loads the indexes but writes nothing.
