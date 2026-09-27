@@ -97,9 +97,10 @@ def reset_config_cache() -> None:
     first case's values. ``core.py`` keeps its own embedder cache — reset that
     separately if a test changes ``[embeddings]``.
     """
-    global _sum_cfg_cache, _host_cfg_cache
+    global _sum_cfg_cache, _host_cfg_cache, _host_enabled_cache
     _sum_cfg_cache = None
     _host_cfg_cache = None
+    _host_enabled_cache = None
 
 
 def summarization_enabled() -> bool:
@@ -144,13 +145,17 @@ def summarizer_tiers() -> set[int]:
 # ---------------------------------------------------------------------------
 # Model host (ADR-028) — [model_host] in indexer.toml.
 #
-# One local process owns the GPU models; project processes are its clients. Off by
-# default, so CI, CPU-only machines and single-project use behave as before.
+# One local process owns the GPU models; project processes are its clients.
+# `enabled` is true, false or "auto". "auto" (the default, B-044) turns the host on
+# when the models would run on CUDA and leaves it off otherwise, so CI and CPU-only
+# machines behave as before. On a GPU it has to be on: once a search loads the
+# embedder into the MCP server, an in-process reindex has no room for the summarizer
+# on an 8 GB card and skips every summary.
 # The timing defaults are PROVISIONAL until ADR-028's Implementation Log records the
 # measured swap cost and batch durations they are meant to come from.
 # ---------------------------------------------------------------------------
 
-DEFAULT_MODEL_HOST_ENABLED = False
+DEFAULT_MODEL_HOST_ENABLED = "auto"
 DEFAULT_MODEL_HOST_EMBED_IDLE_S = 60.0        # PROVISIONAL: needs the measured embedder reload cost
 DEFAULT_MODEL_HOST_IDLE_EXIT_S = 1800.0       # PROVISIONAL
 DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S = 30.0     # host start to listening; models load later, on demand
@@ -165,9 +170,29 @@ def _host_cfg() -> dict:
     return _host_cfg_cache
 
 
+def resolve_model_host_enabled(value, device: str) -> bool:
+    """`[model_host].enabled` as a bool: true, false, or "auto" (on when ``device`` is CUDA)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.lower() == "auto":
+        return device.startswith("cuda")
+    raise ValueError(f'[model_host].enabled must be true, false or "auto", not {value!r}')
+
+
+_host_enabled_cache: bool | None = None
+
+
 def model_host_enabled() -> bool:
     """Whether embeds and summaries go to the shared model host (ADR-028)."""
-    return bool(_host_cfg().get("enabled", DEFAULT_MODEL_HOST_ENABLED))
+    global _host_enabled_cache
+    if _host_enabled_cache is None:
+        value = _host_cfg().get("enabled", DEFAULT_MODEL_HOST_ENABLED)
+        device = "cpu"
+        if not isinstance(value, bool):
+            from device import resolve_device     # imports torch; only "auto" needs it
+            device = resolve_device()
+        _host_enabled_cache = resolve_model_host_enabled(value, device)
+    return _host_enabled_cache
 
 
 def model_host_embed_idle_s() -> float:

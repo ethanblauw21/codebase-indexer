@@ -6,8 +6,8 @@ Drop-ins for the calls the indexer makes today:
     embed_batch(texts)     core.embed_batch      indexing path (incremental_indexer)
     make_summarizer()      IsolatedChunkSummarizer()
 
-With ``[model_host].enabled = false`` (the default) each one is exactly today's
-in-process call. With it on, the call goes to the host, which is started if it is
+With ``[model_host].enabled`` off (the default on CPU; ``"auto"`` turns it on when
+the models run on CUDA, B-044) each one is exactly the in-process call. With it on, the call goes to the host, which is started if it is
 not running. If the host cannot be reached or started, or serves a different
 model than this project is configured for, the call falls back to in-process
 loading and says so once in the log. It never fails an index or a search.

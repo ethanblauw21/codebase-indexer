@@ -74,7 +74,7 @@ Endpoints:
 
 ### §2. The client is a drop-in behind the same calls
 
-`src/model_client.py` provides `embed`, `embed_batch` and `make_summarizer()` with the signatures the callers use today. `hybrid_retriever.py` and `incremental_indexer.py` import from it instead of from `core` and `summarizer`. `[model_host].enabled` picks between the host and today's in-process loading, and defaults to false.
+`src/model_client.py` provides `embed`, `embed_batch` and `make_summarizer()` with the signatures the callers use today. `hybrid_retriever.py` and `incremental_indexer.py` import from it instead of from `core` and `summarizer`. `[model_host].enabled` picks between the host and today's in-process loading. It defaulted to false; since 2026-09-26 it defaults to `"auto"`, on when the models run on CUDA (B-044, see the log).
 
 - **Fallback.** If the host is enabled but cannot be reached or started within `spawn_timeout_s`, the call runs in-process.
   - The client prints one line saying so. It does not fail silently, and it does not fail the index.
@@ -158,7 +158,7 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
 - Debugging a slow search can now mean looking at another process.
 - The host takes the config of whichever project started it. Projects configured with different models cannot share it, and they fall back to in-process, with one log line saying so.
 
-**Neutral:** with `[model_host].enabled = false` the indexer behaves as it does today. CI, CPU-only machines and single-project use are unchanged.
+**Neutral:** with `[model_host].enabled = false` the indexer behaves as it does today. CI and CPU-only machines are unchanged: the default is `"auto"` (2026-09-26, B-044), which turns the host on only when the models run on CUDA. It began as `false`; see the log.
 
 ## Alternatives Considered
 
@@ -255,3 +255,18 @@ These get filled in from stress-kit stages as they run. Nothing here is guessed.
     save.** A faster save would need both models resident at once. That is bf16 embedder (~3 GB)
     plus summarizer (~3.8 GB peak in pass 1), tight on 8 GB, and a change to Decision 1. It is not
     measured.
+- **2026-09-26: the default is now `"auto"`, on when the models run on CUDA (B-044).** The
+  2026-09-26 dogfood found that single-project use on a GPU is not unchanged with the host off. Once
+  any search loads the embedder into the MCP server, the next in-process reindex (the `reindex` tool
+  or a watchdog save) has no room for the summarizer on the 8 GB card. It runs out of memory and
+  skips every summary: a one-file save took 127.5 s instead of 15.7 s and wrote no summary. With the
+  host on, the same sequence summarized and peaked at 3.6 GB. So on a GPU the host is the only
+  configuration that works, and `false` stays the right answer only where the models run on CPU.
+  - `enabled` takes `true`, `false` or `"auto"`, and anything else is a config error.
+    `config.resolve_model_host_enabled` decides; `"auto"` asks `device.resolve_device()`, so
+    `CODE_INDEXER_DEVICE=cpu` also keeps the host off.
+  - CI and CPU-only machines resolve `"auto"` to off, so they behave as before. `tests/conftest.py`
+    pins the host off for the suite on a GPU machine; the host's own tests turn it on explicitly.
+  - A project with no `indexer.toml` gets the host on a GPU too, which is the case B-044 was about.
+  - Same PR: a summary pass that leaves texts unsummarized now prints a WARNING with the count, and
+    the run ends "Done with warnings" instead of "Done successfully".
