@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="SystemAccessFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 03 09:00:00 2026">
+<Controller Use="Target" Name="SystemAccessFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<Tags>
+<Tag Name="Clock_Data" TagType="Base" DataType="DINT" Dimensions="7" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Wall clock date and time words]]></Description>
+</Tag>
+<Tag Name="Conveyor_Drive" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Status word mirroring the drive, sharing the drive name]]></Description>
+</Tag>
+<Tag Name="Drive_Status" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Entry status fetched from the drive module]]></Description>
+</Tag>
+<Tag Name="WD_Value" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Watchdog time to apply to the periodic task]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="SystemProgram" TestEdits="false" MainRoutineName="SysMon" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="SysMon" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Read the wall clock, which is a singleton object with no instance name]]></Comment>
+<Text>
+<![CDATA[GSV(WallClockTime,,DateTime,Clock_Data[0]);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[Fetch entry status from the drive module by object name]]></Comment>
+<Text>
+<![CDATA[GSV(Module,Conveyor_Drive,EntryStatus,Drive_Status);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment><![CDATA[Apply the configured watchdog to the task object]]></Comment>
+<Text>
+<![CDATA[SSV(Task,MainTask,Watchdog,WD_Value);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="SystemProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

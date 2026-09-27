@@ -1,0 +1,15 @@
+{
+  "feature": "l5x/module_nameless",
+  "language": "l5x",
+  "tier": "A",
+  "note": "A Module is NOT guaranteed a Name attribute. In the survey corpus 22 of 83 modules carried none, and a bare 'if not name: continue' silently discarded a quarter of the hardware tree while the parse reported success. That is the single most consequential bug found in this adapter and it had no fixture. Two facts are asserted. (1) A nameless module is still a symbol, keyed on parent + parent port id + port address. (2) The address comes from the UPSTREAM port, the module's address on its parent's bus - not the first addressed port in document order. This fixture places the upstream port second and gives it a different address from the downstream one, so document order yields Conveyor_Drive:2:9 and the correct upstream rule yields Conveyor_Drive:2:4. 18 corpus modules expose two addressed ports and in all 18 the upstream one is second, so document order was wrong every time it mattered and uniqueness held only by luck.",
+  "symbols": [
+    {"fqn": "Local", "kind": "module"},
+    {"fqn": "Conveyor_Drive", "kind": "module"},
+    {"fqn": "Conveyor_Drive:2:4", "kind": "module"}
+  ],
+  "edges": [
+    {"source": "Local", "target": "Conveyor_Drive", "kind": "owns"},
+    {"source": "Conveyor_Drive", "target": "Conveyor_Drive:2:4", "kind": "owns"}
+  ]
+}

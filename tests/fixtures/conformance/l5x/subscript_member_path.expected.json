@@ -1,0 +1,22 @@
+{
+  "feature": "l5x/subscript_member_path",
+  "language": "l5x",
+  "tier": "A",
+  "note": "A subscript is an expression, not a bare name. `array_subscript_2d` pins the comma rule -- that `Recipe[Row,Col]` is one operand and not two. This pins what is INSIDE the brackets: `Recipe_Buffer[Current_Step.Index]` reads the pointer, not the pointer and a phantom member. The first implementation swept identifiers out of the brackets, so it read both `Current_Step` and `Index`; `Index` is a real and unrelated controller tag here, so the sweep emitted a FALSE read edge. Same defect as expression_member_path, one level down and in a different function (`split_operand` rather than the expression walk), which is why it gets its own fixture -- fixing one did not fix the other. The index read is genuine and stays: the controller does read Current_Step to compute the address.",
+  "symbols": [
+    {"fqn": "SequenceProgram", "kind": "program"},
+    {"fqn": "SequenceProgram.Advance", "kind": "routine"},
+    {"fqn": "Current_Step", "kind": "tag"},
+    {"fqn": "Index", "kind": "tag"},
+    {"fqn": "Recipe_Buffer", "kind": "tag"},
+    {"fqn": "Step_Value", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "SequenceProgram", "target": "SequenceProgram.Advance", "kind": "owns"},
+
+    {"source": "SequenceProgram.Advance", "target": "Step_Value", "kind": "writes"},
+
+    {"source": "SequenceProgram.Advance", "target": "Recipe_Buffer", "kind": "reads"},
+    {"source": "SequenceProgram.Advance", "target": "Current_Step", "kind": "reads"}
+  ]
+}

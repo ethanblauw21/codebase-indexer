@@ -1,0 +1,23 @@
+{
+  "feature": "l5x/write_position_swpb_btd",
+  "language": "l5x",
+  "tier": "A",
+  "note": "Guards two operand-order corrections whose destination is NOT the last operand, both of which shipped wrong at some point. SWPB(Source, OrderMode, Dest) writes index 2 - an earlier table wrote index 1, the order-mode keyword. BTD(Source, SourceBit, Dest, DestBit, Length) writes index 2, not the last operand; secondary documentation says otherwise and is describing the Studio 5000 dialog field list rather than the neutral-text serialization. Both were established by corpus operand-kind profiling against tools/l5x survey output, which is a different implementation from the adapter, so neither had a guard on the code that actually ships until this fixture. Teeth: moving either destination index makes a write edge land on the wrong tag, or on a literal where it vanishes.",
+  "symbols": [
+    {"fqn": "ConvertProgram", "kind": "program"},
+    {"fqn": "ConvertProgram.Convert", "kind": "routine"},
+    {"fqn": "Raw_Word", "kind": "tag"},
+    {"fqn": "Swapped_Word", "kind": "tag"},
+    {"fqn": "Source_Word", "kind": "tag"},
+    {"fqn": "Dest_Word", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "ConvertProgram", "target": "ConvertProgram.Convert", "kind": "owns"},
+
+    {"source": "ConvertProgram.Convert", "target": "Raw_Word", "kind": "reads"},
+    {"source": "ConvertProgram.Convert", "target": "Swapped_Word", "kind": "writes"},
+
+    {"source": "ConvertProgram.Convert", "target": "Source_Word", "kind": "reads"},
+    {"source": "ConvertProgram.Convert", "target": "Dest_Word", "kind": "writes"}
+  ]
+}

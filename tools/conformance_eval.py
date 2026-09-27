@@ -60,6 +60,11 @@ _LANG_BY_EXT = {
     ".cc": "cpp",
     ".h": "cpp",
     ".hpp": "cpp",
+    # ADR-013. Both spellings are registered in the adapter REGISTRY, so both
+    # are listed here - fixture discovery matches `stem + ext` literally and a
+    # `.L5X` fixture would otherwise register as an orphan expected.json.
+    ".L5X": "l5x",
+    ".l5x": "l5x",
 }
 
 _SOURCE_EXTS = tuple(_LANG_BY_EXT)

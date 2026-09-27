@@ -1,0 +1,30 @@
+{
+  "feature": "l5x/mnemonic_alias",
+  "language": "l5x",
+  "tier": "A",
+  "note": "Alias half of the mnemonic-spelling pair, and the point of the whole canonicalization decision. Same logic as mnemonic_canonical.L5X written as EQ/MOVE/LIMIT/NE instead of EQU/MOV/LIM/NEQ. The symbol and edge lists are byte-identical to mnemonic_canonical.expected.json - if this scores 1.00 while that one does too, canonicalization works. This fixture SHOULD FAIL until the alias table is wired in; that failure is the test doing its job, not a regression. In the Egan corpus the alias spelling appears in exactly one file (SoftwareRevision 36.04) and the canonical spelling in the other four, with no file mixing the two. Only MOVE is semantically confirmed, from the EQ(t,0)MOVE(1,t) default-value idiom which puts source first and destination second exactly as MOV does. The other seven pairs are inferred from that pattern plus matching operand arity within each pair; a wrong entry produces wrong edges silently and permanently.",
+  "symbols": [
+    {"fqn": "LevelProgram", "kind": "program"},
+    {"fqn": "LevelProgram.Monitor", "kind": "routine"},
+    {"fqn": "Mode", "kind": "tag"},
+    {"fqn": "Level", "kind": "tag"},
+    {"fqn": "Low_Limit", "kind": "tag"},
+    {"fqn": "High_Limit", "kind": "tag"},
+    {"fqn": "In_Range", "kind": "tag"},
+    {"fqn": "Fault", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "LevelProgram", "target": "LevelProgram.Monitor", "kind": "owns"},
+
+    {"source": "LevelProgram.Monitor", "target": "Mode", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "Mode", "kind": "writes"},
+
+    {"source": "LevelProgram.Monitor", "target": "Low_Limit", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "Level", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "High_Limit", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "In_Range", "kind": "writes"},
+
+    {"source": "LevelProgram.Monitor", "target": "In_Range", "kind": "reads"},
+    {"source": "LevelProgram.Monitor", "target": "Fault", "kind": "writes"}
+  ]
+}

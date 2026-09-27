@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="AoiFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 03 09:00:00 2026">
+<Controller Use="Target" Name="AoiFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<AddOnInstructionDefinitions>
+<AddOnInstructionDefinition Name="AOI_DigIn" Revision="1.0" ExecutePrescan="false" ExecutePostscan="false" ExecuteEnableInFalse="false" SoftwareRevision="v35.01">
+<Description><![CDATA[Debounced discrete input conditioner]]></Description>
+<Parameters>
+<Parameter Name="EnableIn" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only"/>
+<Parameter Name="EnableOut" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only"/>
+<Parameter Name="Inp_Raw" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write">
+<Description><![CDATA[Raw field input before debounce]]></Description>
+</Parameter>
+<Parameter Name="Out_State" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write">
+<Description><![CDATA[Debounced input state]]></Description>
+</Parameter>
+<Parameter Name="Ref_Config" TagType="Base" DataType="DINT" Usage="InOut" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write">
+<Description><![CDATA[Debounce configuration, passed by reference]]></Description>
+</Parameter>
+</Parameters>
+<LocalTags>
+<LocalTag Name="Debounce_Acc" DataType="DINT" Radix="Decimal" ExternalAccess="Read/Write">
+<Description><![CDATA[Debounce accumulator, local to the instruction]]></Description>
+</LocalTag>
+</LocalTags>
+<Routines>
+<Routine Name="Logic" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Accumulate while the raw input is present]]></Comment>
+<Text>
+<![CDATA[XIC(Inp_Raw)ADD(Debounce_Acc,1,Debounce_Acc);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[Assert the debounced state once the accumulator passes the configured threshold]]></Comment>
+<Text>
+<![CDATA[GRT(Debounce_Acc,Ref_Config)OTE(Out_State);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</AddOnInstructionDefinition>
+</AddOnInstructionDefinitions>
+<Tags>
+<Tag Name="DigIn_Instance" TagType="Base" DataType="AOI_DigIn" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Backing instance for the start pushbutton conditioner]]></Description>
+</Tag>
+<Tag Name="Field_Input" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Raw field wiring state]]></Description>
+</Tag>
+<Tag Name="Motor_Ready" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Conditioned ready signal]]></Description>
+</Tag>
+<Tag Name="Config_Word" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Debounce threshold in scans]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="IOProgram" TestEdits="false" MainRoutineName="ReadInputs" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="ReadInputs" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Condition the field input through the debounce instruction]]></Comment>
+<Text>
+<![CDATA[AOI_DigIn(DigIn_Instance,Field_Input,Motor_Ready,Config_Word);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="IOProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>

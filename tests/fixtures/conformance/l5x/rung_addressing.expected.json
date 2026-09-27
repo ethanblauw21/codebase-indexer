@@ -1,0 +1,30 @@
+{
+  "feature": "l5x/rung_addressing",
+  "language": "l5x",
+  "tier": "A",
+  "note": "A write edge names the ROUTINE, and the routine is not a fine enough answer to 'what activates this device' - survey routines run to a median of 4 rungs but p90 29 and max 68. Valve_Open here is written on rung 1 (OTE) and again on rung 3 (OTU). Edges dedupe on (source, target, kind), so those two writes collapse into ONE writes edge and the rung is unrecoverable from the edge alone: that is precisely why the adapter also emits rung-level references. Seq_Active is written on rung 0 and read on rung 1, so it carries both an edge and two references at different rungs. Step is read TWICE inside rung 2 - once as EQU's SourceA and once as MOV's Source - and dedupes to one reference, because a tag touched twice in one rung is one place to look and reference counts feed density scoring. The 3 in EQU(Step,3) is a literal and the Dest of MOV is a write, so Step_Last is written and never read. This file scores the symbols and edges; the reference assertions the fixture exists for live in tests/test_l5x_adapter.py, because the ADR-008 harness compares symbols and edges only.",
+  "symbols": [
+    {"fqn": "Filler", "kind": "program"},
+    {"fqn": "Filler.Sequence", "kind": "routine"},
+    {"fqn": "Start_PB", "kind": "tag"},
+    {"fqn": "Seq_Active", "kind": "tag"},
+    {"fqn": "Level_OK", "kind": "tag"},
+    {"fqn": "Valve_Open", "kind": "tag"},
+    {"fqn": "Step", "kind": "tag"},
+    {"fqn": "Step_Last", "kind": "tag"},
+    {"fqn": "Fill_Done", "kind": "tag"}
+  ],
+  "edges": [
+    {"source": "Filler", "target": "Filler.Sequence", "kind": "owns"},
+
+    {"source": "Filler.Sequence", "target": "Start_PB", "kind": "reads"},
+    {"source": "Filler.Sequence", "target": "Seq_Active", "kind": "reads"},
+    {"source": "Filler.Sequence", "target": "Level_OK", "kind": "reads"},
+    {"source": "Filler.Sequence", "target": "Step", "kind": "reads"},
+    {"source": "Filler.Sequence", "target": "Fill_Done", "kind": "reads"},
+
+    {"source": "Filler.Sequence", "target": "Seq_Active", "kind": "writes"},
+    {"source": "Filler.Sequence", "target": "Valve_Open", "kind": "writes"},
+    {"source": "Filler.Sequence", "target": "Step_Last", "kind": "writes"}
+  ]
+}

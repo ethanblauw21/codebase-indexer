@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="35.05" TargetName="SpellingFixture" TargetType="Controller" ContainsContext="false" Owner="conformance-fixture" ExportDate="Mon Aug 03 09:00:00 2026">
+<Controller Use="Target" Name="SpellingFixture" ProcessorType="1769-L33ER" MajorRev="35" MinorRev="11">
+<DataTypes/>
+<Tags>
+<Tag Name="Mode" TagType="Base" DataType="DINT" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Operating mode selector]]></Description>
+</Tag>
+<Tag Name="Level" TagType="Base" DataType="REAL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Measured tank level]]></Description>
+</Tag>
+<Tag Name="Low_Limit" TagType="Base" DataType="REAL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Lower acceptable level]]></Description>
+</Tag>
+<Tag Name="High_Limit" TagType="Base" DataType="REAL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Upper acceptable level]]></Description>
+</Tag>
+<Tag Name="In_Range" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Level is within the acceptable band]]></Description>
+</Tag>
+<Tag Name="Fault" TagType="Base" DataType="BOOL" Constant="false" ExternalAccess="Read/Write">
+<Description><![CDATA[Level out of range fault]]></Description>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="LevelProgram" TestEdits="false" MainRoutineName="Monitor" Disabled="false">
+<Tags/>
+<Routines>
+<Routine Name="Monitor" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment><![CDATA[Default the mode when it has never been set]]></Comment>
+<Text>
+<![CDATA[EQU(Mode,0)MOV(1,Mode);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment><![CDATA[Level must sit between the configured limits]]></Comment>
+<Text>
+<![CDATA[LIM(Low_Limit,Level,High_Limit)OTE(In_Range);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment><![CDATA[Fault whenever the level leaves the band]]></Comment>
+<Text>
+<![CDATA[NEQ(Mode,0)XIO(In_Range)OTE(Fault);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500">
+<ScheduledPrograms>
+<ScheduledProgram Name="LevelProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>
