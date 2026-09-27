@@ -77,7 +77,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-041](#b-041) | `investigate_architecture` reports a reranking step that did not run | same dogfood, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
 | [B-042](#b-042) | `trace_data_flow` only understands Firestore and Next.js code | same dogfood, 2026-09-26 | M | raw |
 | [B-043](#b-043) | `map_module_communities` fills communities with names from outside the repo | same dogfood, 2026-09-26 | S–M | raw |
-| [B-044](#b-044) | After the first search, every in-process reindex runs out of VRAM and skips summaries | same dogfood, 2026-09-26 | S | shaped |
+| [B-044](#b-044) | After the first search, every in-process reindex runs out of VRAM and skips summaries | same dogfood, 2026-09-26 | S | **done** |
 | [B-045](#b-045) | No tool declares `readOnlyHint` | Inspector run, 2026-09-25 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
@@ -1361,7 +1361,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 ### B-044 — After the first search, every in-process reindex runs out of VRAM and skips summaries
 
-**Source:** dogfood, 2026-09-26 · **Status:** shaped · **Size:** S
+**Source:** dogfood, 2026-09-26 · **Status:** done · **Size:** S
 
 - Any search tool loads the embedder into the MCP server (~3.4 GB bf16). A later reindex, from the
   `reindex` tool or a watchdog save, starts the summarizer in a worker process (another ~3.4 GB). On
@@ -1379,6 +1379,10 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 - **Also seen in that host run:** the watchdog fired twice, once while the host was starting, where
   the in-process runs fired zero times. It re-indexed a file that had really changed, so it did no
   harm, but something the host does touches a watched path.
+- **Done 2026-09-26:** `[model_host].enabled` now defaults to `"auto"`, on when the models run on
+  CUDA, so a project with no `indexer.toml` gets the host on a GPU (ADR-028's log). A pass that
+  leaves texts unsummarized now says so, and the run ends "Done with warnings". The watchdog
+  firing during the host's start is still unexplained.
 
 ### B-045 — No tool declares `readOnlyHint`
 

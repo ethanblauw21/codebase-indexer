@@ -160,3 +160,23 @@ def test_pass_one_summarizes_a_repeated_text_once(db, tmp_path):
     ii.run_summarization_pass(["tiny.py"], str(tmp_path), db, stub)
     texts = [c.text for chunks in ii.chunk_all_tiers("tiny.py", "x = 1\n").values() for c in chunks]
     assert stub.seen == len(set(texts))
+
+
+class _OutOfMemorySummarizer:
+    """A summarizer whose every batch comes back empty, as it does when the GPU is full."""
+
+    def summarize_batch(self, codes):
+        return [""] * len(codes)
+
+
+def test_pass_one_reports_texts_left_without_a_summary(db, repo, capsys):
+    """B-044: an out-of-memory summarizer used to leave no trace but a stats line,
+    and the run still ended "Done successfully"."""
+    missing = ii.run_summarization_pass(["mod.py"], str(repo), db, _OutOfMemorySummarizer())
+    assert missing > 0
+    assert f"WARNING: {missing} of {missing} texts got no summary" in capsys.readouterr().out
+
+
+def test_pass_one_reports_nothing_missing_when_all_are_summarized(db, repo, capsys):
+    assert ii.run_summarization_pass(["mod.py"], str(repo), db, StubSummarizer()) == 0
+    assert "WARNING" not in capsys.readouterr().out

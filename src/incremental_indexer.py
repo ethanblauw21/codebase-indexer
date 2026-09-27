@@ -834,8 +834,12 @@ def run_summarization_pass(
     repo_path:  str,
     db:         CodeDB,
     summarizer: object,
-) -> None:
+) -> int:
     """Summarize every chunk of every file before any embedding begins.
+
+    Returns how many distinct texts came back without a summary, so the run's last
+    line can say so (B-044): a summarizer that runs out of GPU memory returns empty
+    strings, and the run used to end "Done successfully" all the same.
 
     The summarizer (Qwen2.5-Coder-1.5B) and the embedder (bge-code-v1) do not
     fit on an 8 GB card together. The main loop interleaves them per file and
@@ -899,6 +903,10 @@ def run_summarization_pass(
     # failed pass is only visible by counting chunk_summaries afterward.
     if hasattr(summarizer, "stats_line"):
         print(f"  Pass 1 summarizer: {summarizer.stats_line()}", flush=True)
+    missing = len(todo) - total_new
+    if missing:
+        print(f"  WARNING: {missing} of {len(todo)} texts got no summary.", flush=True)
+    return missing
 
 
 def run_incremental(
@@ -1080,8 +1088,9 @@ def run_incremental(
 
     # Two-pass split: summarize everything, release the LLM, then embed. See
     # run_summarization_pass() for why interleaving the two models does not fit.
+    unsummarized = 0
     if summarizer is not None:
-        run_summarization_pass(to_index, repo_path, db, summarizer)
+        unsummarized = run_summarization_pass(to_index, repo_path, db, summarizer)
         summarizer.shutdown()          # child process exits; its GPU memory returns
         summarizer = _CacheOnlySummarizer()
         print("━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
@@ -1161,7 +1170,7 @@ def run_incremental(
     with CodeDB(DB_PATH) as verify_db:
         s = verify_db.stats()
 
-    status = "with errors" if errors else "successfully"
+    status = "with errors" if errors else "with warnings" if unsummarized else "successfully"
     print(
         f"Done {status}.  "
         f"files={s['files']}  symbols={s['symbols']}  "
@@ -1169,6 +1178,12 @@ def run_incremental(
     )
     if errors:
         print(f"  {errors} file(s) failed to index — check output above.")
+    if unsummarized:
+        # Pass 1 only visits changed files, so these stay unsummarized until their
+        # file changes again or a full reindex runs.
+        print(f"  {unsummarized} chunk text(s) have no summary — see 'Pass 1 summarizer' above "
+              f"(oom = the GPU was full). Searchable, but without their summaries until the "
+              f"file changes again or reindex(changed_files_only=False) runs.")
 
 
 def main() -> None:

@@ -152,10 +152,14 @@ vram_reserve_mb = 1024
 
 [model_host]
 # ADR-028: one local process owns the GPU models, and every project's MCP server,
-# watchdog and code-indexer run sends it embeds and summaries. Off by default. When on
-# and the host cannot be reached or started, the indexer falls back to loading models
-# in its own process and says so in the log.
-enabled = false
+# watchdog and code-indexer run sends it embeds and summaries. When on and the host
+# cannot be reached or started, the indexer falls back to loading models in its own
+# process and says so in the log.
+#
+# true, false, or "auto": on when the models run on CUDA, off on CPU (B-044). On an
+# 8 GB card it needs to be on: once a search has loaded the embedder into the MCP
+# server, an in-process reindex has no room for the summarizer and skips summaries.
+enabled = "auto"
 
 # Seconds the embedder stays loaded after its last request. Searches come in bursts,
 # and each reload costs seconds. Provisional until the swap cost is measured.
