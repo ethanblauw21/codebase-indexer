@@ -71,6 +71,7 @@ import sys
 import time
 import traceback
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -80,7 +81,7 @@ import numpy as np
 
 from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
 from call_resolver import resolve_call_edges
-from config import summarization_enabled, summarizer_model_id, summarizer_tiers
+from config import embed_overlap, summarization_enabled, summarizer_model_id, summarizer_tiers
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
@@ -686,6 +687,18 @@ class _FilePlan:
             offset += n
 
 
+class _Done:
+    """An already-finished result with a Future's ``result()``, for the no-overlap path."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value) -> None:
+        self._value = value
+
+    def result(self):
+        return self._value
+
+
 def _embed_texts(texts: list[str]) -> np.ndarray:
     """Embed `texts` through the model host when enabled, else in-process
     (ADR-028) — the one import/call point `ingest_file` and B-050's cross-file
@@ -1284,24 +1297,43 @@ def _run_incremental(
     # the same order and the same per-file commit point `ingest_file` always used,
     # so a kill between two files' writes is healed by reconcile_vectors exactly as
     # before (see ADR-040).
+    #
+    # B-055: with [indexer] embed_overlap on, a full window's embed call runs on one
+    # background thread while this thread goes on chunking and parsing the next
+    # window's files, so the GPU no longer idles through the CPU work. Only the model
+    # call moves: every FAISS and SQLite write stays on this thread, in queue order,
+    # and window k is written before window k+1, so kill-safety is unchanged.
     errors = 0
     pending_plans:  list[_FilePlan] = []
     pending_counts: list[int] = []
     pending_texts:  list[str] = []
+    embedder = (ThreadPoolExecutor(max_workers=1, thread_name_prefix="embed")
+                if embed_overlap() else None)
+    inflight: Optional[tuple] = None        # the window whose vectors are on their way
+    timing = {"embed": 0.0, "wait": 0.0, "prep": 0.0, "write": 0.0, "calls": 0, "texts": 0}
+    pass2_start = time.monotonic()
 
-    def _flush_pending() -> None:
+    def _embed_timed(texts: list[str]) -> tuple[np.ndarray, float]:
+        t0 = time.monotonic()
+        vectors = _embed_texts(texts)
+        faiss.normalize_L2(vectors)
+        return vectors, time.monotonic() - t0
+
+    def _write_window(job: tuple) -> None:
         nonlocal errors
-        if not pending_plans:
-            return
+        future, plans, counts_by_plan = job
         vectors: Optional[np.ndarray] = None
-        if pending_texts:
-            print(f"  [embed] batch: {len(pending_texts)} text(s) across "
-                  f"{len(pending_plans)} file(s)", flush=True)
-            vectors = _embed_texts(pending_texts)
-            faiss.normalize_L2(vectors)
+        if future is not None:
+            t0 = time.monotonic()
+            vectors, took = future.result()
+            timing["wait"] += time.monotonic() - t0
+            timing["embed"] += took
+            timing["calls"] += 1
+            timing["texts"] += len(vectors)
 
+        t0 = time.monotonic()
         offset = 0
-        for plan, n in zip(pending_plans, pending_counts):
+        for plan, n in zip(plans, counts_by_plan):
             try:
                 if n:
                     plan.scatter(vectors[offset:offset + n])
@@ -1315,56 +1347,98 @@ def _run_incremental(
                 print(f"  ✗  {plan.rel_path}")
                 traceback.print_exc()
             offset += n
+        timing["write"] += time.monotonic() - t0
 
+    def _flush_pending() -> None:
+        nonlocal inflight
+        if not pending_plans:
+            return
+        plans, counts_by_plan = list(pending_plans), list(pending_counts)
+        texts = list(pending_texts)
         pending_plans.clear()
         pending_counts.clear()
         pending_texts.clear()
+        future = None
+        if texts:
+            print(f"  [embed] batch: {len(texts)} text(s) across {len(plans)} file(s)",
+                  flush=True)
+            future = (embedder.submit(_embed_timed, texts) if embedder is not None
+                      else _Done(_embed_timed(texts)))
+        job = (future, plans, counts_by_plan)
+        if embedder is None:
+            _write_window(job)
+            return
+        # This window is queued behind the one in flight, so the GPU moves straight
+        # on to it; the finished window is written while it runs.
+        if inflight is not None:
+            _write_window(inflight)
+        inflight = job
 
-    for rel_path in to_index:
-        ext = Path(rel_path).suffix.lower()
-        print(f"[loop] → {rel_path}", flush=True)
-        try:
-            print("[loop]   reading file...", flush=True)
-            content = source.read(rel_path)
-            print(f"[loop]   {len(content)} chars read", flush=True)
+    # The worker thread is shut down however the loop ends: a failed embed or write
+    # must not leave a thread behind in a long-lived MCP server process.
+    try:
+        for rel_path in to_index:
+            ext = Path(rel_path).suffix.lower()
+            print(f"[loop] → {rel_path}", flush=True)
+            try:
+                print("[loop]   reading file...", flush=True)
+                content = source.read(rel_path)
+                print(f"[loop]   {len(content)} chars read", flush=True)
 
-            _cc_at, _auth_at = _content_stamp(rel_path)
+                _cc_at, _auth_at = _content_stamp(rel_path)
 
-            if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
-                ingest_project_file(
-                    rel_path, content, disk_hashes[rel_path], db,
-                    content_changed_at=_cc_at, authored_at=_auth_at,
+                if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
+                    ingest_project_file(
+                        rel_path, content, disk_hashes[rel_path], db,
+                        content_changed_at=_cc_at, authored_at=_auth_at,
+                    )
+                    continue
+
+                print("[loop]   preparing (chunk/parse/summarize)...", flush=True)
+                _t_prep = time.monotonic()
+                plan = _prepare_file(
+                    rel_path=rel_path,
+                    content=content,
+                    content_hash=disk_hashes[rel_path],
+                    doc_store=doc_store,
+                    db=db,
+                    resolver=resolver,
+                    summarizer=summarizer,
+                    content_changed_at=_cc_at,
+                    authored_at=_auth_at,
                 )
+                timing["prep"] += time.monotonic() - _t_prep
+                texts = plan.pending_texts()
+                pending_plans.append(plan)
+                pending_counts.append(len(texts))
+                pending_texts.extend(texts)
+                print("[loop]   queued for batched embedding", flush=True)
+
+            except Exception:
+                errors += 1
+                print(f"  ✗  {rel_path}")
+                traceback.print_exc()
                 continue
 
-            print("[loop]   preparing (chunk/parse/summarize)...", flush=True)
-            plan = _prepare_file(
-                rel_path=rel_path,
-                content=content,
-                content_hash=disk_hashes[rel_path],
-                doc_store=doc_store,
-                db=db,
-                resolver=resolver,
-                summarizer=summarizer,
-                content_changed_at=_cc_at,
-                authored_at=_auth_at,
-            )
-            texts = plan.pending_texts()
-            pending_plans.append(plan)
-            pending_counts.append(len(texts))
-            pending_texts.extend(texts)
-            print("[loop]   queued for batched embedding", flush=True)
+            if len(pending_texts) >= _EMBED_WINDOW_TEXTS:
+                _flush_pending()
 
-        except Exception:
-            errors += 1
-            print(f"  ✗  {rel_path}")
-            traceback.print_exc()
-            continue
-
-        if len(pending_texts) >= _EMBED_WINDOW_TEXTS:
-            _flush_pending()
-
-    _flush_pending()
+        _flush_pending()
+        if inflight is not None:
+            _write_window(inflight)
+            inflight = None
+    finally:
+        if embedder is not None:
+            embedder.shutdown(wait=True, cancel_futures=True)
+    if timing["calls"]:
+        # B-050/B-055 timing: embed = time inside the model calls; waited = time this
+        # thread sat idle for vectors. Without overlap the two are equal; with it,
+        # embed - waited is the embedding hidden behind chunking and parsing.
+        print(f"[{_hms()}] Pass 2 timing: {timing['texts']} text(s) in {timing['calls']} "
+              f"embed call(s): embed {timing['embed']:.1f}s, waited {timing['wait']:.1f}s, "
+              f"prepare {timing['prep']:.1f}s, write {timing['write']:.1f}s, "
+              f"wall {time.monotonic() - pass2_start:.1f}s "
+              f"(overlap {'on' if embedder is not None else 'off'})", flush=True)
 
     # ADR-021: resolve CALLS-edge bare callee names to in-repo FQNs so the graph
     # Traverse step has real neighbours to walk. Runs once here, over the now-complete

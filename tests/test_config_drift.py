@@ -88,6 +88,8 @@ def _wired() -> dict[tuple[str, str], object]:
         ("indexer", "index_dir"):          config.DEFAULT_INDEX_DIR,
         # ADR-038.
         ("indexer", "allow_linked_worktree"): config.DEFAULT_ALLOW_LINKED_WORKTREE,
+        # B-055.
+        ("indexer", "embed_overlap"):      config.DEFAULT_EMBED_OVERLAP,
     }
 
 

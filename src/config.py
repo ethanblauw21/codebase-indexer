@@ -290,3 +290,14 @@ def index_ref_poll_s(start_dir: str | None = None) -> float:
     """``[indexer] ref_poll_s``: how often git mode checks whether its ref moved (ADR-042 §4)."""
     return max(1.0, float(load_indexer_config(start_dir).get("indexer", {})
                           .get("ref_poll_s", DEFAULT_REF_POLL_S)))
+
+
+DEFAULT_EMBED_OVERLAP = True
+
+
+def embed_overlap(start_dir: str | None = None) -> bool:
+    """``[indexer] embed_overlap``: in pass 2, embed one window on a background thread
+    while the next window's files are chunked and parsed (B-055). Off runs the two
+    steps back to back, as before."""
+    return bool(load_indexer_config(start_dir).get("indexer", {})
+                .get("embed_overlap", DEFAULT_EMBED_OVERLAP))

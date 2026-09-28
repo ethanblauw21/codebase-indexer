@@ -29,6 +29,12 @@ ref_poll_s = 60.0
 # only to hold the index (e.g. a detached `origin/main` checkout).
 allow_linked_worktree = false
 
+# B-055: in pass 2, embed one window of files on a background thread while the next
+# window is chunked and parsed, so the GPU and the CPU work at the same time. false
+# runs them back to back (for comparing timings, or if a model backend misbehaves
+# when called from a second thread).
+embed_overlap = true
+
 # Optional: path to a rules.yaml file for risk analysis.
 # When absent, no rules are applied (copy examples/firebase-rules.yaml).
 # rules_file = "rules.yaml"

@@ -122,3 +122,28 @@ small since there's only one file. No schema, id, or config change — no forced
 **Notes:**
 <!-- 2026-09-28: branch cut from master (cacaebb). No GPU/model access in this worktree; every test
      here stubs embed_batch, per the hard constraint in the backlog item. -->
+
+## Addendum: overlap embedding with preparation (B-055, 2026-09-28)
+
+Batching cut the number of embed calls, but pass 2 still alternated: the CPU chunked and parsed
+files until a window filled, then waited while the GPU embedded it, and the GPU sat idle through
+the next window's CPU work. Pass 2's time was the sum of the two.
+
+- With `[indexer] embed_overlap = true` (the default), each full window's embed call runs on one
+  background thread (`ThreadPoolExecutor(max_workers=1)`) while the main thread prepares the next
+  window. When that next window fills, it is queued behind the one in flight, so the GPU moves
+  straight on to it, and the finished window is written while it runs.
+- Only the model call moves. Every FAISS and SQLite write stays on the main thread, in queue order,
+  window k before window k+1, so the per-file commit point and kill-safety are unchanged. Preparing
+  a file never reads an earlier file's writes (it reads only the summary cache and fills the
+  in-memory document cache), which is what makes this safe.
+- `embed_overlap = false` restores back-to-back running, for timing comparisons or a backend that
+  misbehaves off the main thread.
+- Pass 2 now ends with a `Pass 2 timing` line: embed calls and texts, time inside the embed calls,
+  time the main thread waited for vectors, prepare and write time, and wall time. With overlap off,
+  `embed` equals `waited`; with it on, their difference is the embedding hidden behind preparation.
+  This line is also the measurement the unchecked box above asks for.
+- Tests (`tests/test_pass2_embed_overlap.py`): overlapped and back-to-back builds write identical rows
+  and vectors; the next window is prepared while one is embedding (the test fails with overlap off);
+  writes stay in queue order across windows; an embed failure still fails the run and leaves no
+  thread behind; the timing line is printed.
