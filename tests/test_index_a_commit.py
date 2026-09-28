@@ -284,3 +284,18 @@ def test_switching_source_keeps_content_dates_from_git_history(repo, build, monk
         stamps = dict(db._conn.execute("SELECT path, content_changed_at FROM files"))
     assert stamps["src/a.ts"] == history["src/a.ts"][0]
     assert stamps["src/b.ts"] == history["src/b.ts"][0]
+
+
+def test_an_alias_ref_is_followed_and_shown_with_its_target(repo, build):
+    """GanttWebApp indexes refs/code-index/target, re-pointed at each staging branch."""
+    import MCPServer
+    git(repo, "branch", "staging-1")
+    git(repo, "symbolic-ref", "refs/code-index/target", "refs/heads/staging-1")
+    (repo / "indexer.toml").write_text('[indexer]\nsource = "git:refs/code-index/target"\n',
+                                       encoding="utf-8")
+    config.reset_config_cache()
+    build()
+    assert index_location.ref_display(str(repo), "refs/code-index/target") == \
+        "refs/code-index/target (→ staging-1)"
+    assert index_location.ref_display(str(repo), "main") == "main"
+    assert "(→ staging-1)" in MCPServer._server_instructions(str(repo))

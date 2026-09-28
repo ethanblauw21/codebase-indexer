@@ -57,8 +57,9 @@ def _server_instructions(repo_path: str | None = None) -> str:
              else "no finished build yet")
     if ref is not None:
         # ADR-042 §5: the index is a commit, read from git, not any folder.
+        from index_location import ref_display
         return (
-            f"This code index reflects {ref} ({built}), read straight from git: not this "
+            f"This code index reflects {ref_display(repo_path, ref)} ({built}), read straight from git: not this "
             "folder's working tree, and not your branch. For any file your branch changed "
             f"(git diff --name-only {commit[:10] if commit else '<that commit>'}...HEAD, plus "
             "uncommitted edits), Read the file itself: index hits for it show the indexed "
@@ -1723,7 +1724,9 @@ def index_status(since: str = "1d", limit: int = 20) -> str:
                 ["git", "rev-parse", target], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
             ).strip()
             if ref is not None:
-                lines.append(f"source:              git:{ref} (a commit, not this folder)")
+                from index_location import ref_display
+                lines.append(f"source:              git:{ref_display(os.getcwd(), ref)} "
+                             "(a commit, not this folder)")
             if curr == last_commit:
                 lines.append(f"last_indexed_commit: {last_commit[:8]} (== {target}; index current)")
             else:
@@ -2657,7 +2660,9 @@ def _start_ref_poller(repo_path: str, ref: str, watch_lock):
     poller = _RefPoller(repo_path, ref, index_ref_poll_s(), _ReindexDebouncer(delay=0.0))
     poller.start()
     _observers.append((poller, watch_lock))     # the lock is held for the life of the process
-    print(f"[Watchdog] Active — following {ref} (checked every {poller.interval:.0f} s)")
+    from index_location import ref_display
+    print(f"[Watchdog] Active — following {ref_display(repo_path, ref)} "
+          f"(checked every {poller.interval:.0f} s)")
     return poller
 
 

@@ -45,6 +45,25 @@ def git_ref(start_dir: str | None = None) -> str | None:
     return source[len("git:"):] if source.startswith("git:") else None
 
 
+def ref_display(repo_path: str, ref: str) -> str:
+    """``ref``, plus what it points to when it is a symbolic ref.
+
+    A repository whose shared baseline is a series of dated branches (GanttWebApp's
+    ``integration/staging-<date>``) indexes a local alias re-pointed each cycle. The
+    index is "current" for the alias either way, so naming its target is what shows
+    a cycle that was never re-pointed.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "symbolic-ref", "-q", "--short", ref],
+            cwd=repo_path, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ref
+    target = out.stdout.strip() if out.returncode == 0 else ""
+    return f"{ref} (→ {target})" if target else ref
+
+
 def resolve_index_dir(repo_path: str | None = None) -> str:
     """Compute the index directory for ``repo_path`` (default: cwd). No caching."""
     repo_path = repo_path or os.getcwd()
