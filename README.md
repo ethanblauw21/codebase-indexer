@@ -1,6 +1,6 @@
 ﻿# Codebase Indexer
 
-A local code intelligence engine that indexes Python, TypeScript, JavaScript, C#, and C++ codebases into a hybrid semantic search system, then exposes query capabilities through a **Model Context Protocol (MCP) server** for use with AI assistants.
+A local code intelligence engine that indexes Python, TypeScript, JavaScript, C#, C++ and Rockwell L5X (PLC) projects into a hybrid semantic search system, then exposes query capabilities through a **Model Context Protocol (MCP) server** for use with AI assistants.
 
 ## What it does
 
@@ -9,7 +9,7 @@ Instead of grepping for strings, the Codebase Indexer:
 - Parses source code with **tree-sitter** to extract real AST symbols (functions, classes, interfaces)
 - Embeds every symbol at **three granularities** using `BAAI/bge-code-v1`
 - Stores embeddings in **FAISS** and symbol relationships in **SQLite**
-- Serves **11 AI-facing MCP tools** so any compatible assistant (Claude Code, Continue.dev, etc.) can query it
+- Serves **14 AI-facing MCP tools** so any compatible assistant (Claude Code, Continue.dev, etc.) can query it
 
 ## Why not a naive indexer?
 
@@ -46,7 +46,7 @@ Built to run on one 8 GB consumer GPU, measured on an 8 GB RTX PRO 1000 laptop c
 
 ```mermaid
 flowchart LR
-    A[Source files] --> B["Tree-sitter adapters<br/>Python · TS/JS · C# · C++"]
+    A[Source files] --> B["Language adapters<br/>Python · TS/JS · C# · C++ · L5X"]
     B --> C["AST chunker<br/>tier 1: one chunk per symbol,<br/>class skeletons + members<br/>tiers 2-3: whole-file slices"]
     B --> D[("SQLite<br/>files · symbols · edges · chunks")]
     C --> D
@@ -77,7 +77,7 @@ At query time, all three tiers are searched and results are fused with **Recipro
 ```
 Source files
   → ast_chunker.py         (tree-sitter AST → symbols + edges + references)
-  → incremental_indexer.py (MD5 change detection → stale removals + new embeddings)
+  → incremental_indexer.py (content-hash change detection → stale removals + new embeddings)
   → core.py                (bge-code-v1 embeddings, FAISS, token counting)
   → db.py                  (SQLite: files, symbols, chunks, edges, symbol_references)
   → MCPServer.py           (MCP tools over the combined index)
@@ -105,41 +105,75 @@ Source files
 
 ## Installation
 
-```bash
-pip install -r indexer/requirements.txt
-```
-
-Or install manually:
+From the repository root, into the Python environment that will run the indexer (for a GPU, one
+with a CUDA build of PyTorch):
 
 ```bash
-pip install faiss-cpu sentence-transformers transformers \
-    "tree-sitter>=0.21" tree-sitter-python tree-sitter-typescript tree-sitter-javascript \
-    "mcp[cli]" watchdog numpy textual rich "networkx>=3.0"
+pip install -e .              # installs the dependencies and two commands: code-indexer, code-indexer-serve
 ```
+
+`pip install -r requirements.txt` installs the same dependencies without the commands. Two pins
+matter: `mcp[cli]<2` (2.x removed the FastMCP server this uses, B-036) and `accelerate` (without it
+the summarizer can't load, and summaries are skipped).
 
 > Optional: `pip install leidenalg python-igraph` enables the higher-quality Leiden
 > community-detection backend for `map_module_communities`. Without it the engine uses
 > NetworkX's built-in Louvain — no functionality is lost.
 
-> Use `faiss-gpu` instead of `faiss-cpu` for CUDA GPU acceleration.
+## Indexing a project
+
+Run the first build from a terminal, in the project's root folder:
+
+```bash
+code-indexer                  # or: python /path/to/indexer/src/incremental_indexer.py
+```
+
+**Expect a long first run.** The first use downloads the models (about 3 GB for the embedder plus
+the summarizer). The build then summarizes every chunk and embeds it: about 17.6 min for a
+120-file repository on an 8 GB laptop GPU, and roughly an hour for a 500-file one. Much slower on a
+CPU. Later runs re-process only changed files, and summaries are cached by chunk text. The build
+ends "Done successfully", or "Done with warnings" when summaries were skipped.
+
+The index goes in `.code-index/` in the project folder. Configure it per project with an
+`indexer.toml` in the project root (see this repository's own `indexer.toml` for every key).
+
+### Indexing a branch instead of the folder (git mode)
+
+With parallel branches or git worktrees, index one shared ref instead of whatever is checked out
+([ADR-042](docs/adr/ADR-042-index-a-commit.md)):
+
+```toml
+[indexer]
+source = "git:origin/main"
+```
+
+The index then lives in `<git common dir>/code-index`, shared by every worktree of the repository,
+and follows the ref: after a `git fetch` moves it, the running server reindexes only the files that
+changed. Edits and branch switches don't touch it, so read the files your branch changed directly.
+A local symbolic ref works as a movable alias for a series of dated branches:
+`git symbolic-ref refs/code-index/target refs/remotes/origin/<branch>`, then
+`source = "git:refs/code-index/target"`.
 
 ## Running the MCP Server
 
 ```bash
-cd indexer/src
-python MCPServer.py
+code-indexer-serve            # or: python /path/to/indexer/src/MCPServer.py
 ```
 
-The server starts instantly (indexes load lazily on first tool call) and optionally starts a **file watchdog** that triggers incremental reindex on source file changes.
+Run it with the project root as the working directory (MCP clients do this for you). The server
+starts instantly (indexes load lazily on first tool call) and starts a **file watchdog** that
+reindexes changed files in the background. The watchdog never starts a first build: until the
+terminal build above has finished, tools report that the index is empty.
 
-### First-time indexing
+Only one server per index writes to it and runs the watchdog; other sessions on the same index
+serve read-only tools ([ADR-038](docs/adr/ADR-038-one-writer-and-one-watchdog-per-index.md)).
 
-On first run no index exists. Call the `reindex` MCP tool from your AI assistant:
+### The model host
 
-```
-reindex()                          # full reindex (first time or after major refactors)
-reindex(changed_files_only=True)   # incremental (after routine edits)
-```
+On a CUDA machine the models run in one shared background process, the **model host**
+([ADR-028](docs/adr/ADR-028-central-model-host.md)), which keeps one model on the card at a time
+for every project and session. It starts on first use. `[model_host] enabled = "auto"` (the
+default) turns it on when the models run on CUDA; `false` loads them in each process instead.
 
 ### Forcing CPU-only operation
 
@@ -171,6 +205,9 @@ Add to your MCP config (`~/.claude/claude_mcp_config.json` or `.mcp.json` in you
 }
 ```
 
+Use the interpreter the indexer is installed in (the absolute path to its `python`, if it isn't the
+first `python` on PATH): a CPU-only interpreter puts the models on the CPU.
+
 ## MCP Tools Reference
 
 | Tool | Category | Description |
@@ -181,11 +218,14 @@ Add to your MCP config (`~/.claude/claude_mcp_config.json` or `.mcp.json` in you
 | `detect_pattern_violations` | Impact | Find files that should follow a pattern but don't |
 | `trace_data_flow` | Tracing | Full lifecycle of a data symbol (definitions → producers → consumers) |
 | `investigate_architecture` | Tracing | Full RTR pipeline with Markdown report and architectural risk analysis |
-| `find_test_coverage` | Discovery | Locate Vitest test files covering a source file or symbol |
+| `find_test_coverage` | Discovery | Locate test files (Vitest/Jest and pytest) covering a source file or symbol |
 | `find_dead_code` | Discovery | Determine if a symbol has any consumers in the codebase |
+| `verify_candidate_edges` | Discovery | Check the unconfirmed references behind an `ADVISORY` or `INSUFFICIENT` verdict |
 | `find_unabstracted_collection_reads` | Discovery | Enforce "reads of X must go through Y" patterns |
 | `map_module_communities` | Discovery | Whole-graph structural view: community detection + god-object analysis + a DSM visualization |
-| `reindex` | Maintenance | Rebuild the index (full or incremental) with git-staleness detection |
+| `what_writes` | PLC | Every rung that writes a tag, in an L5X project |
+| `index_status` | Maintenance | What the index covers: its source, commit, counts and recently changed files |
+| `reindex` | Maintenance | Rebuild from the index's source; rarely needed, since the watchdog keeps the index current |
 
 ### Architecture mapping — `map_module_communities`
 
@@ -223,8 +263,9 @@ is tracked separately).
 ## Project Structure
 
 ```
-indexer/
+codebase-indexer/
 ├── indexer.toml               # Per-repo configuration (embedder, retrieval, eval, ignores)
+├── pyproject.toml             # Package, dependencies and the two commands
 ├── requirements.txt
 ├── benchmarks/                # Eval deliverables: baselines, qrels, fixtures (ADR-007/019)
 ├── cloud/                     # GPU eval VM launcher + startup script
@@ -237,35 +278,41 @@ indexer/
 ├── tests/
 ├── tools/                     # Eval + CI harnesses (coir_eval, conformance_eval, …)
 └── src/
-    ├── MCPServer.py            # MCP server entry point — all 11 tools
+    ├── MCPServer.py            # MCP server entry point — all 14 tools, and the watchdog
     ├── config.py               # Locates and parses the per-repo indexer.toml
+    ├── index_location.py       # Where the index lives: .code-index or <git dir>/code-index (ADR-042)
+    ├── index_lock.py           # One writer and one watchdog per index (ADR-038)
+    ├── source.py               # Reads files from the folder or from a git commit (ADR-042)
+    ├── model_host.py           # Shared background process that runs the models (ADR-028)
+    ├── model_client.py         # Talks to the model host, or loads models in-process
+    ├── device.py               # CPU/CUDA resolution (ADR-020)
     ├── core.py                 # Embeddings (bge-code-v1), FAISS management, token counting
     ├── ast_chunker.py          # tree-sitter AST → symbols, edges, chunks
     ├── adapters/               # Per-language extraction adapters (ADR-003)
     │   ├── base.py             #   Adapter interface + shared tree-sitter helpers
     │   └── …                   #   python, ts, csharp, cpp, l5x
+    ├── scan_policy.py          # Which files are indexed (ADR-026)
     ├── db.py                   # SQLite schema and queries (WAL mode)
     ├── stable_id.py            # The 60-bit compound-key hash every symbol identity uses
     ├── call_resolver.py        # Baseline CALLS-edge resolution (ADR-021)
     ├── graph_analytics.py      # Community detection + centrality + god-objects (ADR-006)
     ├── graph_report.py         # Markdown report rendering for map_module_communities
     ├── graph_viz.py            # Design Structure Matrix (DSM) HTML visualization
-    ├── incremental_indexer.py  # MD5-based change detection and rebuild logic
+    ├── incremental_indexer.py  # Change detection and the build (the code-indexer command)
     ├── hybrid_retriever.py     # Retrieve → Traverse → Rerank pipeline
     ├── iterative_retriever.py  # Multi-round retrieval with early stopping
     ├── fusion.py               # Sparse tokenization + score-normalized fusion (ADR-009)
     ├── reranker.py             # Cross-encoder rescoring — off by default
     ├── import_resolver.py      # tsconfig path aliases, barrel files, relative imports
     ├── category_tagger.py      # Symbol classification
-    ├── summarizer.py           # Tier-3 summary generation
-    ├── RecFileSearch.py        # File search utilities
+    ├── summarizer.py           # Chunk summaries (Qwen2.5-Coder), for the separate summary index
     └── tui/                    # Textual terminal UI
         ├── app.py
         ├── backend.py
         └── tools.py
 ```
 
-The `.code-index/` directory (FAISS indexes, `graph.db`, `doc_store.json`) is generated at runtime and is git-ignored.
+The `.code-index/` directory (FAISS indexes and `graph.db`) is generated at runtime and is git-ignored.
 
 ## Documentation
 
@@ -289,7 +336,6 @@ where the two disagree, the ADR is right.
 
 - **Stable FAISS IDs** — 60-bit deterministic IDs (file hash × offset) allow surgical removes without full rebuilds.
 - **Dual persistence** — FAISS handles ANN speed; SQLite handles graph queries. They are complementary, not redundant.
-- **Token budgeting** — Context packing in `core.py` respects LLM context windows and warns when truncating.
 - **Monster-line shredding** — `ast_chunker.py` detects and strips Base64 inline SVGs and similar noise before chunking to prevent embedding corruption.
 - **Import resolution** — `import_resolver.py` handles tsconfig path aliases, relative imports, barrel files, and extension inference so graph edges reflect real module boundaries.
 - **Lazy cross-encoder** — When the reranker is enabled, `Qwen/Qwen3-Reranker-0.6B` (~1.2 GB) loads only on first use rather than at startup, so the MCP handshake completes instantly.
@@ -303,6 +349,7 @@ where the two disagree, the ADR is right.
 | **JavaScript** | `.js`, `.jsx` | class, function, arrow function, React component | import, call, owns, extends, context |
 | **C#** | `.cs`, `.csproj`, `.sln` | namespace, class, interface, struct, record, enum, method, constructor, property | import (using), call, owns, extends, implements |
 | **C++** | `.cpp`, `.cc`, `.cxx`, `.h`, `.hpp`, `.hxx` | namespace, class, struct, enum, function, method, constructor, template, typedef, using alias | import (#include), call, owns, extends |
+| **Rockwell L5X** (PLC) | `.L5X`, `.l5x` | module, program, routine, add-on instruction (AOI), its parameters and local tags, tag | owns, alias of, reads, writes (with rung-level references, [ADR-013](docs/adr/ADR-013-domain-specific-industrial-adapters.md)) |
 
 ### Language Limits
 

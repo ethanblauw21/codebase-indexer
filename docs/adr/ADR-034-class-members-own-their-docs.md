@@ -20,7 +20,7 @@ getters from the index
 
 ## Context
 
-B-026 records the diagnosis, the jury review (`CHUNK_SHAPE_PLAN_REVIEW.md`) and the prerequisites
+B-026 records the diagnosis, the jury review ([`docs/reviews/CHUNK_SHAPE_PLAN_REVIEW.md`](../reviews/CHUNK_SHAPE_PLAN_REVIEW.md)) and the prerequisites
 measured on 2026-09-25. In short, a class's members are indexed poorly in four ways, each of which loses
 data today.
 
