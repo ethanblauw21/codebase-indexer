@@ -33,7 +33,7 @@ import graph_analytics as ga
 from graph_analytics import DSM_MAX_NODES, GraphAnalysis
 from graph_report import _module_of, label_community
 
-DEFAULT_OUT_PATH = os.path.join(".code-index", "architecture_matrix.html")
+DEFAULT_OUT_NAME = "architecture_matrix.html"   # written into the index directory
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +183,9 @@ def render_dsm(
     Above ``max_nodes`` symbols the matrix aggregates to community×community with a
     banner, keeping the file small and the canvas legible.
     """
-    out_path = out_path or DEFAULT_OUT_PATH
+    if out_path is None:
+        from index_location import index_dir      # ADR-042 §3
+        out_path = os.path.join(index_dir(), DEFAULT_OUT_NAME)
     edges = db.get_graph_edges()
 
     aggregated = analysis.node_count > max_nodes

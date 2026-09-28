@@ -12,8 +12,16 @@
 # Root of the repository to index (relative or absolute).
 repo_root = "."
 
-# Directory where FAISS indexes and graph.db are stored.
+# Directory where FAISS indexes and graph.db are stored (worktree mode; relative to
+# the repo root). Git mode ignores it: that index lives in <git common dir>/code-index.
 index_dir = ".code-index"
+
+# ADR-042: what is indexed. "worktree" indexes this folder as checked out. "git:<ref>"
+# (e.g. "git:origin/main") indexes that commit's tree straight from git objects: no
+# checkout, one index per repository shared by every linked worktree, and it follows
+# the ref when it moves (checked every ref_poll_s seconds; never fetches).
+source = "worktree"
+ref_poll_s = 60.0
 
 # ADR-038 (B-053): a linked git worktree (`git worktree add`) is refused as an index
 # writer — no watchdog, and `reindex` / `code-indexer` refuse — because parallel

@@ -369,7 +369,10 @@ class CodeDB:
         graph   = db.get_call_graph("src/api/auth.ts::AuthService.login", max_depth=3)
     """
 
-    def __init__(self, db_path: str | Path = ".code-index/graph.db") -> None:
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        if db_path is None:
+            from index_location import index_dir      # ADR-042 §3
+            db_path = Path(index_dir()) / "graph.db"
         db_path = Path(db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), isolation_level=None, check_same_thread=False)

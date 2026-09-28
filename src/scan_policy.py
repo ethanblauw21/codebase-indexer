@@ -28,7 +28,7 @@ import os
 from dataclasses import dataclass
 from functools import cached_property
 
-from config import find_config_path, load_indexer_config
+from config import find_config_path, index_dir_setting, load_indexer_config
 
 # ---------------------------------------------------------------------------
 # Defaults — one home per knob (ADR-026 §8)
@@ -77,10 +77,8 @@ PROJECT_FILES: frozenset[str] = frozenset({"compile_commands.json"})
 # Excluded regardless of configuration (ADR-026 §1). Not knobs: indexing `.git`
 # means embedding packfiles, and indexing the index means the index contains itself.
 #
-# `.code-index` is a literal here rather than a read of `[indexer].index_dir`, which
-# is still inert (`INDEX_DIR` is a module constant in incremental_indexer). Wiring it
-# for exclusion alone would create exactly the half-migrated split-brain ADR-020 was
-# written about. When that key is wired, this set reads it.
+# `.code-index` is the default index directory. ADR-042 wired `[indexer].index_dir`,
+# so a policy also excludes the configured directory's name (`index_dir_name`).
 ALWAYS_IGNORED_DIRS: frozenset[str] = frozenset({".git", ".code-index"})
 
 
@@ -186,12 +184,14 @@ class ScanPolicy:
     extensions: frozenset[str]         # chunked + embedded
     project_exts: frozenset[str] = PROJECT_EXTS
     project_files: frozenset[str] = PROJECT_FILES
+    index_dir_name: str = ".code-index"   # [indexer].index_dir's last component (ADR-042)
 
     # -- directory-level ---------------------------------------------------
 
     @cached_property
     def _folded_dirs(self) -> frozenset[str]:
-        return frozenset(_fold(d) for d in (self.ignore_dirs | ALWAYS_IGNORED_DIRS))
+        always = ALWAYS_IGNORED_DIRS | {self.index_dir_name}
+        return frozenset(_fold(d) for d in (self.ignore_dirs | always))
 
     @cached_property
     def _folded_root_dirs(self) -> frozenset[str]:
@@ -307,6 +307,7 @@ def scan_policy(start_dir: str | None = None) -> ScanPolicy:
         ignore_dirs=_resolve(block, "dirs", DEFAULT_IGNORE_DIRS),
         ignore_root_dirs=_resolve(block, "root_dirs", DEFAULT_IGNORE_ROOT_DIRS),
         extensions=_resolve_exts(block, DEFAULT_INDEXABLE_EXTS),
+        index_dir_name=os.path.basename(os.path.normpath(index_dir_setting(key))),
     )
     _cache[key] = policy
     return policy
