@@ -40,10 +40,7 @@ Each project's `CLAUDE.local.md` (untracked) holds its usage rules and upkeep co
 
 ## Next steps
 
-1. **Read @edb's bench result.** They run it in their own terminal, in GanttWebApp:
-   `pass2_bench.py --repeat 2`, written to `GanttWebApp\pass2_bench.txt`.
-   - `old` vs `b050` is B-050's gain; `b050` vs `b055` is the overlap's gain.
-   - Record both in ADR-040 and tick its measurement box.
+1. **Bench done** (ADR-040 Measurement): pass 2 334 s → 266 s (B-050) → 194 s (B-055), −42%; now GPU-bound.
 2. **Review and merge `chore/cleanup-and-docs`.**
 3. **Talk through #47 (mutation gate) and #48 (branch protection).** Both are @edb's decisions.
 4. **Then #55 + #54 + small fixes, and #52 + #53** (index swap mid-call, sync tools blocking the

@@ -1672,4 +1672,5 @@ index was missing about 20% of current `main`.
   the overlap on or off. `[indexer] embed_overlap` (default true) turns it off.
 - The build prints a `Pass 2 timing` line (embed, waited, prepare, write, wall).
   `tools/pass2_bench.py` times pass 2 before B-050, with B-050 and with B-055 on an already-built
-  index; the measurement on GanttWebApp is pending.
+  index. Measured on GanttWebApp 2026-09-28: pass 2 334 s before B-050, 266 s with it, 194 s with
+  the overlap (−42%); pass 2 is now GPU-bound (ADR-040, Measurement).

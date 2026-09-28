@@ -117,7 +117,9 @@ small since there's only one file. No schema, id, or config change — no forced
 - [x] Full suite (`python -m pytest tests/ -q`), CPU only, `CUDA_VISIBLE_DEVICES=-1`: 560 passed, 1
   skipped (558 on master + 3 new tests here; the 1 skip is the pre-existing worktree-path issue
   noted in ADR-036/037, unrelated to this change)
-- [ ] Measure on the next real GPU build (InventoryApp-V2 or similar), against 5.4 min / 115 ms/chunk
+- [x] Measured 2026-09-28 on GanttWebApp with `tools/pass2_bench.py --repeat 2`: pass 2 took
+  334 s before B-050, 266 s with it (−20%) and 194 s with B-055's overlap (−42% overall). See
+  the addendum's Measurement section.
 
 **Notes:**
 <!-- 2026-09-28: branch cut from master (cacaebb). No GPU/model access in this worktree; every test
@@ -141,9 +143,34 @@ the next window's CPU work. Pass 2's time was the sum of the two.
   misbehaves off the main thread.
 - Pass 2 now ends with a `Pass 2 timing` line: embed calls and texts, time inside the embed calls,
   time the main thread waited for vectors, prepare and write time, and wall time. With overlap off,
-  `embed` equals `waited`; with it on, their difference is the embedding hidden behind preparation.
+  `waited` is 0, since the embed runs inline; with it on, `embed` minus `waited` is the embedding
+  hidden behind preparation.
   This line is also the measurement the unchecked box above asks for.
 - Tests (`tests/test_pass2_embed_overlap.py`): overlapped and back-to-back builds write identical rows
   and vectors; the next window is prepared while one is embedding (the test fails with overlap off);
   writes stay in queue order across windows; an embed failure still fails the run and leaves no
   thread behind; the timing line is printed.
+
+### Measurement (2026-09-28)
+
+GanttWebApp's staging index (269 files, 3,307 chunks, 6,614 texts: every chunk plus every summary),
+rebuilt three ways by `tools/pass2_bench.py --repeat 2` on the 8 GB RTX PRO 1000 laptop GPU,
+bge-code-v1 in bf16 through the model host, summaries all cached (0 newly summarized). @edb ran it
+in their own terminal; output in `GanttWebApp\pass2_bench.txt` (UTF-16, from PowerShell).
+
+| Arm | Embed calls | Embed s | Waited s | Prepare s | Pass 2 s (runs 1 / 2) | ms/text |
+|---|---|---|---|---|---|---|
+| `old`, per (file, tier), before B-050 | 269 | 265 / 256 | 0 | 71 / 74 | **337 / 332** | 50.5 |
+| `b050`, 256-text windows | 22 | 188 / 191 | 0 | 69 / 80 | **258 / 273** | 40.2 |
+| `b055`, windows + overlap | 22 | 190 / 190 | 114 / 114 | 79 / 78 | **195 / 194** | 29.5 |
+
+- **B-050's gain is on the GPU side:** the same texts in 22 calls instead of 269 cut embed time
+  from about 260 s to 190 s (−27%). Pass 2 went from 334 s to 266 s (−20%).
+- **B-055's overlap hides the CPU side almost completely:** about 76 s of the 190 s embedding ran
+  behind preparation (embed − waited), matching prepare's 78 s. Pass 2 went from 266 s to 194 s
+  (−27%), and its wall time now roughly equals embed time, so pass 2 is GPU-bound. Further gains
+  would have to come from the embed itself (larger windows, sequence-length sorting), not the CPU.
+- **Together:** 334 s to 194 s, −42%, 50 to 29.5 ms per text.
+- **Caveat:** two CPU test-suite runs (about 80 s each) overlapped part of the bench, which may
+  explain b050's second run (prepare 80 s against 69 s). It doesn't touch the conclusion: b055's
+  two runs agree within 1 s, and its wall time is bounded by the GPU.
