@@ -1,6 +1,6 @@
 # ADR-040: Pass 2 Batches Embedding Across Files
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-28
 **Branch:** `feature/b050-cross-file-embed-batching`
 **Reviewer:** @edb
