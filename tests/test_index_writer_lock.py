@@ -236,3 +236,24 @@ def test_instructions_name_the_checkout_and_its_commit(index_dir):
 
 def test_instructions_without_a_build(index_dir):
     assert "no finished build yet" in MCPServer._server_instructions(os.getcwd())
+
+
+# ── a server that did not write reloads what another process saved ───────────
+
+def test_a_save_by_another_process_is_reloaded_before_the_next_call(index_dir, monkeypatch):
+    os.makedirs(index_dir)
+    faiss_file = os.path.join(index_dir, "tier1_surgical.faiss")
+    with open(faiss_file, "wb") as fh:
+        fh.write(b"v1")
+    reloads = []
+    monkeypatch.setattr(MCPServer, "_reload_indexes", lambda: reloads.append(1))
+    monkeypatch.setattr(MCPServer, "doc_store", object())
+    monkeypatch.setattr(MCPServer, "_loaded_stamp", MCPServer._faiss_stamp())
+
+    MCPServer._ensure_indexes()
+    assert reloads == []                # nothing saved since the load
+
+    with open(faiss_file, "wb") as fh:
+        fh.write(b"v2 from the watching server")
+    MCPServer._ensure_indexes()
+    assert reloads == [1]

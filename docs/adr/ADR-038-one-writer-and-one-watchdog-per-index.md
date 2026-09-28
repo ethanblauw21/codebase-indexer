@@ -58,7 +58,9 @@ purpose and start time, for messages only.
    `code-indexer` exits 2. A worktree that exists only to hold the index opts in with
    `[indexer] allow_linked_worktree = true` in its `indexer.toml` (default `false`, drift-tested).
    `code-indexer --allow-worktree` overrides it once.
-5. **Server `instructions`.** Built at startup from `index_meta`. They name the folder and commit
+5. **Reload what another process saved.** `_ensure_indexes` compares the `.faiss` files' stamp
+   with the one loaded and reloads on a change.
+6. **Server `instructions`.** Built at startup from `index_meta`. They name the folder and commit
    the index reflects, tell the agent to `Read` files its branch changed, and say never to call
    `reindex` from a parallel-work worktree. About 600 characters.
 
@@ -75,11 +77,11 @@ purpose and start time, for messages only.
   `allow_linked_worktree = true` in its `indexer.toml`. Without it, the index there is never
   updated.
 - `.code-index/` gets two small lock files. They are never deleted; an unheld lock file is harmless.
-- **Not solved here:** a server that started its watchdog keeps it even if another server later
-  holds `write.lock`. It retries, which is the intent. B-033's "reload when another process
-  saved" (fix 3) is also not done: a standby server keeps serving the vectors it loaded until its
-  next reload. Its reads stay consistent, since saves are atomic (#70), but they are stale until a
-  restart. Filed as the remaining part of B-033.
+- **Reload when another process saved** (B-033 fix 3): each tool call stats the `.faiss` files
+  (name, mtime, size), and if any process saved since this server loaded, it reloads first. A
+  standby server serves the watcher's rebuild on its next call, not after a restart.
+- **Not solved here:** a server that started its watchdog keeps it even while another process
+  holds `write.lock`; its runs retry every 60 s, which is the intent.
 
 ## Alternatives Considered
 
@@ -96,7 +98,7 @@ purpose and start time, for messages only.
 
 - 2026-09-28: `src/index_lock.py`; `run_incremental` holds `write.lock`; `reindex`, the watchdog
   and the CLI handle `IndexBusy`; the watchdog skips an unbuilt index; `watch.lock` with standby and
-  takeover; linked-worktree refusal plus `[indexer] allow_linked_worktree`; server `instructions`.
-  Tests: `tests/test_index_writer_lock.py`. A child process really holds each lock, including a
+  takeover; linked-worktree refusal plus `[indexer] allow_linked_worktree`; server `instructions`;
+  reload-on-save in `_ensure_indexes`. Tests: `tests/test_index_writer_lock.py`. A child process really holds each lock, including a
   killed holder leaving no stale lock, a real `git worktree add`, and standby then takeover.
   `test_reindex_serial.py` now runs in a scratch directory. No GPU.

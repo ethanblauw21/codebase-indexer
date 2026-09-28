@@ -74,10 +74,35 @@ t2_index = None
 t3_index = None
 
 
+def _faiss_stamp(index_dir: str = ".code-index") -> tuple:
+    """(name, mtime_ns, size) of every saved FAISS index: changes whenever any process saves."""
+    try:
+        names = sorted(n for n in os.listdir(index_dir) if n.endswith(".faiss"))
+    except OSError:
+        return ()
+    stamp = []
+    for n in names:
+        try:
+            st = os.stat(os.path.join(index_dir, n))
+        except OSError:
+            continue
+        stamp.append((n, st.st_mtime_ns, st.st_size))
+    return tuple(stamp)
+
+
+_loaded_stamp: tuple | None = None   # _faiss_stamp() when the in-memory indexes were loaded
+
+
 def _ensure_indexes():
-    global index_manager, doc_store, t1_index, t2_index, t3_index
+    global index_manager, doc_store, t1_index, t2_index, t3_index, _loaded_stamp
     if doc_store is not None:
+        # ADR-038 (B-033 fix 3): another process (the watching server, or a terminal
+        # build) saved since this server loaded; serve the new vectors, not the old.
+        if _loaded_stamp is not None and _faiss_stamp() != _loaded_stamp:
+            print("[MCP] The index was saved by another process; reloading.")
+            _reload_indexes()
         return
+    _loaded_stamp = _faiss_stamp()
     index_manager = MultiIndexManager()
     doc_store = DocumentStore()
     t1_index = index_manager.load_or_create("tier1_surgical")
@@ -2198,9 +2223,10 @@ def _reload_indexes() -> None:
     acquired only for the brief reference-swap itself.
     """
     global index_manager, doc_store, t1_index, t2_index, t3_index
-    global _hybrid_retriever, _iterative_retriever, _index_generation
+    global _hybrid_retriever, _iterative_retriever, _index_generation, _loaded_stamp
 
     # Phase 1: build (slow — reads FAISS files + SQLite)
+    new_stamp = _faiss_stamp()      # taken first: a save during the load triggers one more reload
     new_im = MultiIndexManager()
     new_ds = DocumentStore()
     new_t1 = new_im.load_or_create("tier1_surgical")
@@ -2215,6 +2241,7 @@ def _reload_indexes() -> None:
         t2_index             = new_t2
         t3_index             = new_t3
         _index_generation   += 1
+        _loaded_stamp        = new_stamp
         _hybrid_retriever    = None
         _iterative_retriever = None
 
