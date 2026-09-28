@@ -18,6 +18,11 @@ most one model on the card at a time:
 The host never opens a project's index. It turns text into vectors and summaries,
 and each project process still writes its own FAISS and SQLite files.
 
+It also records the device it resolved (``resolve_device()``) in ``host.json`` and
+its startup log line (ADR-041 / B-051), so a client whose own Python is CUDA-capable
+can tell it found a CPU-only host — one started by a different project's CPU-only
+interpreter — without a wrong device silently being used by every project sharing it.
+
 Three layers, so the policy can be tested without torch or a socket:
 
     HostScheduler   the queues and the one-model-at-a-time policy (pure Python)
@@ -566,11 +571,19 @@ def _acquire_lock():
     return fh
 
 
-def _write_host_json(port: int) -> None:
+def _write_host_json(port: int, device: str | None = None) -> None:
+    """Write host.json. ``device`` (B-051) is the value ``resolve_device()`` gave the host's
+    backend, so a client can tell a CPU host from a CUDA one without querying /v1/status. Omitted
+    when not given, so an old client reading a host predating this field sees no key rather than a
+    guessed value.
+    """
     path = host_file("host.json")
     tmp = path + ".tmp"
+    payload = {"port": port, "pid": os.getpid(), "started_at": time.time()}
+    if device is not None:
+        payload["device"] = device
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"port": port, "pid": os.getpid(), "started_at": time.time()}, fh)
+        json.dump(payload, fh)
     os.replace(tmp, path)
 
 
@@ -586,8 +599,10 @@ def serve(backend: Backend | None = None) -> int:
                               idle_exit_s=config.model_host_idle_exit_s())
     server = start_server(scheduler, load_or_create_token(), backend.describe)
     port = server.server_address[1]
-    _write_host_json(port)
-    print(f"[model-host] pid {os.getpid()} listening on 127.0.0.1:{port}", flush=True)
+    device = backend.describe().get("device")     # B-051: recorded so a client can spot a CPU host
+    _write_host_json(port, device)
+    print(f"[model-host] pid {os.getpid()} listening on 127.0.0.1:{port} "
+          f"device={device or 'unknown'}", flush=True)
     try:
         scheduler.run()
     finally:

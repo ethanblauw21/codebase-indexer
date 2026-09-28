@@ -12,6 +12,14 @@ not running. If the host cannot be reached or started, or serves a different
 model than this project is configured for, the call falls back to in-process
 loading and says so once in the log. It never fails an index or a search.
 
+The host is started by whichever client's Python asks first (``_spawn``). A
+CUDA-capable client can therefore find a host a CPU-only project's interpreter
+started, silently running every project's embeds and summaries on the CPU
+(B-051 / ADR-041). ``ensure_host`` checks the host's recorded device against this
+process's own before trusting it: it warns loudly, and either restarts the host
+from this interpreter (if it is idle) or falls back in-process (if it is busy) —
+never silently rides a CPU host it could have fixed or avoided.
+
 The reranker stays in-process for now; it is off by default (see ADR-028's log).
 """
 from __future__ import annotations
@@ -26,6 +34,7 @@ import urllib.error
 import urllib.request
 
 import config
+import device
 import model_host
 
 logger = logging.getLogger(__name__)
@@ -45,10 +54,17 @@ class HostUnavailable(Exception):
     """The host could not be reached, started, or used for this project."""
 
 
-def _say_once(key: str, message: str) -> None:
+def _say_once(key: str, message: str, *, stream=None) -> None:
+    """Print (once per key) to ``stream`` (``sys.stdout`` if not given) and log it.
+
+    ``stream`` defaults to ``None`` rather than ``sys.stdout`` directly so it is
+    resolved at call time: a default bound at import time would keep pointing at
+    the original stream after something (a test's ``capsys``, a caller) replaces
+    ``sys.stdout``.
+    """
     if key not in _warned:
         _warned.add(key)
-        print(f"[model-client] {message}", flush=True)
+        print(f"[model-client] {message}", file=stream or sys.stdout, flush=True)
         logger.warning(message)
 
 
@@ -114,6 +130,98 @@ def _check_models(info: dict) -> None:
             raise HostUnavailable(f"host serves {key}={info.get(key)!r}, this project wants {value!r}")
 
 
+def _wait_for_status(timeout_s: float, timeout_message: str) -> dict:
+    """Poll /v1/status until it answers, or raise HostUnavailable(timeout_message).
+
+    Shared by the initial spawn (below) and ``_restart_host``, so there is one
+    spawn-and-poll loop, not two.
+    """
+    deadline = time.monotonic() + timeout_s
+    while True:
+        time.sleep(0.25)
+        try:
+            return status()
+        except HostUnavailable:
+            if time.monotonic() > deadline:
+                raise HostUnavailable(timeout_message)
+
+
+def _host_device() -> str | None:
+    """The device ``host.json`` recorded at startup (B-051), or None if it isn't there.
+
+    None covers two cases the client treats the same way: no host.json at all, and a
+    host started before this field existed. Either way the device is unknown — never
+    treated as "this is a CPU host".
+    """
+    try:
+        with open(model_host.host_file("host.json"), encoding="utf-8") as fh:
+            return json.load(fh).get("device")
+    except (OSError, ValueError):
+        return None
+
+
+def _is_idle(info: dict) -> bool:
+    """Whether a /v1/status reply shows nothing loaded and nothing queued."""
+    return info.get("loaded") is None and not info.get("queued")
+
+
+def _restart_host() -> dict:
+    """Stop an idle host and start a fresh one from this interpreter (B-051).
+
+    Only called once the host is confirmed idle (``_is_idle``): stopping it does not
+    cut off another project's in-flight work. Shutting it down drops its lock file
+    (ADR-028 §1), so once ``host.json`` is gone the ordinary spawn-and-wait path is
+    safe to reuse for the replacement.
+    """
+    try:
+        _call("POST", "/v1/shutdown")
+    except HostUnavailable:
+        pass  # already gone
+    host_json = model_host.host_file("host.json")
+    deadline = time.monotonic() + config.model_host_spawn_timeout_s()
+    while os.path.exists(host_json):
+        if time.monotonic() > deadline:
+            raise HostUnavailable("the CPU host did not stop in time to restart it")
+        time.sleep(0.25)
+    _spawn()
+    return _wait_for_status(config.model_host_spawn_timeout_s(),
+                            "restarted the host but it never answered; see host.log")
+
+
+def _check_device(info: dict) -> dict:
+    """Warn, restart, or fall back when this client's device doesn't suit the host (B-051).
+
+    A CPU-only venv can start the shared host first, running every project's embeds
+    and summaries on the CPU until the host idles out, with no error and no log line
+    anyone would think to check. A CUDA-capable client that finds a CPU host warns
+    loudly and either restarts it, from its own interpreter, when the host is idle,
+    or falls back to in-process models when the host is busy — it never silently
+    rides the slow host. A CPU-only client finding a CUDA host needs no correction.
+    A host with no recorded ``device`` predates this check: its device is unknown,
+    not CPU, so it is warned about once and used as-is.
+    """
+    host_device = _host_device()
+    if host_device is None:
+        _say_once("device-unknown",
+                  "model host predates device recording (host.json has no 'device' "
+                  "field); its device is unknown, using it as-is")
+        return info
+    client_device = device.resolve_device()
+    if host_device.startswith("cuda") or not client_device.startswith("cuda"):
+        return info    # host already on CUDA, or this client has no CUDA to offer it
+    _say_once("device-mismatch",
+              f"model host is running on {host_device!r} but this client resolved "
+              f"{client_device!r}; every project sharing it would run on the CPU",
+              stream=sys.stderr)
+    if _is_idle(info):
+        try:
+            return _restart_host()
+        except HostUnavailable as exc:
+            raise HostUnavailable(f"could not restart the CPU host: {exc}") from exc
+    raise HostUnavailable(f"host is on {host_device} and busy; refusing to use it "
+                          "from a CUDA client")
+
+
 def ensure_host() -> dict:
     """Return the running host's status, starting a host first if none answers."""
     global _skip_until
@@ -124,15 +232,9 @@ def ensure_host() -> dict:
             info = status()
         except HostUnavailable:
             _spawn()
-            deadline = time.monotonic() + config.model_host_spawn_timeout_s()
-            while True:
-                time.sleep(0.25)
-                try:
-                    info = status()
-                    break
-                except HostUnavailable:
-                    if time.monotonic() > deadline:
-                        raise HostUnavailable("started a host but it never answered; see host.log")
+            info = _wait_for_status(config.model_host_spawn_timeout_s(),
+                                    "started a host but it never answered; see host.log")
+        info = _check_device(info)
         _check_models(info)
         return info
     except HostUnavailable:
