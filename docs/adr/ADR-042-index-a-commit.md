@@ -5,7 +5,7 @@
 **Branch:** `feature/adr-042-index-a-commit`
 **Reviewer:** @edb
 **Backlog:** [B-052](../backlog.md#b-052) option 4 (the index covers one folder, so worktree work isn't indexed) · [B-054](../backlog.md#b-054) (line-ending-only changes count as changes; this mode doesn't have that problem)
-**Depends on:** [ADR-038](./ADR-038-one-writer-and-one-watchdog-per-index.md) (the writer and watch locks, which move with the index), [ADR-025](./ADR-025-freshness-metadata.md) (freshness stamps, redefined here for a commit)
+**Depends on:** [ADR-038](./ADR-038-one-writer-and-one-watchdog-per-index.md) (the writer and watch locks, which move with the index), [ADR-025](./ADR-025-index-freshness-metadata.md) (freshness stamps, redefined here for a commit)
 **Depended on by:** a later overlay ADR (B-052 option 3), reserved in §8.
 
 ## Context
