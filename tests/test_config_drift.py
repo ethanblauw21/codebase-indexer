@@ -82,6 +82,8 @@ def _wired() -> dict[tuple[str, str], object]:
         ("model_host", "embed_idle_s"):    config.DEFAULT_MODEL_HOST_EMBED_IDLE_S,
         ("model_host", "idle_exit_s"):     config.DEFAULT_MODEL_HOST_IDLE_EXIT_S,
         ("model_host", "spawn_timeout_s"): config.DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S,
+        # ADR-038.
+        ("indexer", "allow_linked_worktree"): config.DEFAULT_ALLOW_LINKED_WORKTREE,
     }
 
 
