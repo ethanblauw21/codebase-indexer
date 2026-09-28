@@ -208,7 +208,8 @@ class MultiIndexManager:
             path = os.path.join(self.base_dir, f"{name}.faiss")
             tmp = path + ".tmp"
             faiss.write_index(self.indexes[name], tmp)
-            with open(tmp, "rb") as fh:
+            # r+b, not rb: Windows fsync needs a writable handle (EBADF otherwise).
+            with open(tmp, "r+b") as fh:
                 os.fsync(fh.fileno())
             os.replace(tmp, path)
 
