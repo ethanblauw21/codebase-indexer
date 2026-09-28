@@ -1,0 +1,96 @@
+name: Retrieval tripwire
+
+# ADR-019 §7's real-repo tripwire, split out of ci.yml because it is the slow job:
+# a real bge-code-v1 index of p-queue on a CPU runner, about 21 min, against about
+# 3 min for everything else.
+#
+# PRs run it only when they touch the retrieval path listed below. Every push to
+# master runs it, so a regression a PR skipped is still caught at merge. Run it by
+# hand from the Actions tab (workflow_dispatch) for anything in between.
+#
+# Keep the list generous: a path missing here is a regression that shows up only
+# after merge. Left out on purpose: model_host.py / model_client.py (on a CPU runner
+# [model_host].enabled = "auto" resolves to off, so this job never exercises them),
+# the MCP server, the TUI, docs, and the other CI tools.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+    paths:
+      - "src/core.py"
+      - "src/hybrid_retriever.py"
+      - "src/iterative_retriever.py"
+      - "src/fusion.py"
+      - "src/reranker.py"
+      - "src/ast_chunker.py"
+      - "src/adapters/**"
+      - "src/stable_id.py"
+      - "src/incremental_indexer.py"
+      - "src/summarizer.py"
+      - "src/db.py"
+      - "src/import_resolver.py"
+      - "src/call_resolver.py"
+      - "src/type_resolver.py"
+      - "src/scan_policy.py"
+      - "src/config.py"
+      - "src/device.py"
+      - "indexer.toml"
+      - "pyproject.toml"
+      - "requirements*.txt"
+      - "tools/real_repo_*.py"
+      - "benchmarks/real_repo/**"
+      - ".github/workflows/tripwire.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: tripwire-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  retrieval-tripwire:
+    name: Retrieval tripwire (ADR-019 §7)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: pip install -e .
+
+      # The embedder is deterministic; cache it so only the first run (or a model-id
+      # bump) pays the download.
+      #
+      # The key is DERIVED from indexer.toml, not written by hand. Hardcoded, it named
+      # jina-embeddings-v2-base-code for the twenty-one days after ADR-009 §P1 promoted
+      # BAAI/bge-code-v1 (2026-07-07) — so the cache never held the model the tripwire
+      # actually loads, and every run re-downloaded ~3 GB under a name describing a
+      # model that had left. Same defect class as ADR-026: a knob whose value the code
+      # does not read. Do not replace this with a literal.
+      - name: Resolve the embedder being cached
+        id: embedder
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import pathlib, re, tomllib
+          cfg = tomllib.loads(pathlib.Path("indexer.toml").read_text(encoding="utf-8"))
+          model = cfg["embeddings"]["model_id"]
+          print("model_id=" + re.sub(r"[^A-Za-z0-9._-]", "-", model))
+          PY
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ steps.embedder.outputs.model_id }}
+
+      # One small repo (p-queue), arm B only, committed MRR@10 floor. Self-prepares
+      # (clone at pinned SHA + production index), then fails the build if retrieval
+      # collapsed below the floor. Fast regression guard, not a publishable number.
+      - name: Run real-repo retrieval tripwire
+        run: python tools/real_repo_tripwire.py
