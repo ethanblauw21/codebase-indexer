@@ -57,8 +57,9 @@ def _server_instructions(repo_path: str | None = None) -> str:
              else "no finished build yet")
     if ref is not None:
         # ADR-042 §5: the index is a commit, read from git, not any folder.
+        from index_location import ref_display
         return (
-            f"This code index reflects {ref} ({built}), read straight from git: not this "
+            f"This code index reflects {ref_display(repo_path, ref)} ({built}), read straight from git: not this "
             "folder's working tree, and not your branch. For any file your branch changed "
             f"(git diff --name-only {commit[:10] if commit else '<that commit>'}...HEAD, plus "
             "uncommitted edits), Read the file itself: index hits for it show the indexed "
@@ -155,18 +156,88 @@ def get_clean_scope(doc):
 # --- THE SECRET SAUCE: The Docstring ---
 # Claude Code and Continue.dev read this exact string.
 # We must explicitly tell Claude WHY this is better than its native `grep`.
+_CHUNK_LINES_RE = re.compile(r"^Lines: (\d+)-(\d+)$", re.MULTILINE)
+_QUERY_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "from", "into", "that", "this", "does", "what", "where",
+    "when", "which", "how", "are", "its", "not", "off", "out", "all", "any", "each",
+})
+_SNIPPET_LINES = 14          # lines of code shown per evidence block
+_SNIPPET_LINE_CHARS = 200    # longer lines are cut, so one minified line cannot flood it
+
+
+def _query_terms(query: str) -> set[str]:
+    """Lower-case words of the query, identifiers split at camelCase and underscores."""
+    words = re.findall(r"[A-Za-z0-9]+", re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", query))
+    return {w.lower() for w in words if len(w) >= 3 and w.lower() not in _QUERY_STOPWORDS}
+
+
+def _line_score(line: str, terms: set[str]) -> int:
+    low = line.lower()
+    # A 5-letter stem catches "decrement" in "decremented", "writes" in "writer".
+    return sum(1 for t in terms if t in low or (len(t) >= 6 and t[:5] in low))
+
+
+def _focused_snippet(text: str, query: str) -> tuple[str, tuple[int, int] | None]:
+    """The part of a chunk worth showing for this query, and its source line span.
+
+    A preview of a chunk's first few hundred characters shows its header and signature,
+    and the line that answers the question is usually further down. Instead: the first
+    line of code (the signature), then the run of lines that mentions the most query
+    terms. Tier-1 chunks record their source lines (``Lines: a-b``), so their lines are
+    numbered as in the file; window chunks (tiers 2 and 3) have none, and neither does
+    a class outline, whose elided bodies shift its lines; those are shown unnumbered.
+    The span is the whole chunk's, for a targeted Read.
+    """
+    head, sep, code = text.partition("\nCode:\n")
+    if not sep:
+        head, code = "", text
+    m = _CHUNK_LINES_RE.search(head)
+    first = int(m.group(1)) if m and int(m.group(1)) > 0 else None
+    span = (first, int(m.group(2))) if first else None
+
+    src = code.strip("\n").split("\n")
+    if span and len(src) != span[1] - span[0] + 1:
+        first = None        # a class outline with elided bodies: the span holds, numbers drift
+    if len(src) <= _SNIPPET_LINES:
+        shown = list(range(len(src)))
+    else:
+        terms = _query_terms(query)
+        scores = [_line_score(line, terms) for line in src]
+        width = _SNIPPET_LINES - 1              # one line is kept for the signature
+        best_start, best = 1, -1
+        for start in range(1, len(src) - width + 1):
+            total = sum(scores[start:start + width])
+            if total > best:
+                best_start, best = start, total
+        if best <= 0:
+            best_start = 1                      # no term found: show the opening lines
+        shown = [0] + list(range(best_start, best_start + width))
+
+    out: list[str] = []
+    prev = -1
+    for i in shown:
+        if prev >= 0 and i != prev + 1:
+            out.append("  ⋮")
+        line = src[i].rstrip()
+        if len(line) > _SNIPPET_LINE_CHARS:
+            line = line[:_SNIPPET_LINE_CHARS] + " …"
+        out.append(f"  {first + i:>5}  {line}" if first else f"  {line}")
+        prev = i
+    if shown and shown[-1] < len(src) - 1:
+        out.append("  ⋮")
+    return "\n".join(out), span
+
+
 @mcp.tool()
 def semantic_code_search(query: str) -> str:
     """
-    CRITICAL: Use this tool FIRST before using standard file reading or grep.
-    Use this to understand system architecture, find where specific logic is implemented,
-    or trace data flow across the codebase.
-    This queries a local AI Vector Database that understands semantic concepts,
-    React lifecycles, and cross-file dependencies far better than string matching.
-    Prefer investigate_architecture when you need a complete picture of how a concept
-    flows through the system — it wraps this same retrieval pipeline in a multi-round
-    agentic loop with query enrichment. Use this tool for quick, single-pass lookups
-    where that overhead is not needed.
+    Find code by what it does: "where is X handled", "how does Y work", when you do not
+    know the names to grep for. Returns whole ranked chunks with file and scope.
+    For an exact identifier, string or config key, grep is faster and complete; this
+    ranks, and can miss. Results show the indexed version of each file (index_status
+    says which); Read a file before editing it or trusting a line of it.
+    Prefer investigate_architecture for how a concept flows through the system; it
+    runs this same retrieval and groups the results by role.
     """
     print(f"\n[MCP] Tool invoked by LLM for query: '{query}'")
     _ensure_indexes()
@@ -1114,7 +1185,9 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     indicates diminishing returns.
 
     Returns a Markdown report with:
-      - <evidence> XML tags (source, fqn, type) for each retrieved chunk.
+      - <evidence> XML tags (source, lines, fqn, type) for each retrieved chunk, showing
+        its signature and the lines that best match the concept. Read the `lines`
+        span for the rest.
       - Programmatic Architectural Risk Analysis flagging layer/privilege mismatches.
     """
     print(f"\n[MCP] investigate_architecture: '{target_concept}' deep={deep}")
@@ -1203,15 +1276,16 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
             fqn = chunk.scope if "::" in chunk.scope else get_clean_scope(
                 {"scope": chunk.scope, "text": chunk.text, "file": chunk.file}
             )
-            snippet = chunk.text[:300].replace("\n", "\n  ").strip()
+            snippet, span = _focused_snippet(chunk.text, target_concept)
+            where = f' lines="{span[0]}-{span[1]}"' if span else ""
 
             lines.append(
-                f'<evidence source="{chunk.file}" fqn="{fqn}" '
+                f'<evidence source="{chunk.file}"{where} fqn="{fqn}" '
                 f'type="{rel_type}" layer="{layer}" '
                 f'retrieval="{chunk.source}" score="{chunk.score:.4f}">'
             )
             lines.append("")
-            lines.append(f"  {snippet}")
+            lines.append(snippet)
             lines.append("")
             lines.append("</evidence>")
             lines.append("")
@@ -1379,10 +1453,11 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
 @mcp.tool()
 def reindex(changed_files_only: bool = False) -> str:
     """
-    Rebuilds the codebase index so all MCP tools reflect the current state of the files.
+    Rebuilds the index from its source: this folder's files, or, when indexer.toml sets
+    `[indexer] source = "git:<ref>"`, that ref's commit, never your branch or your edits.
 
-    The index goes stale whenever code changes — tools will otherwise return wrong answers
-    on modified files. Call this tool after editing source files.
+    Rarely needed: the server's watchdog keeps the index current on its own
+    (index_status shows whether it is). Never call it to pick up branch work.
 
     changed_files_only=True  — incremental: only processes files added, modified, or
                                deleted since the last run. Fast for frequent refreshes.
@@ -1549,7 +1624,7 @@ def _reindex(changed_files_only: bool) -> str:
 
 
 @mcp.tool()
-def index_status(since: str = "1d") -> str:
+def index_status(since: str = "1d", limit: int = 20) -> str:
     """Report index freshness and which files changed recently (ADR-025 §6).
 
     Use this to answer "what changed in this codebase lately?" and "is the index
@@ -1563,6 +1638,8 @@ def index_status(since: str = "1d") -> str:
     that point are listed — content_changed_at, not index-write time — so a file
     re-indexed today but unchanged in a week does not show up. Files with no git
     history (untracked / vendored) carry a NULL stamp and are correctly excluded.
+    `limit` caps the list at its newest entries (default 20; 0 lists all); the
+    count shown is always the full one.
 
     Reports: last_verified_at, last_indexed_commit vs current HEAD (with the list
     of diverged files when stale), files_total, and the recent-change list.
@@ -1647,7 +1724,9 @@ def index_status(since: str = "1d") -> str:
                 ["git", "rev-parse", target], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
             ).strip()
             if ref is not None:
-                lines.append(f"source:              git:{ref} (a commit, not this folder)")
+                from index_location import ref_display
+                lines.append(f"source:              git:{ref_display(os.getcwd(), ref)} "
+                             "(a commit, not this folder)")
             if curr == last_commit:
                 lines.append(f"last_indexed_commit: {last_commit[:8]} (== {target}; index current)")
             else:
@@ -1706,10 +1785,16 @@ def index_status(since: str = "1d") -> str:
             )
 
     lines.append(f"\nfiles with content changed since {cutoff}  ({len(rows)}):")
-    if rows:
-        lines.extend(f"    {ts}  {path}" for path, ts in rows)
+    # Every connected session reads this output, and a bulk change (a merge, a
+    # source switch) listed hundreds of files. The newest `limit` are shown.
+    shown = rows if limit <= 0 else rows[:limit]
+    if shown:
+        lines.extend(f"    {ts}  {path}" for path, ts in shown)
     else:
         lines.append("    (none)")
+    if len(shown) < len(rows):
+        lines.append(f"    … {len(rows) - len(shown)} more; pass limit=0 to list all, "
+                     "or a shorter `since`")
 
     return "\n".join(lines)
 
@@ -2575,7 +2660,9 @@ def _start_ref_poller(repo_path: str, ref: str, watch_lock):
     poller = _RefPoller(repo_path, ref, index_ref_poll_s(), _ReindexDebouncer(delay=0.0))
     poller.start()
     _observers.append((poller, watch_lock))     # the lock is held for the life of the process
-    print(f"[Watchdog] Active — following {ref} (checked every {poller.interval:.0f} s)")
+    from index_location import ref_display
+    print(f"[Watchdog] Active — following {ref_display(repo_path, ref)} "
+          f"(checked every {poller.interval:.0f} s)")
     return poller
 
 

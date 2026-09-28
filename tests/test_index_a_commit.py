@@ -255,3 +255,47 @@ def test_the_watchdog_follows_the_ref_instead_of_files(repo, build, monkeypatch)
 def test_an_indexer_toml_saved_with_a_bom_still_loads(tmp_path):
     (tmp_path / "indexer.toml").write_bytes(b'\xef\xbb\xbf[indexer]\nsource = "git:main"\n')
     assert config.index_source(str(tmp_path)) == "git:main"
+
+
+def test_switching_source_keeps_content_dates_from_git_history(repo, build, monkeypatch):
+    """A worktree-mode index switched to git mode re-hashes every file (MD5 -> blob
+    id). That is not a content change, so the dates come from git history, not now."""
+    (repo / "indexer.toml").write_text("[indexer]\n", encoding="utf-8")
+    config.reset_config_cache()
+    index = str(repo / ".git" / "code-index")
+    monkeypatch.setattr(ii, "INDEX_DIR", ".code-index")
+    monkeypatch.setattr(ii, "DB_PATH", os.path.join(".code-index", "graph.db"))
+    ii.run_incremental(str(repo), interactive=False)
+
+    # Stale the folder index's dates, as if built long before, then switch.
+    with CodeDB(os.path.join(".code-index", "graph.db")) as db:
+        db._conn.execute("UPDATE files SET content_changed_at = '2000-01-01T00:00:00Z'")
+        db._conn.commit()
+    import shutil
+    shutil.copytree(repo / ".code-index", index)
+    (repo / "indexer.toml").write_text('[indexer]\nsource = "git:main"\n', encoding="utf-8")
+    config.reset_config_cache()
+    monkeypatch.setattr(ii, "INDEX_DIR", index)
+    monkeypatch.setattr(ii, "DB_PATH", os.path.join(index, "graph.db"))
+    ii.run_incremental(str(repo), interactive=False)
+
+    history = ii.git_change_times(str(repo), git(repo, "rev-parse", "main"))
+    with CodeDB(os.path.join(index, "graph.db")) as db:
+        stamps = dict(db._conn.execute("SELECT path, content_changed_at FROM files"))
+    assert stamps["src/a.ts"] == history["src/a.ts"][0]
+    assert stamps["src/b.ts"] == history["src/b.ts"][0]
+
+
+def test_an_alias_ref_is_followed_and_shown_with_its_target(repo, build):
+    """GanttWebApp indexes refs/code-index/target, re-pointed at each staging branch."""
+    import MCPServer
+    git(repo, "branch", "staging-1")
+    git(repo, "symbolic-ref", "refs/code-index/target", "refs/heads/staging-1")
+    (repo / "indexer.toml").write_text('[indexer]\nsource = "git:refs/code-index/target"\n',
+                                       encoding="utf-8")
+    config.reset_config_cache()
+    build()
+    assert index_location.ref_display(str(repo), "refs/code-index/target") == \
+        "refs/code-index/target (→ staging-1)"
+    assert index_location.ref_display(str(repo), "main") == "main"
+    assert "(→ staging-1)" in MCPServer._server_instructions(str(repo))
