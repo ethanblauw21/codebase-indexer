@@ -1,5 +1,7 @@
 import os
 import re
+import shutil
+import sqlite3
 import threading
 from mcp.server.fastmcp import FastMCP
 
@@ -1325,8 +1327,6 @@ def _reindex(changed_files_only: bool) -> str:
     from db import CodeDB
     _ensure_indexes()
 
-    global index_manager, doc_store, t1_index, t2_index, t3_index, _hybrid_retriever
-
     print(f"\n[MCP] reindex: changed_files_only={changed_files_only}")
 
     # Git-aware staleness report for incremental mode (ADR-025 §5).
@@ -1370,7 +1370,11 @@ def _reindex(changed_files_only: bool) -> str:
                 pass   # not a git repo, or HEAD/ref invalid — nothing to compare
 
     _preserved: dict[str, tuple] = {}
+    _backup_dir = None
     if not changed_files_only:
+        # #50: keep a copy of the index to restore if the rebuild raises (embedder OOM,
+        # a failed model download), rather than leaving it empty until the next rerun.
+        _backup_dir = _snapshot_index(INDEX_DIR, db_path)
         # Wipe all index state so run_incremental treats everything as new
         if os.path.exists(db_path):
             with CodeDB(db_path) as _db:
@@ -1403,16 +1407,21 @@ def _reindex(changed_files_only: bool) -> str:
         # the other end, so a bulk deletion is reported in the tool result and skipped
         # rather than blocking the server on a prompt nobody can see.
         run_incremental(interactive=False)
+    except BaseException:
+        if _backup_dir is not None:
+            sys.stdout = _old_stdout
+            _restore_index(_backup_dir, INDEX_DIR, db_path)
+            _reload_indexes()
+            print("[MCP] reindex: full rebuild failed; the previous index was restored")
+        raise
     finally:
         sys.stdout = _old_stdout
+    if _backup_dir is not None:
+        shutil.rmtree(_backup_dir, ignore_errors=True)
 
-    # Reload in-memory state so subsequent MCP tool calls see the updated index
-    index_manager = MultiIndexManager()
-    doc_store = DocumentStore()
-    t1_index = index_manager.load_or_create("tier1_surgical")
-    t2_index = index_manager.load_or_create("tier2_component")
-    t3_index = index_manager.load_or_create("tier3_architectural")
-    _hybrid_retriever = None   # Reset lazy singleton; reloads on next investigate_architecture call
+    # Reload in-memory state so subsequent MCP tool calls see the updated index. The
+    # same swap the watchdog uses, so both retrievers are reset (#51).
+    _reload_indexes()
 
     # ADR-025 §3: restore preserved stamps for files whose content survived the full
     # rebuild unchanged (hash match). Genuinely-changed files keep the git-backdated
@@ -2083,6 +2092,49 @@ def map_module_communities(target_path: str = "", min_community_size: int = 3,
 # run to finish instead of starting a second one beside it (B-032). Other
 # processes on the same index are B-033.
 _reindex_lock = threading.Lock()
+
+
+def _snapshot_index(index_dir: str, db_path: str) -> str:
+    """Copy graph.db and every .faiss file in `index_dir` to a backup directory.
+
+    The database is copied with SQLite's backup API, which reads a consistent
+    snapshot through the WAL. Returns the backup directory.
+    """
+    backup_dir = os.path.join(index_dir, ".pre-full-reindex")
+    shutil.rmtree(backup_dir, ignore_errors=True)   # left by a killed earlier run
+    os.makedirs(backup_dir)
+    if os.path.exists(db_path):
+        src = sqlite3.connect(db_path)
+        dst = sqlite3.connect(os.path.join(backup_dir, "graph.db"))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+    for name in os.listdir(index_dir):
+        if name.endswith(".faiss"):
+            shutil.copy2(os.path.join(index_dir, name), os.path.join(backup_dir, name))
+    return backup_dir
+
+
+def _restore_index(backup_dir: str, index_dir: str, db_path: str) -> None:
+    """Put back what `_snapshot_index` saved, then delete the backup."""
+    saved_db = os.path.join(backup_dir, "graph.db")
+    if os.path.exists(saved_db):
+        src = sqlite3.connect(saved_db)
+        dst = sqlite3.connect(db_path)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+    saved_faiss = {n for n in os.listdir(backup_dir) if n.endswith(".faiss")}
+    for name in os.listdir(index_dir):
+        if name.endswith(".faiss") and name not in saved_faiss:
+            os.remove(os.path.join(index_dir, name))
+    for name in saved_faiss:
+        os.replace(os.path.join(backup_dir, name), os.path.join(index_dir, name))
+    shutil.rmtree(backup_dir, ignore_errors=True)
 
 
 def _reload_indexes() -> None:

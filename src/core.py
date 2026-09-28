@@ -200,8 +200,17 @@ class MultiIndexManager:
         # tier index old, which the next run's reconcile sees as chunks with no vector and
         # re-indexes, summary vectors included. The other order could lose summary vectors
         # unseen, because reconcile cannot know which chunks should have one.
+        #
+        # Each file is written beside its final name and renamed over it, so a kill
+        # mid-write leaves the previous whole file rather than a truncated one that
+        # read_index cannot open and reconcile therefore cannot heal (#49).
         for name in sorted(self.indexes, key=lambda n: n != "summary"):
-            faiss.write_index(self.indexes[name], os.path.join(self.base_dir, f"{name}.faiss"))
+            path = os.path.join(self.base_dir, f"{name}.faiss")
+            tmp = path + ".tmp"
+            faiss.write_index(self.indexes[name], tmp)
+            with open(tmp, "rb") as fh:
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)
 
 class DocumentStore:
     """In-memory chunk-payload cache backed by the SQLite `chunks` table.
