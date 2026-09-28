@@ -44,6 +44,13 @@ def find_config_path(start_dir: str | None = None) -> str | None:
         if os.path.isfile(candidate):
             return candidate
         if os.path.exists(os.path.join(d, ".git")):
+            # ADR-042 §2: a linked worktree usually has no indexer.toml of its own
+            # (it is untracked), so it reads the main worktree's.
+            main_root = _main_worktree_root(d)
+            if main_root:
+                candidate = os.path.join(main_root, "indexer.toml")
+                if os.path.isfile(candidate):
+                    return candidate
             return None            # repo boundary — do not inherit from above it
         parent = os.path.dirname(d)
         if parent == d:
@@ -51,13 +58,44 @@ def find_config_path(start_dir: str | None = None) -> str | None:
         d = parent
 
 
+def _main_worktree_root(worktree_root: str) -> str | None:
+    """The main worktree's root if ``worktree_root`` is a linked worktree, else None.
+
+    A linked worktree's ``.git`` is a file, ``gitdir: <common>/worktrees/<name>``. The
+    common directory is two levels up from that, and the main worktree holds it as
+    ``.git``. Read from the file rather than by running git, so this module stays a leaf.
+    """
+    dot_git = os.path.join(worktree_root, ".git")
+    if not os.path.isfile(dot_git):
+        return None
+    try:
+        with open(dot_git, encoding="utf-8") as fh:
+            line = fh.readline().strip()
+    except OSError:
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    gitdir = line[len("gitdir:"):].strip()
+    if not os.path.isabs(gitdir):
+        gitdir = os.path.join(worktree_root, gitdir)
+    gitdir = os.path.normpath(gitdir)
+    if os.path.basename(os.path.dirname(gitdir)) != "worktrees":
+        return None                # a submodule, not a linked worktree
+    common = os.path.dirname(os.path.dirname(gitdir))
+    if os.path.basename(common) != ".git":
+        return None                # a bare repository has no main worktree
+    return os.path.dirname(common)
+
+
 def load_indexer_config(start_dir: str | None = None) -> dict:
     """Parsed ``indexer.toml`` as a dict, or ``{}`` if none is found."""
     path = find_config_path(start_dir)
     if path is None:
         return {}
-    with open(path, "rb") as fh:
-        return tomllib.load(fh)
+    # utf-8-sig: Notepad and Windows PowerShell 5.1 save UTF-8 with a BOM, which
+    # tomllib rejects as "Invalid statement" and which took the MCP server down at start.
+    with open(path, encoding="utf-8-sig") as fh:
+        return tomllib.loads(fh.read())
 
 
 # ---------------------------------------------------------------------------
@@ -221,3 +259,34 @@ def allow_linked_worktree(start_dir: str | None = None) -> bool:
     """Whether a linked git worktree may write its index (B-053). Read fresh each call."""
     return bool(load_indexer_config(start_dir).get("indexer", {})
                 .get("allow_linked_worktree", DEFAULT_ALLOW_LINKED_WORKTREE))
+
+
+# ---------------------------------------------------------------------------
+# What is indexed, and where the index lives (ADR-042) — [indexer] in indexer.toml.
+# ---------------------------------------------------------------------------
+
+DEFAULT_INDEX_SOURCE = "worktree"
+DEFAULT_INDEX_DIR = ".code-index"
+DEFAULT_REF_POLL_S = 60.0
+
+
+def index_source(start_dir: str | None = None) -> str:
+    """``"worktree"`` (index the folder) or ``"git:<ref>"`` (index that commit's tree)."""
+    value = (load_indexer_config(start_dir).get("indexer", {})
+             .get("source", DEFAULT_INDEX_SOURCE))
+    if not isinstance(value, str) or not (
+            value == "worktree" or (value.startswith("git:") and len(value) > 4)):
+        raise ValueError(f'[indexer].source must be "worktree" or "git:<ref>", not {value!r}')
+    return value
+
+
+def index_dir_setting(start_dir: str | None = None) -> str:
+    """``[indexer] index_dir``: where a worktree-mode index lives, relative to the repo root."""
+    return str(load_indexer_config(start_dir).get("indexer", {})
+               .get("index_dir", DEFAULT_INDEX_DIR))
+
+
+def index_ref_poll_s(start_dir: str | None = None) -> float:
+    """``[indexer] ref_poll_s``: how often git mode checks whether its ref moved (ADR-042 §4)."""
+    return max(1.0, float(load_indexer_config(start_dir).get("indexer", {})
+                          .get("ref_poll_s", DEFAULT_REF_POLL_S)))

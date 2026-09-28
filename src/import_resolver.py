@@ -35,8 +35,12 @@ class ImportResolver:
 
     _TS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts")
 
-    def __init__(self, repo_root: str) -> None:
+    def __init__(self, repo_root: str, source=None) -> None:
         self.repo_root = os.path.abspath(repo_root)
+        # ADR-042 §7: file checks and reads go through the build's source, so a git
+        # source resolves imports against its commit, not the checked-out folder.
+        # Paths stay absolute here; they are made repo-relative only at the source.
+        self._source = source
         self.path_aliases: dict[str, str] = self._load_tsconfig_aliases()
         self._barrel_cache: dict[str, list[str]] = {}
 
@@ -54,13 +58,12 @@ class ImportResolver:
         aliases: dict[str, str] = {}
         for candidate in ("tsconfig.json", "tsconfig.base.json"):
             tsconfig_path = os.path.join(self.repo_root, candidate)
-            if not os.path.exists(tsconfig_path):
+            if not self._isfile(tsconfig_path):
                 continue
             try:
-                with open(tsconfig_path, "r", encoding="utf-8") as f:
-                    # Strip single-line // comments (not valid JSON but common in tsconfig)
-                    raw = re.sub(r'//[^\n]*', '', f.read())
-                    tsconfig = json.loads(raw)
+                # Strip single-line // comments (not valid JSON but common in tsconfig)
+                raw = re.sub(r'//[^\n]*', '', self._read(tsconfig_path))
+                tsconfig = json.loads(raw)
                 paths = (
                     tsconfig.get("compilerOptions", {}).get("paths", {})
                 )
@@ -151,8 +154,7 @@ class ImportResolver:
 
         names: list[str] = []
         try:
-            with open(barrel_path, "r", encoding="utf-8", errors="replace") as f:
-                src = f.read()
+            src = self._read(barrel_path)
             # Match: export { Foo, Bar } from '...'  or  export * from '...'
             for m in re.finditer(
                 r'export\s+\{([^}]*)\}\s+from',
@@ -172,6 +174,23 @@ class ImportResolver:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _rel(self, abs_path: str) -> str:
+        return os.path.relpath(abs_path, self.repo_root).replace("\\", "/")
+
+    def _isfile(self, abs_path: str) -> bool:
+        if self._source is None:
+            return os.path.isfile(abs_path)
+        try:
+            return self._source.exists(self._rel(abs_path))
+        except ValueError:
+            return False    # another drive on Windows: not in this repository
+
+    def _read(self, abs_path: str) -> str:
+        if self._source is None:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                return f.read()
+        return self._source.read(self._rel(abs_path))
+
     def _expand_alias(self, specifier: str) -> Optional[str]:
         """Expand a tsconfig path alias to an absolute path, or return None."""
         for alias_prefix, target_dir in self.path_aliases.items():
@@ -188,18 +207,18 @@ class ImportResolver:
         # Already has a recognised extension
         _, ext = os.path.splitext(base)
         if ext.lower() in self._TS_EXTENSIONS:
-            return base if os.path.isfile(base) else None
+            return base if self._isfile(base) else None
 
         # Try appending each extension
         for ext in self._TS_EXTENSIONS:
             candidate = base + ext
-            if os.path.isfile(candidate):
+            if self._isfile(candidate):
                 return candidate
 
         # Try as directory with index file
         for ext in self._TS_EXTENSIONS:
             candidate = os.path.join(base, "index" + ext)
-            if os.path.isfile(candidate):
+            if self._isfile(candidate):
                 return candidate
 
         return None

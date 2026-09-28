@@ -83,7 +83,9 @@ from config import summarization_enabled, summarizer_model_id, summarizer_tiers
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
 from import_resolver import ImportResolver
-from scan_policy import PROJECT_EXTS, PROJECT_FILES, scan_policy
+import index_location as _index_location
+from source import WorkingTreeSource, check_anchor, make_source, md5_file  # noqa: F401 (md5_file re-exported)
+from scan_policy import PROJECT_EXTS, PROJECT_FILES
 from stable_id import stable_id, to_faiss_ids, TIER_CONFIGS, TIER_NUM, TIER_NAME
 
 # ---------------------------------------------------------------------------
@@ -91,7 +93,9 @@ from stable_id import stable_id, to_faiss_ids, TIER_CONFIGS, TIER_NUM, TIER_NAME
 # ---------------------------------------------------------------------------
 
 REPO_PATH = os.getcwd()
-INDEX_DIR = ".code-index"
+# ADR-042 §3: ".code-index" in worktree mode (relative, as always); the repository's
+# <git common dir>/code-index in git mode.
+INDEX_DIR = _index_location.index_dir()
 
 # ADR-030: summaries have their own FAISS index, keyed by their chunk's id, and the
 # code vectors hold code only. index_meta records the layout so an index built
@@ -119,82 +123,16 @@ DB_PATH   = f"{INDEX_DIR}/graph.db"
 # MD5 file hash (change detection only — not the stable ID formula)
 # ---------------------------------------------------------------------------
 
-def md5_file(path: str) -> str:
-    """
-    MD5 digest of a file's raw bytes, read in 64 KiB blocks.
-
-    Block-reading keeps memory usage constant for large generated files
-    (e.g. bundled JS).  MD5 is fast and sufficient for change detection
-    — we are not using it for authentication or integrity guarantees.
-    """
-    h = hashlib.md5()
-    with open(path, "rb") as fh:
-        for block in iter(lambda: fh.read(65536), b""):
-            h.update(block)
-    return h.hexdigest()
-
-
-# ---------------------------------------------------------------------------
-# Disk scan
-# ---------------------------------------------------------------------------
-
 def scan_disk(repo_path: str, *, quiet: bool = False) -> dict[str, str]:
+    """{relative_path: md5} for every scannable file in the folder at ``repo_path``.
+
+    The folder's `Source.list()` (ADR-042 §1); kept under its old name because the
+    tests and tools call it.
     """
-    Walk `repo_path` and return {relative_path: md5_hash} for every indexable file.
-
-    What is included and excluded is decided entirely by `scan_policy` (ADR-026 §2),
-    which resolves `[ignore]` from `indexer.toml` over the built-in defaults. The
-    same policy object answers the MCP server's watchdog filter, so the two cannot
-    drift apart.
-
-    Raises `ValueError` when `repo_path` is not the directory holding `indexer.toml`
-    (ADR-026 §6) — resolved against the wrong root, a root-only exclusion silently
-    matches nothing, and under this gate a silent mismatch decides what gets deleted
-    from the index.
-    """
-    policy = scan_policy(repo_path)
-    _check_anchor(policy, repo_path)
-
-    result: dict[str, str] = {}
-
-    for root, dirs, files in os.walk(repo_path):
-        rel_root = os.path.relpath(root, repo_path).replace("\\", "/")
-        policy.prune(dirs, at_root=(rel_root == "."))
-
-        for fname in files:
-            rel_path = (fname if rel_root == "." else f"{rel_root}/{fname}")
-            if policy.is_scannable(rel_path):
-                try:
-                    result[rel_path] = md5_file(os.path.join(root, fname))
-                except OSError:
-                    # Race: file disappeared between os.walk listing and open()
-                    pass
-
-    if not quiet:
-        print(f"{policy.describe()} files={len(result)}")
-
-    return result
+    return WorkingTreeSource(repo_path).list(quiet=quiet)
 
 
-def _check_anchor(policy, repo_path: str) -> None:
-    """Refuse a scan whose root is not the directory the config was found in.
-
-    `load_indexer_config()` walks *up* from its start directory while
-    `MCPServer.py` sets `repo_path = os.getcwd()`, and this repo's own `.gitignore`
-    notes the server is sometimes launched from `src/`. Launched that way the config
-    resolves at the real root while the scan root is `src/`, so
-    `extra_root_dirs = ["benchmarks"]` is matched against the wrong tree and does
-    nothing at all. Silence there is the expensive outcome, so it raises.
-    """
-    if policy.config_path is None:
-        return                      # no config: defaults apply anywhere, nothing to mismatch
-    if os.path.normcase(os.path.abspath(repo_path)) != os.path.normcase(policy.root):
-        raise ValueError(
-            f"Scan root {os.path.abspath(repo_path)!r} is not the directory holding "
-            f"{policy.config_path!r}. Run the indexer from {policy.root!r}, or put an "
-            f"indexer.toml in the directory you meant to scan — [ignore].root_dirs "
-            f"would otherwise be resolved against a tree it was not written for."
-        )
+_check_anchor = check_anchor
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +250,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def git_change_times(repo_path: str) -> dict[str, tuple[str, str]]:
+def git_change_times(repo_path: str, rev: Optional[str] = None) -> dict[str, tuple[str, str]]:
     """One git pass → {path: (committer_iso, author_iso)} for the most recent
     commit that touched each tracked path (first occurrence wins, as `git log`
     is newest-first). Returns {} on any git failure. ~85 ms over this repo's
@@ -322,7 +260,8 @@ def git_change_times(repo_path: str) -> dict[str, tuple[str, str]]:
     path lines unambiguously (a path cannot begin with the sentinel)."""
     try:
         out = subprocess.check_output(
-            ["git", "log", "--format=@@@%cI|%aI", "--name-only", "--no-merges"],
+            ["git", "log", "--format=@@@%cI|%aI", "--name-only", "--no-merges",
+             *([rev] if rev else [])],   # ADR-042 §5: the indexed commit's history
             cwd=repo_path, text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
@@ -415,14 +354,16 @@ def chunker_version_warning(db: CodeDB) -> Optional[str]:
             "(reindex(changed_files_only=False) or a fresh code-indexer build).")
 
 
-def _write_index_meta(db: CodeDB, repo_path: str) -> None:
+def _write_index_meta(db: CodeDB, repo_path: str, source=None) -> None:
     """ADR-025 §4/§5: record run-level freshness facts from the shared chokepoint
     so CLI and MCP agree about what is indexed. Written on EVERY completed run,
     including no-ops — "at commit X, at time T, we verified the index matches the
     code" is true and strictly more informative than recording only on real work."""
-    head = git_head_commit(repo_path)
+    # ADR-042 §5: a git source indexed its own commit, not HEAD.
+    head = getattr(source, "commit", None) or git_head_commit(repo_path)
     if head:
         db.meta_set("last_indexed_commit", head)
+    db.meta_set("source", getattr(source, "label", "worktree"))
     db.meta_set("last_verified_at", _now_iso())
     try:
         db.meta_set("files_total", str(db.stats().get("files", 0)))
@@ -1005,6 +946,7 @@ def run_summarization_pass(
     repo_path:  str,
     db:         CodeDB,
     summarizer: object,
+    source:     Optional[object] = None,
 ) -> int:
     """Summarize every chunk of every file before any embedding begins.
 
@@ -1035,14 +977,13 @@ def run_summarization_pass(
     # starting size and each batch mixed short and long chunks.
     total_chunks = 0
     pending: dict[str, str] = {}          # hash -> text; one entry per distinct text
+    source = source or WorkingTreeSource(repo_path)
     for n, rel_path in enumerate(to_index, 1):
         ext = Path(rel_path).suffix.lower()
         if ext in PROJECT_EXTS or Path(rel_path).name in PROJECT_FILES:
             continue                      # descriptor files carry edges, never chunks
         try:
-            with open(os.path.join(repo_path, rel_path), "r",
-                      encoding="utf-8", errors="ignore") as fh:
-                content = fh.read()
+            content = source.read(rel_path)
         except OSError:
             continue                      # pass 2 reports the read failure properly
         for tier_name, chunks in chunk_all_tiers(rel_path, content).items():
@@ -1093,7 +1034,11 @@ def run_incremental(
     """
     from index_lock import WRITE_LOCK, acquire
     with acquire(INDEX_DIR, WRITE_LOCK, "build"):
-        _run_incremental(repo_path, prune=prune, interactive=interactive)
+        source = make_source(repo_path)     # ADR-042: the folder, or one commit's tree
+        try:
+            _run_incremental(repo_path, prune=prune, interactive=interactive, source=source)
+        finally:
+            source.close()
 
 
 def _run_incremental(
@@ -1101,6 +1046,7 @@ def _run_incremental(
     *,
     prune: bool,
     interactive: bool,
+    source=None,
 ) -> None:
     """
     Main entry point.  Execution order is chosen for crash safety:
@@ -1124,6 +1070,7 @@ def _run_incremental(
     is False for callers with nobody watching (the watchdog, the `reindex` MCP
     tool), which log and skip the bulk purge rather than block on a prompt.
     """
+    source = source or WorkingTreeSource(repo_path)
     print(f"━━ Incremental Indexer: {os.path.basename(repo_path)} ━━")
 
     index_manager = MultiIndexManager(INDEX_DIR)
@@ -1160,8 +1107,17 @@ def _run_incremental(
     elif _fresh_index:
         db.meta_set("embed_layout", EMBED_LAYOUT)
 
+    # ADR-042 §2: say so when the configured source is not the one this index was
+    # built from. Every content hash differs between the two, so this run re-embeds
+    # every file; summaries come from the cache.
+    _recorded_source = db.meta_get("source")
+    if not _fresh_index and (_recorded_source or "worktree") != source.label:
+        print(f"  [index] This index was built from {_recorded_source or 'worktree'}; "
+              f"[indexer].source is now {source.label}. Every file is re-embedded once "
+              f"(summaries are cached).")
+
     print("Scanning files...")
-    disk_hashes = scan_disk(repo_path)
+    disk_hashes = source.list()
     diff        = compute_diff(db, disk_hashes)
 
     # ADR-026 §5: an ordinary run can irreversibly purge most of an index — that is
@@ -1198,8 +1154,9 @@ def _run_incremental(
     # ADR-025 §2: one git pass up front. Reused for back-dating new files, dirty
     # detection, and the §1 one-time backfill of legacy NULL stamps. Done before the
     # no-op check so a quiet repo with legacy rows still gets its stamps backfilled.
-    _git_times = git_change_times(repo_path)
-    _dirty     = git_dirty_paths(repo_path)
+    # ADR-042 §5: a commit has its own history and no uncommitted edits.
+    _git_times = git_change_times(repo_path, source.commit)
+    _dirty     = git_dirty_paths(repo_path) if source.commit is None else set()
     _run_now   = _now_iso()
     _n_backfilled = _backfill_null_stamps(db, _git_times)
     if _n_backfilled:
@@ -1215,7 +1172,7 @@ def _run_incremental(
         # and found nothing changed, so "verified, nothing stale" is a true fact —
         # and recording it means a docs-only commit still advances last_indexed_commit
         # instead of leaving the staleness check firing on README.md forever.
-        _write_index_meta(db, repo_path)
+        _write_index_meta(db, repo_path, source)
         db.close()
         return
 
@@ -1248,7 +1205,9 @@ def _run_incremental(
     to_index = diff.new + diff.modified
     if to_index:
         print(f"Indexing {len(to_index)} file(s)...")
-    resolver = ImportResolver(repo_path)
+    # ADR-042 §7: a commit's imports resolve against that commit. The folder keeps
+    # the resolver's own file access, unchanged.
+    resolver = ImportResolver(repo_path, source=source if source.commit else None)
 
     # ADR-025 §2: resolve each file's content_changed_at / authored_at from the git
     # pass computed above. New files back-date to real change history; modified files
@@ -1277,7 +1236,7 @@ def _run_incremental(
     # run_summarization_pass() for why interleaving the two models does not fit.
     unsummarized = 0
     if summarizer is not None:
-        unsummarized = run_summarization_pass(to_index, repo_path, db, summarizer)
+        unsummarized = run_summarization_pass(to_index, repo_path, db, summarizer, source)
         summarizer.shutdown()          # child process exits; its GPU memory returns
         summarizer = _CacheOnlySummarizer()
         print("━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
@@ -1328,13 +1287,11 @@ def _run_incremental(
         pending_texts.clear()
 
     for rel_path in to_index:
-        full_path = os.path.join(repo_path, rel_path)
         ext = Path(rel_path).suffix.lower()
         print(f"[loop] → {rel_path}", flush=True)
         try:
             print("[loop]   reading file...", flush=True)
-            with open(full_path, "r", encoding="utf-8", errors="ignore") as fh:
-                content = fh.read()
+            content = source.read(rel_path)
             print(f"[loop]   {len(content)} chars read", flush=True)
 
             _cc_at, _auth_at = _content_stamp(rel_path)
@@ -1395,7 +1352,7 @@ def _run_incremental(
 
     # ADR-025 §4/§5: record run-level freshness facts from this one chokepoint that
     # all four triggers (CLI, MCP reindex, watchdog, startup) share, so they agree.
-    _write_index_meta(db, repo_path)
+    _write_index_meta(db, repo_path, source)
     if _fresh_build:
         # Files that failed above are retried on the next run with this same chunker,
         # so the index is still one generation.

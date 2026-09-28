@@ -82,6 +82,10 @@ def _wired() -> dict[tuple[str, str], object]:
         ("model_host", "embed_idle_s"):    config.DEFAULT_MODEL_HOST_EMBED_IDLE_S,
         ("model_host", "idle_exit_s"):     config.DEFAULT_MODEL_HOST_IDLE_EXIT_S,
         ("model_host", "spawn_timeout_s"): config.DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S,
+        # ADR-042.
+        ("indexer", "source"):             config.DEFAULT_INDEX_SOURCE,
+        ("indexer", "ref_poll_s"):         config.DEFAULT_REF_POLL_S,
+        ("indexer", "index_dir"):          config.DEFAULT_INDEX_DIR,
         # ADR-038.
         ("indexer", "allow_linked_worktree"): config.DEFAULT_ALLOW_LINKED_WORKTREE,
     }
@@ -106,7 +110,6 @@ WIRED_NO_DEFAULT: dict[tuple[str, str], str] = {
 # silently drop every future default.
 KNOWN_INERT: dict[tuple[str, str], str] = {
     ("indexer", "repo_root"):  "inert — incremental_indexer uses os.getcwd(); ADR-026 §6 anchors the scan, not this key",
-    ("indexer", "index_dir"):  "inert — INDEX_DIR is a module constant; scan_policy hardcodes '.code-index' rather than half-wire it",
 }
 
 # Read by tools/coir_eval.py rather than src/. Out of scope for the src-side registry,

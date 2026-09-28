@@ -167,7 +167,10 @@ def embed(text):
     return np.array(vector, dtype="float32")
 
 class MultiIndexManager:
-    def __init__(self, base_dir=".code-index"):
+    def __init__(self, base_dir=None):
+        if base_dir is None:
+            from index_location import index_dir      # ADR-042 §3
+            base_dir = index_dir()
         self.base_dir = base_dir
         os.makedirs(base_dir, exist_ok=True)
         self.indexes = {}
@@ -227,7 +230,10 @@ class DocumentStore:
     SQLite is authoritative.
     """
 
-    def __init__(self, sqlite_db_path: str = ".code-index/graph.db") -> None:
+    def __init__(self, sqlite_db_path: str | None = None) -> None:
+        if sqlite_db_path is None:
+            from index_location import index_dir      # ADR-042 §3
+            sqlite_db_path = os.path.join(index_dir(), "graph.db")
         self.docs: dict[str, dict] = {}
         self._load_from_sqlite(sqlite_db_path)
         self._retire_json(sqlite_db_path)

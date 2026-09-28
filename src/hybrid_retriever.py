@@ -141,10 +141,10 @@ class HybridRetriever:
     ----------
     index_dir :
         Directory that holds the ``.faiss`` files.
-        Default: ``".code-index"``.
+        Default: ``index_location.index_dir()`` (``".code-index"`` in worktree mode).
     db_path :
         SQLite database path.
-        Default: ``".code-index/graph.db"``.
+        Default: ``graph.db`` in that directory.
     reranker_model :
         HuggingFace model ID for the reranker. ``None`` (default) reads
         ``[reranker].model_id`` from indexer.toml, falling back to
@@ -182,14 +182,19 @@ class HybridRetriever:
 
     def __init__(
         self,
-        index_dir: str = ".code-index",
-        db_path: str = ".code-index/graph.db",
+        index_dir: Optional[str] = None,
+        db_path: Optional[str] = None,
         reranker_model: Optional[str] = None,
         reranker_enabled: Optional[bool] = None,
         fusion_mode: Optional[str] = None,
         graph_enabled: bool = True,
         device: Optional[str] = None,
     ) -> None:
+        if index_dir is None:
+            from index_location import index_dir as _index_dir   # ADR-042 §3
+            index_dir = _index_dir()
+        if db_path is None:
+            db_path = os.path.join(index_dir, "graph.db")
         self._index_manager = MultiIndexManager(base_dir=index_dir)
         self._tier1: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER1_NAME)
         self._tier2: faiss.IndexIDMap = self._index_manager.load_or_create(_TIER2_NAME)

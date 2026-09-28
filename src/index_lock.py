@@ -179,7 +179,13 @@ def worktree_refusal(repo_path: str) -> str | None:
     """
     if not linked_worktree(repo_path):
         return None
-    from config import allow_linked_worktree     # leaf too; imported late to keep this stdlib-first
+    # leaf too; imported late to keep this stdlib-first
+    from config import allow_linked_worktree, index_source
+    # ADR-042 §6: a git-mode index is built from a commit, the same work from any
+    # folder, and its locks sit in the shared index directory, so any worktree's
+    # server may keep it current.
+    if index_source(repo_path) != "worktree":
+        return None
     if allow_linked_worktree(repo_path):
         return None
     return (f"'{repo_path}' is a linked git worktree. The code index is not built or "

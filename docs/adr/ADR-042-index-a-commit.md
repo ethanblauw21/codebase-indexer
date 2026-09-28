@@ -1,6 +1,6 @@
 # ADR-042: Index a Commit, Not a Folder
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-28
 **Branch:** `feature/adr-042-index-a-commit`
 **Reviewer:** @edb
@@ -174,4 +174,34 @@ and merge it with the base at query time (B-052 option 3). To keep that possible
 
 ## Implementation Log
 
-(empty)
+- 2026-09-28, steps 1–4 (@edb confirmed the ADR the same day):
+  - `src/source.py`: `WorkingTreeSource` (the old `scan_disk` / `md5_file` / anchor check, moved
+    and unchanged; `incremental_indexer` keeps the old names) and `GitCommitSource`.
+  - `src/index_location.py`: `index_dir()`. The 11 hard-coded `.code-index` spellings now
+    default through it (`core`, `db`, `hybrid_retriever`, `graph_viz`, `MCPServer`,
+    `incremental_indexer`). `scan_policy` excludes the configured directory's name.
+  - `config`: `[indexer] source`, `ref_poll_s` and `index_dir` are wired and drift-tested
+    (`index_dir` left `KNOWN_INERT`). A linked worktree with no `indexer.toml` reads the main
+    worktree's; this is found by parsing its `.git` file, so `config` stays a leaf.
+  - The build reads every file through the source: scan, both passes, and the import resolver.
+    It records `index_meta.source`, and says so when the configured source differs from the
+    recorded one.
+  - Freshness: `last_indexed_commit` is the source's commit, and `git log` runs at that commit
+    with no dirty paths. `index_status` compares against the ref and adds a line for the
+    caller's own HEAD.
+  - Server: the ref poller (`_RefPoller`) replaces the file watcher in git mode, under
+    ADR-038's `watch.lock`. `worktree_refusal` returns None in git mode. The instructions name
+    the ref and the commit.
+  - **Found while testing:** `indexer.toml` saved with a UTF-8 BOM (Notepad, Windows PowerShell
+    5.1's `Set-Content -Encoding utf8`) made `tomllib` raise, and the server died at startup.
+    `load_indexer_config` now reads `utf-8-sig`.
+  - Tests: `tests/test_index_a_commit.py` (17), on a real temporary repository with a CRLF
+    blob, an LFS pointer, a symlink and a submodule entry. They cover a linked worktree reading
+    the main worktree's config, a build into `.git/code-index`, working-tree edits and checkouts
+    changing nothing, a moved ref reindexing only its diff, and the poller. With the rest of
+    the suite: 614 passed, 1 skipped. Worktree mode is unchanged: the suite passed after
+    step 1 with no test edits.
+  - MCP Inspector 2.8.0, server started in a git-mode **linked worktree**: `tools/list
+    --strict` exits 0; the log shows `[Watchdog] Active — following main`; `index_status`
+    answers. No GPU used.
+- Step 5 (InventoryApp rollout, the one-time re-embed) is pending.

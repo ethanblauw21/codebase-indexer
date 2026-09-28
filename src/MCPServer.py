@@ -32,9 +32,14 @@ def _server_instructions(repo_path: str | None = None) -> str:
     so an agent working on another branch or worktree knows which hits to distrust.
     Kept short: every session pays for it.
     """
+    from index_location import git_ref, index_dir
     repo_path = repo_path or os.getcwd()
     commit = verified = None
-    db_path = os.path.join(repo_path, ".code-index", "graph.db")
+    try:
+        ref = git_ref(repo_path)
+        db_path = os.path.join(repo_path, index_dir(), "graph.db")
+    except ValueError:
+        ref, db_path = None, os.path.join(repo_path, ".code-index", "graph.db")
     if os.path.exists(db_path):
         try:
             con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
@@ -50,6 +55,17 @@ def _server_instructions(repo_path: str | None = None) -> str:
             pass
     built = (f"commit {commit[:10]}, last verified {verified}" if commit
              else "no finished build yet")
+    if ref is not None:
+        # ADR-042 §5: the index is a commit, read from git, not any folder.
+        return (
+            f"This code index reflects {ref} ({built}), read straight from git: not this "
+            "folder's working tree, and not your branch. For any file your branch changed "
+            f"(git diff --name-only {commit[:10] if commit else '<that commit>'}...HEAD, plus "
+            "uncommitted edits), Read the file itself: index hits for it show the indexed "
+            "version, and line numbers may be off. Use the index for how the rest of the "
+            f"codebase works. It follows {ref} on its own when that ref moves; do not call "
+            "`reindex` to pick up branch work. `index_status` reports freshness."
+        )
     return (
         f"This code index reflects ONE checkout: {repo_path} ({built}). "
         "It does not see edits in other branches or worktrees. For any file your branch "
@@ -74,8 +90,11 @@ t2_index = None
 t3_index = None
 
 
-def _faiss_stamp(index_dir: str = ".code-index") -> tuple:
+def _faiss_stamp(index_dir: str | None = None) -> tuple:
     """(name, mtime_ns, size) of every saved FAISS index: changes whenever any process saves."""
+    if index_dir is None:
+        from index_location import index_dir as _index_dir   # ADR-042 §3
+        index_dir = _index_dir()
     try:
         names = sorted(n for n in os.listdir(index_dir) if n.endswith(".faiss"))
     except OSError:
@@ -1615,20 +1634,30 @@ def index_status(since: str = "1d") -> str:
         version_warning or f"chunker_version:     {CHUNKER_VERSION} (== current)",
     ]
 
+    # ADR-042 §5: a git-mode index is current when it matches its ref, not HEAD.
+    from index_location import git_ref
+    try:
+        ref = git_ref(os.getcwd())
+    except ValueError:
+        ref = None
+    target = ref or "HEAD"
     if last_commit:
         try:
             curr = subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
+                ["git", "rev-parse", target], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
             ).strip()
+            if ref is not None:
+                lines.append(f"source:              git:{ref} (a commit, not this folder)")
             if curr == last_commit:
-                lines.append(f"last_indexed_commit: {last_commit[:8]} (== HEAD; index current)")
+                lines.append(f"last_indexed_commit: {last_commit[:8]} (== {target}; index current)")
             else:
                 lines.append(
-                    f"last_indexed_commit: {last_commit[:8]}  HEAD: {curr[:8]}  ⚠️ STALE"
+                    f"last_indexed_commit: {last_commit[:8]}  {target}: {curr[:8]}  ⚠️ STALE"
+                    + ("  (the watching server follows it)" if ref else "")
                 )
                 try:
                     diverged = subprocess.check_output(
-                        ["git", "diff", "--name-only", last_commit, "HEAD"],
+                        ["git", "diff", "--name-only", last_commit, target],
                         text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                     ).strip()
                     for f in diverged.splitlines():
@@ -1636,9 +1665,24 @@ def index_status(since: str = "1d") -> str:
                             lines.append(f"    diverged: {f}")
                 except subprocess.CalledProcessError:
                     pass
+            if ref is not None:
+                # What the caller's own checkout changed against the indexed commit:
+                # the files to Read rather than trust the index for.
+                try:
+                    mine = subprocess.check_output(
+                        ["git", "diff", "--name-only", f"{last_commit}...HEAD"],
+                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                    ).split()
+                    lines.append(
+                        f"your HEAD vs index:  {len(mine)} file(s) differ — list them with "
+                        f"`git diff --name-only {last_commit[:10]}...HEAD`, plus uncommitted "
+                        f"edits; Read those instead of trusting index hits"
+                    )
+                except subprocess.CalledProcessError:
+                    pass
         except (FileNotFoundError, subprocess.CalledProcessError):
             lines.append(
-                f"last_indexed_commit: {last_commit[:8]} (HEAD comparison unavailable — no git)"
+                f"last_indexed_commit: {last_commit[:8]} ({target} comparison unavailable)"
             )
     else:
         lines.append("last_indexed_commit: (none recorded)")
@@ -2411,7 +2455,8 @@ def start_watchdog(repo_path: str | None = None, debounce_seconds: float = 3.0):
 
     # ADR-038: one watchdog per index. The others serve the read tools, and one of
     # them takes over when the watching server exits (the OS frees its lock).
-    index_dir = os.path.join(repo_path, ".code-index")
+    from index_location import index_dir as _index_dir
+    index_dir = os.path.join(repo_path, _index_dir())    # absolute in git mode (ADR-042 §3)
     watch_lock = try_acquire(index_dir, WATCH_LOCK, "watchdog")
     if watch_lock is None:
         print(f"[Watchdog] Standby — another server watches this index "
@@ -2444,6 +2489,10 @@ _observers: list = []   # observers started after startup, kept alive with their
 
 
 def _start_observer(repo_path: str, debounce_seconds: float, watch_lock):
+    from index_location import git_ref
+    ref = git_ref(repo_path)
+    if ref is not None:
+        return _start_ref_poller(repo_path, ref, watch_lock)
     debouncer = _ReindexDebouncer(delay=debounce_seconds)
     handler   = _CodeChangeHandler(debouncer, repo_path)
     observer  = Observer()
@@ -2453,6 +2502,78 @@ def _start_observer(repo_path: str, debounce_seconds: float, watch_lock):
     _observers.append((observer, watch_lock))   # the lock is held for the life of the process
     print(f"[Watchdog] Active — watching '{repo_path}' (debounce={debounce_seconds}s)")
     return observer
+
+
+class _RefPoller:
+    """Git mode's watchdog (ADR-042 §4): follow a ref instead of watching files.
+
+    Every ``interval`` seconds, resolve the ref (a local ``git rev-parse``, about
+    10 ms) and compare it with the commit the index was built from. When it moved,
+    the debouncer runs the usual incremental reindex, under the same locks and the
+    same "only a finished index" rule as the file watcher. Nothing touches the
+    network: the index follows the ref once anything on the machine fetches.
+    """
+
+    def __init__(self, repo_path: str, ref: str, interval: float,
+                 debouncer: "_ReindexDebouncer") -> None:
+        self.repo_path = repo_path
+        self.ref = ref
+        self.interval = interval
+        self.debouncer = debouncer
+        self._stop = threading.Event()
+        self.thread = threading.Thread(target=self._loop, name="ref-poller", daemon=True)
+
+    def indexed_commit(self) -> str | None:
+        from incremental_indexer import INDEX_DIR
+        db_path = os.path.abspath(os.path.join(INDEX_DIR, "graph.db"))
+        if not os.path.exists(db_path):
+            return None
+        try:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+            try:
+                row = con.execute("SELECT value FROM index_meta "
+                                  "WHERE key = 'last_indexed_commit'").fetchone()
+            finally:
+                con.close()
+        except sqlite3.Error:
+            return None
+        return row[0] if row else None
+
+    def check(self) -> bool:
+        """Schedule a reindex if the ref moved. True if one was scheduled."""
+        from source import GitError, resolve_ref
+        try:
+            current = resolve_ref(self.repo_path, self.ref)
+        except GitError:
+            return False            # the ref is gone for now (mid-fetch); look again later
+        if current == self.indexed_commit():
+            return False
+        print(f"[Watchdog] {self.ref} moved to {current[:10]}; reindexing.")
+        self.debouncer.schedule(0.0)
+        return True
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self.interval):
+            try:
+                self.check()
+            except Exception as exc:        # never let the poller die quietly
+                print(f"[Watchdog] ref check failed: {exc}")
+
+    def start(self) -> "_RefPoller":
+        self.thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+def _start_ref_poller(repo_path: str, ref: str, watch_lock):
+    from config import index_ref_poll_s
+    poller = _RefPoller(repo_path, ref, index_ref_poll_s(), _ReindexDebouncer(delay=0.0))
+    poller.start()
+    _observers.append((poller, watch_lock))     # the lock is held for the life of the process
+    print(f"[Watchdog] Active — following {ref} (checked every {poller.interval:.0f} s)")
+    return poller
 
 
 def _utf8_stdio() -> None:
