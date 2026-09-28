@@ -157,19 +157,19 @@
     ],
     "edges": [
       {
-        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+        "source_fqn": "sample.cs",
         "target": "System",
         "kind": "import",
         "resolved_target": null
       },
       {
-        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+        "source_fqn": "sample.cs",
         "target": "System.Collections.Generic",
         "kind": "import",
         "resolved_target": null
       },
       {
-        "source_fqn": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+        "source_fqn": "sample.cs",
         "target": "System.Threading.Tasks",
         "kind": "import",
         "resolved_target": null
@@ -312,129 +312,129 @@
   "chunks": [
     {
       "scope": "MyApp.Services.ProcessStatus",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 7,
       "end_line": 13,
       "tags": [],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.ProcessStatus (enum)\nLines: 7-13\nCode:\npublic enum ProcessStatus\n    {\n        Pending,\n        Running,\n        Done,\n        Failed,\n    }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.ProcessStatus (enum)\nLines: 7-13\nCode:\npublic enum ProcessStatus\n    {\n        Pending,\n        Running,\n        Done,\n        Failed,\n    }"
     },
     {
       "scope": "MyApp.Services.IDataService",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 15,
       "end_line": 20,
       "tags": [
         "[CAT_NETWORK]",
         "[CAT_PERSIST]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.IDataService (interface)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 15-20\nCode:\npublic interface IDataService\n    {\n        string Fetch(int id);\n        Task<string> FetchAsync(int id);\n        int Count { get; }\n    }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.IDataService (interface)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 15-20\nCode:\npublic interface IDataService\n    {\n        string Fetch(int id);\n        Task<string> FetchAsync(int id);\n        int Count { get; }\n    }"
     },
     {
       "scope": "MyApp.Services.IDataService.Fetch/1",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 17,
       "end_line": 17,
       "tags": [
         "[CAT_NETWORK]",
         "[CAT_PERSIST]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.IDataService.Fetch/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 17-17\nCode:\nstring Fetch(int id);"
+      "text": "File: sample.cs\nEntity: MyApp.Services.IDataService.Fetch/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 17-17\nCode:\nstring Fetch(int id);"
     },
     {
       "scope": "MyApp.Services.IDataService.FetchAsync/1",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 18,
       "end_line": 18,
       "tags": [
         "[CAT_NETWORK]",
         "[CAT_PERSIST]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.IDataService.FetchAsync/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 18-18\nCode:\nTask<string> FetchAsync(int id);"
+      "text": "File: sample.cs\nEntity: MyApp.Services.IDataService.FetchAsync/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 18-18\nCode:\nTask<string> FetchAsync(int id);"
     },
     {
       "scope": "MyApp.Services.IDataService.Count",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 19,
       "end_line": 19,
       "tags": [],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.IDataService.Count (property)\nLines: 19-19\nCode:\nint Count { get; }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.IDataService.Count (property)\nLines: 19-19\nCode:\nint Count { get; }"
     },
     {
       "scope": "MyApp.Services.DataServiceBase",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 22,
       "end_line": 30,
       "tags": [],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataServiceBase (class)\nLines: 22-30\nCode:\npublic class DataServiceBase\n    {\n        protected string BaseTag { get; set; } = \"base\";\n\n        protected virtual string Format(string raw)\n         { ... }\n\n    }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataServiceBase (class)\nLines: 22-30\nCode:\npublic class DataServiceBase\n    {\n        protected string BaseTag { get; set; } = \"base\";\n\n        protected virtual string Format(string raw)\n         { ... }\n\n    }"
     },
     {
       "scope": "MyApp.Services.DataServiceBase.BaseTag",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 24,
       "end_line": 24,
       "tags": [],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataServiceBase.BaseTag (property)\nLines: 24-24\nCode:\nprotected string BaseTag { get; set; } = \"base\";"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataServiceBase.BaseTag (property)\nLines: 24-24\nCode:\nprotected string BaseTag { get; set; } = \"base\";"
     },
     {
       "scope": "MyApp.Services.DataServiceBase.Format/1",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 26,
       "end_line": 29,
       "tags": [
         "[CAT_PARSE]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataServiceBase.Format/1 (method)\nTags: [CAT_PARSE]\nLines: 26-29\nCode:\nprotected virtual string Format(string raw)\n        {\n            return raw.Trim();\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataServiceBase.Format/1 (method)\nTags: [CAT_PARSE]\nLines: 26-29\nCode:\nprotected virtual string Format(string raw)\n        {\n            return raw.Trim();\n        }"
     },
     {
       "scope": "MyApp.Services.DataService",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 33,
       "end_line": 81,
       "tags": [
         "[CS_ALLOW_ANON]",
         "[CS_AUTHORIZE]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService (partial_class)\nTags: [CS_AUTHORIZE] [CS_ALLOW_ANON]\nLines: 33-81\nCode:\npublic partial class DataService : DataServiceBase, IDataService\n    {\n        private readonly List<string> _cache;\n\n        public DataService(List<string> cache)\n         { ... }\n\n\n        public DataService(List<string> cache, int capacity)\n         { ... }\n\n\n        public int Count { get; set; }\n\n        public ProcessStatus Status { get; set; } = ProcessStatus.Pending;\n\n        [Authorize]\n        public string Fetch(int id)\n         { ... }\n\n\n        [Authorize]\n        [AllowAnonymous]\n        public string Fetch(int id, bool force)\n         { ... }\n\n\n        public async Task<string> FetchAsync(int id)\n         { ... }\n\n\n        public string Describe()\n         { ... }\n\n\n        public class Config\n        {\n            public int MaxRetries { get; set; } = 3;\n        }\n    }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService (partial_class)\nTags: [CS_AUTHORIZE] [CS_ALLOW_ANON]\nLines: 33-81\nCode:\npublic partial class DataService : DataServiceBase, IDataService\n    {\n        private readonly List<string> _cache;\n\n        public DataService(List<string> cache)\n         { ... }\n\n\n        public DataService(List<string> cache, int capacity)\n         { ... }\n\n\n        public int Count { get; set; }\n\n        public ProcessStatus Status { get; set; } = ProcessStatus.Pending;\n\n        [Authorize]\n        public string Fetch(int id)\n         { ... }\n\n\n        [Authorize]\n        [AllowAnonymous]\n        public string Fetch(int id, bool force)\n         { ... }\n\n\n        public async Task<string> FetchAsync(int id)\n         { ... }\n\n\n        public string Describe()\n         { ... }\n\n\n        public class Config\n        {\n            public int MaxRetries { get; set; } = 3;\n        }\n    }"
     },
     {
       "scope": "MyApp.Services.DataService.DataService/1",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 37,
       "end_line": 40,
       "tags": [
         "[CAT_CACHE]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.DataService/1 (constructor)\nTags: [CAT_CACHE]\nLines: 37-40\nCode:\npublic DataService(List<string> cache)\n        {\n            _cache = cache;\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.DataService/1 (constructor)\nTags: [CAT_CACHE]\nLines: 37-40\nCode:\npublic DataService(List<string> cache)\n        {\n            _cache = cache;\n        }"
     },
     {
       "scope": "MyApp.Services.DataService.DataService/2",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 42,
       "end_line": 46,
       "tags": [
         "[CAT_CACHE]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.DataService/2 (constructor)\nTags: [CAT_CACHE]\nLines: 42-46\nCode:\npublic DataService(List<string> cache, int capacity)\n        {\n            _cache = cache;\n            _cache.Capacity = capacity;\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.DataService/2 (constructor)\nTags: [CAT_CACHE]\nLines: 42-46\nCode:\npublic DataService(List<string> cache, int capacity)\n        {\n            _cache = cache;\n            _cache.Capacity = capacity;\n        }"
     },
     {
       "scope": "MyApp.Services.DataService.Count",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 48,
       "end_line": 48,
       "tags": [],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.Count (property)\nLines: 48-48\nCode:\npublic int Count { get; set; }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.Count (property)\nLines: 48-48\nCode:\npublic int Count { get; set; }"
     },
     {
       "scope": "MyApp.Services.DataService.Status",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 50,
       "end_line": 50,
       "tags": [],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.Status (property)\nLines: 50-50\nCode:\npublic ProcessStatus Status { get; set; } = ProcessStatus.Pending;"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.Status (property)\nLines: 50-50\nCode:\npublic ProcessStatus Status { get; set; } = ProcessStatus.Pending;"
     },
     {
       "scope": "MyApp.Services.DataService.Fetch/1",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 52,
       "end_line": 56,
       "tags": [
@@ -442,11 +442,11 @@
         "[CAT_PERSIST]",
         "[CS_AUTHORIZE]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.Fetch/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK] [CS_AUTHORIZE]\nLines: 52-56\nCode:\n[Authorize]\n        public string Fetch(int id)\n        {\n            return Format(_cache[id]);\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.Fetch/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK] [CS_AUTHORIZE]\nLines: 52-56\nCode:\n[Authorize]\n        public string Fetch(int id)\n        {\n            return Format(_cache[id]);\n        }"
     },
     {
       "scope": "MyApp.Services.DataService.Fetch/2",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 58,
       "end_line": 64,
       "tags": [
@@ -455,46 +455,46 @@
         "[CS_ALLOW_ANON]",
         "[CS_AUTHORIZE]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.Fetch/2 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK] [CS_AUTHORIZE] [CS_ALLOW_ANON]\nLines: 58-64\nCode:\n[Authorize]\n        [AllowAnonymous]\n        public string Fetch(int id, bool force)\n        {\n            if (force) _cache.Clear();\n            return Fetch(id);\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.Fetch/2 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK] [CS_AUTHORIZE] [CS_ALLOW_ANON]\nLines: 58-64\nCode:\n[Authorize]\n        [AllowAnonymous]\n        public string Fetch(int id, bool force)\n        {\n            if (force) _cache.Clear();\n            return Fetch(id);\n        }"
     },
     {
       "scope": "MyApp.Services.DataService.FetchAsync/1",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 66,
       "end_line": 70,
       "tags": [
         "[CAT_NETWORK]",
         "[CAT_PERSIST]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.FetchAsync/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 66-70\nCode:\npublic async Task<string> FetchAsync(int id)\n        {\n            await Task.Delay(0);\n            return Fetch(id);\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.FetchAsync/1 (method)\nTags: [CAT_PERSIST] [CAT_NETWORK]\nLines: 66-70\nCode:\npublic async Task<string> FetchAsync(int id)\n        {\n            await Task.Delay(0);\n            return Fetch(id);\n        }"
     },
     {
       "scope": "MyApp.Services.DataService.Describe/0",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 72,
       "end_line": 75,
       "tags": [
         "[CAT_TEST]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService.Describe/0 (method)\nTags: [CAT_TEST]\nLines: 72-75\nCode:\npublic string Describe()\n        {\n            return $\"{Count} items, status={Status}\";\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService.Describe/0 (method)\nTags: [CAT_TEST]\nLines: 72-75\nCode:\npublic string Describe()\n        {\n            return $\"{Count} items, status={Status}\";\n        }"
     },
     {
       "scope": "MyApp.Services.DataService+Config",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 77,
       "end_line": 80,
       "tags": [
         "[CAT_CONFIG]"
       ],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService+Config (class)\nTags: [CAT_CONFIG]\nLines: 77-80\nCode:\npublic class Config\n        {\n            public int MaxRetries { get; set; } = 3;\n        }"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService+Config (class)\nTags: [CAT_CONFIG]\nLines: 77-80\nCode:\npublic class Config\n        {\n            public int MaxRetries { get; set; } = 3;\n        }"
     },
     {
       "scope": "MyApp.Services.DataService+Config.MaxRetries",
-      "file": "C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs",
+      "file": "sample.cs",
       "start_line": 79,
       "end_line": 79,
       "tags": [],
-      "text": "File: C:\\Users\\edb\\Documents\\indexer\\tests\\fixtures\\src\\sample.cs\nEntity: MyApp.Services.DataService+Config.MaxRetries (property)\nLines: 79-79\nCode:\npublic int MaxRetries { get; set; } = 3;"
+      "text": "File: sample.cs\nEntity: MyApp.Services.DataService+Config.MaxRetries (property)\nLines: 79-79\nCode:\npublic int MaxRetries { get; set; } = 3;"
     }
   ]
 }

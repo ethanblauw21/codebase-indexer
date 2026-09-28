@@ -84,6 +84,40 @@ def _serialize_chunks(chunks) -> list:
     ]
 
 
+def _portable(value, fixture_path: str, name: str):
+    """Replace the fixture's absolute path with its bare name, in every string.
+
+    The adapters put the absolute file path into FQNs, scopes and chunk text, so a
+    snapshot taken as-is only matches on the machine and checkout it was taken in.
+    Both separator spellings are replaced, so a Windows-captured snapshot and a
+    Linux run agree.
+    """
+    if isinstance(value, str):
+        return value.replace(fixture_path, name).replace(fixture_path.replace("\\", "/"), name)
+    if isinstance(value, list):
+        return [_portable(v, fixture_path, name) for v in value]
+    if isinstance(value, dict):
+        return {k: _portable(v, fixture_path, name) for k, v in value.items()}
+    return value
+
+
+def snapshot(fixture_path: str, name: str) -> dict:
+    """parse_file() and chunk_file_ast() output for one fixture, with portable paths."""
+    with open(fixture_path, encoding="utf-8") as fh:
+        content = fh.read()
+    parse_result = parse_file(fixture_path, content)
+    chunks       = chunk_file_ast(fixture_path, content)
+    return _portable(
+        {
+            "fixture": name,
+            "parse":   _serialize_parse(parse_result),
+            "chunks":  _serialize_chunks(chunks),
+        },
+        fixture_path,
+        name,
+    )
+
+
 def capture(fixtures_dir: str) -> None:
     src_dir  = os.path.join(fixtures_dir, "src")
     snap_dir = os.path.join(fixtures_dir, "snapshots")
@@ -95,28 +129,18 @@ def capture(fixtures_dir: str) -> None:
             print(f"  SKIP  {name} — not found at {fixture_path}")
             continue
 
-        with open(fixture_path, encoding="utf-8") as fh:
-            content = fh.read()
-
-        parse_result = parse_file(fixture_path, content)
-        chunks       = chunk_file_ast(fixture_path, content)
-
-        snapshot = {
-            "fixture":  name,
-            "parse":    _serialize_parse(parse_result),
-            "chunks":   _serialize_chunks(chunks),
-        }
+        snap = snapshot(fixture_path, name)
 
         out_path = os.path.join(snap_dir, f"{name}.json")
         with open(out_path, "w", encoding="utf-8") as fh:
-            json.dump(snapshot, fh, indent=2, ensure_ascii=False)
+            json.dump(snap, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
 
         print(
             f"  WROTE {os.path.relpath(out_path)}"
-            f"  ({len(parse_result.symbols)} symbols,"
-            f" {len(parse_result.edges)} edges,"
-            f" {len(chunks)} chunks)"
+            f"  ({len(snap['parse']['symbols'])} symbols,"
+            f" {len(snap['parse']['edges'])} edges,"
+            f" {len(snap['chunks'])} chunks)"
         )
 
 

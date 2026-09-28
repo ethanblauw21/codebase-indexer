@@ -21,70 +21,13 @@ import pytest
 
 _SRC = os.path.join(os.path.dirname(__file__), "..", "src")
 sys.path.insert(0, os.path.abspath(_SRC))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+
+from capture_snapshots import FIXTURE_NAMES, snapshot  # noqa: E402
 
 _FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures")
 _SNAP_DIR     = os.path.join(_FIXTURES_DIR, "snapshots")
 _SRC_DIR      = os.path.join(_FIXTURES_DIR, "src")
-
-FIXTURE_NAMES = ["sample.py", "sample.ts", "sample.js", "sample.tsx", "sample.cs", "sample.cpp"]
-
-
-def _serialize_parse(result) -> dict:
-    symbols = sorted(
-        [
-            {
-                "fqn": s.fqn,
-                "kind": s.kind,
-                "name": s.name,
-                "class_context": s.class_context,
-                "start_line": s.start_line,
-                "end_line": s.end_line,
-            }
-            for s in result.symbols
-        ],
-        key=lambda s: s["fqn"],
-    )
-    edges = sorted(
-        [
-            {
-                "source_fqn": e.source_fqn,
-                "target": e.target,
-                "kind": e.kind,
-                "resolved_target": e.resolved_target,
-            }
-            for e in result.edges
-        ],
-        key=lambda e: (e["source_fqn"], e["target"], e["kind"]),
-    )
-    symbol_types = sorted(
-        [
-            {
-                "fqn": st.fqn,
-                "return_type": st.return_type,
-                "params": st.params,
-                "type_params": st.type_params,
-                "is_async": st.is_async,
-                "is_generator": st.is_generator,
-            }
-            for st in result.symbol_types
-        ],
-        key=lambda st: st["fqn"],
-    )
-    return {"symbols": symbols, "edges": edges, "symbol_types": symbol_types}
-
-
-def _serialize_chunks(chunks) -> list:
-    return [
-        {
-            "scope": c.scope,
-            "file": c.file,
-            "start_line": c.start_line,
-            "end_line": c.end_line,
-            "tags": sorted(c.tags),
-            "text": c.text,
-        }
-        for c in chunks
-    ]
 
 
 @pytest.mark.parametrize("name", FIXTURE_NAMES)
@@ -101,19 +44,9 @@ def test_snapshot_matches_golden(name):
     with open(snap_path, encoding="utf-8") as fh:
         golden = json.load(fh)
 
-    with open(fixture_path, encoding="utf-8") as fh:
-        content = fh.read()
-
-    from ast_chunker import chunk_file_ast, parse_file
-
-    parse_result = parse_file(fixture_path, content)
-    chunks       = chunk_file_ast(fixture_path, content)
-
-    current = {
-        "fixture": name,
-        "parse":   _serialize_parse(parse_result),
-        "chunks":  _serialize_chunks(chunks),
-    }
+    # The snapshot is built by the capture script itself, so the two cannot drift, and
+    # its paths are the bare fixture name, so it matches on any machine and OS.
+    current = snapshot(fixture_path, name)
 
     assert current == golden, (
         f"\nSnapshot mismatch for {name}.\n"

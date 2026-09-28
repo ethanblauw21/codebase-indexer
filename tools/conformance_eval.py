@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import ntpath
 import os
 import sys
 
@@ -92,6 +93,14 @@ def normalize_fqn(s: str) -> str:
     C++ namespace and is preserved. Without this guard, `normalize_fqn` would strip the
     namespace off every C++ FQN, collapsing distinct symbols and masking recall misses —
     the exact failure mode the C# `/arity` fix above guards against.
+
+    Basenaming uses `ntpath.basename`, NOT `os.path.basename`, and that is deliberate:
+    `os.path` is `posixpath` on Linux/macOS, which does not treat `\\` as a separator, so a
+    Windows-authored identifier (`C:\\...\\async_gen.py`) came back unnormalized off-platform
+    and compared unequal to the same symbol normalized on Windows. `ntpath` accepts BOTH
+    separators on every platform, which is exactly the "portable identifier" contract this
+    function promises. The `/arity` guard below is unaffected — `ntpath.basename("A.B.M/2")`
+    is still `"2"`, which has no extension and so is still returned unchanged.
     """
     if "::" in s:
         prefix = s.split("::", 1)[0]
@@ -101,7 +110,7 @@ def normalize_fqn(s: str) -> str:
     # Only basename strings that are genuinely filesystem paths: a path separator AND a
     # file extension on the final component. A C# FQN has a '/' before the arity, but its
     # final component is a bare integer with no extension, so it passes through untouched.
-    base = os.path.basename(s)
+    base = ntpath.basename(s)
     if ("/" in s or "\\" in s) and os.path.splitext(base)[1]:
         return base
     return s

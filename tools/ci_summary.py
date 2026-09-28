@@ -2,8 +2,13 @@
 Parse pytest output and mutmut cache, write a GitHub Step Summary (or stdout).
 
 Exit codes:
-  0 — all thresholds met (or mutmut cache absent)
-  1 — mutation score below --threshold-low
+  0 — tests passed, and the mutation score (when measured) meets --threshold-low
+  1 — a test failed or errored, pytest produced no result, or the mutation score
+      is below --threshold-low
+
+The pytest and mutmut steps run with continue-on-error so this summary always
+runs (ADR-004); this step is therefore the one that fails the job. A missing
+mutmut cache is reported as "not measured", never as a passing score.
 """
 
 import argparse
@@ -14,10 +19,10 @@ import sys
 from pathlib import Path
 
 
-def parse_pytest_output(path: Path) -> tuple[list[dict], int, int]:
-    """Return (failures, n_failed, n_passed) from pytest --tb=short -q output."""
+def parse_pytest_output(path: Path) -> tuple[list[dict], int, int, int]:
+    """Return (failures, n_failed, n_errors, n_passed) from pytest --tb=short -q output."""
     if not path.exists():
-        return [], 0, 0
+        return [], 0, 0, 0
 
     text = path.read_text(encoding="utf-8", errors="replace")
     failures = []
@@ -28,8 +33,8 @@ def parse_pytest_output(path: Path) -> tuple[list[dict], int, int]:
         if m:
             failures.append({"test": m.group(1), "reason": m.group(2)})
 
-    # Summary line: "3 failed, 47 passed in 1.23s"
-    n_failed = n_passed = 0
+    # Summary line: "3 failed, 47 passed, 1 error in 1.23s"
+    n_failed = n_errors = n_passed = 0
     for line in reversed(text.splitlines()):
         m = re.search(r"(\d+) failed", line)
         if m:
@@ -37,10 +42,13 @@ def parse_pytest_output(path: Path) -> tuple[list[dict], int, int]:
         m2 = re.search(r"(\d+) passed", line)
         if m2:
             n_passed = int(m2.group(1))
-        if n_failed or n_passed:
+        m3 = re.search(r"(\d+) errors?\b", line)
+        if m3:
+            n_errors = int(m3.group(1))
+        if n_failed or n_passed or n_errors:
             break
 
-    return failures, n_failed, n_passed
+    return failures, n_failed, n_errors, n_passed
 
 
 def read_mutmut_cache(cache_path: Path) -> tuple[list[dict], int, int]:
@@ -98,6 +106,7 @@ def score_badge(score: float, high: int, low: int) -> str:
 def build_markdown(
     failures: list[dict],
     n_failed: int,
+    n_errors: int,
     n_passed: int,
     survivors: list[dict],
     n_killed: int,
@@ -111,7 +120,7 @@ def build_markdown(
 
     if has_pytest:
         lines.append("### Test Results")
-        lines.append(f"> {n_failed} failed, {n_passed} passed")
+        lines.append(f"> {n_failed} failed, {n_errors} errors, {n_passed} passed")
         lines.append("")
         if failures:
             lines.append("| Test | Failure |")
@@ -142,7 +151,8 @@ def build_markdown(
                 lines.append(f"| `{fname}` | {s['line']} | `{mutation}` |")
             lines.append("")
     else:
-        score = 100.0  # no cache → no threshold failure
+        lines.append("### Mutation Score: not measured (no mutmut cache)")
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -161,11 +171,11 @@ def main() -> int:
     has_pytest = pytest_path.exists()
     has_mutmut = cache_path.exists()
 
-    failures, n_failed, n_passed = parse_pytest_output(pytest_path)
+    failures, n_failed, n_errors, n_passed = parse_pytest_output(pytest_path)
     survivors, n_killed, n_total = read_mutmut_cache(cache_path)
 
     md = build_markdown(
-        failures, n_failed, n_passed,
+        failures, n_failed, n_errors, n_passed,
         survivors, n_killed, n_total,
         args.threshold_high, args.threshold_low,
         has_pytest, has_mutmut,
@@ -178,7 +188,16 @@ def main() -> int:
     else:
         print(md)
 
-    # Enforce threshold
+    # Enforce: a failing or missing test run fails the job.
+    if n_failed or n_errors:
+        print(f"pytest: {n_failed} failed, {n_errors} errors", file=sys.stderr)
+        return 1
+    if not n_passed:
+        print(f"pytest produced no passing result ({pytest_path} missing or has no summary line)",
+              file=sys.stderr)
+        return 1
+
+    # Enforce the mutation threshold, when mutmut produced a cache.
     if has_mutmut and n_total > 0:
         score = (n_killed / n_total) * 100
         if score < args.threshold_low:
