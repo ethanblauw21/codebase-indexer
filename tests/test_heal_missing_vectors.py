@@ -41,15 +41,22 @@ def env(tmp_path, monkeypatch):
 
 
 def _kill_on(monkeypatch, file_name):
-    """Make ingest_file die, like a kill, when it reaches file_name."""
-    real = ii.ingest_file
+    """Make _write_plan die, like a kill, when it reaches file_name.
 
-    def ingest(rel_path, *args, **kwargs):
-        if rel_path.endswith(file_name):
+    B-050 (ADR-040): pass 2 now batches embedding across files, so it calls
+    `_prepare_file` then `_write_plan` per file instead of one `ingest_file` call.
+    `_write_plan` is the per-file FAISS-add-plus-SQLite-commit point `ingest_file`
+    used to be killed at — the same "run dies right before finishing this file"
+    scenario, just at its new home.
+    """
+    real = ii._write_plan
+
+    def write(plan, *args, **kwargs):
+        if plan.rel_path.endswith(file_name):
             raise KeyboardInterrupt      # not caught by the per-file handler
-        return real(rel_path, *args, **kwargs)
+        return real(plan, *args, **kwargs)
 
-    monkeypatch.setattr(ii, "ingest_file", ingest)
+    monkeypatch.setattr(ii, "_write_plan", write)
     return real
 
 
@@ -80,7 +87,7 @@ def test_a_build_killed_before_its_save_is_healed_by_the_next_run(env, monkeypat
     with CodeDB(os.path.join(index_dir, "graph.db")) as db:
         assert db._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0] > 0
 
-    monkeypatch.setattr(ii, "ingest_file", real)
+    monkeypatch.setattr(ii, "_write_plan", real)
     capsys.readouterr()
     ii.run_incremental(str(repo), interactive=False)
     out = capsys.readouterr().out
@@ -100,7 +107,7 @@ def test_a_modify_killed_before_its_save_leaves_no_duplicate_vectors(env, monkey
     with pytest.raises(KeyboardInterrupt):
         ii.run_incremental(str(repo), interactive=False)
 
-    monkeypatch.setattr(ii, "ingest_file", real)
+    monkeypatch.setattr(ii, "_write_plan", real)
     capsys.readouterr()
     ii.run_incremental(str(repo), interactive=False)
     out = capsys.readouterr().out
