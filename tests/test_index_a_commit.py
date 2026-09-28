@@ -21,11 +21,14 @@ from db import CodeDB
 from source import GitCommitSource, GitError, WorkingTreeSource
 
 
-def git(repo, *args) -> str:
-    return subprocess.run(
+def git(repo, *args, stdin: str | None = None) -> str:
+    done = subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", *args],
-        cwd=repo, check=True, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-    ).stdout.strip()
+        cwd=repo, capture_output=True, text=True, input=stdin,
+        stdin=None if stdin is not None else subprocess.DEVNULL,
+    )
+    assert done.returncode == 0, f"git {' '.join(args)} failed: {done.stderr.strip()}"
+    return done.stdout.strip()
 
 
 def _write(path, text: str, *, newline: str = "\n") -> None:
@@ -46,7 +49,9 @@ def repo(tmp_path, monkeypatch):
     _write(r / "assets" / "big.ts",
            "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12345\n")
     git(r, "add", "src", "assets")
-    blob = git(r, "hash-object", "-w", "--stdin")          # empty blob, any sha will do
+    # A symlink's blob is its target. An empty target is invalid on Linux, where git
+    # checks the link out for real, so point it at a sibling.
+    blob = git(r, "hash-object", "-w", "--stdin", stdin="a.ts")
     git(r, "update-index", "--add", "--cacheinfo", f"120000,{blob},src/link.ts")
     head_like = "1" * 40
     git(r, "update-index", "--add", "--cacheinfo", f"160000,{head_like},vendor/sub")
