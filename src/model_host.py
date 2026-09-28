@@ -476,6 +476,20 @@ class _HostServer(ThreadingHTTPServer):
         self.token = token
         self.describe = describe
 
+    def handle_error(self, request, client_address) -> None:
+        """Log one line for a client that dropped the connection; anything else keeps its traceback.
+
+        A client that gives up on a slow status poll and closes its socket makes ``wfile.write``
+        raise mid-response. socketserver's default ``handle_error`` prints a full traceback to
+        stderr for that (B-049) — harmless, since the client just retries, but it buries real
+        errors in host.log under noise from something that happens on every dropped poll.
+        """
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            logger.info("client %s dropped the connection: %s", client_address, exc)
+            return
+        super().handle_error(request, client_address)
+
 
 class _Handler(BaseHTTPRequestHandler):
     server: _HostServer
@@ -592,7 +606,7 @@ def serve(backend: Backend | None = None) -> int:
     import config
     lock = _acquire_lock()
     if lock is None:
-        print("[model-host] another host holds the lock; exiting", flush=True)
+        logger.info("another host holds the lock; exiting")
         return 0
     backend = backend or TorchBackend()
     scheduler = HostScheduler(backend, embed_idle_s=config.model_host_embed_idle_s(),
@@ -601,8 +615,8 @@ def serve(backend: Backend | None = None) -> int:
     port = server.server_address[1]
     device = backend.describe().get("device")     # B-051: recorded so a client can spot a CPU host
     _write_host_json(port, device)
-    print(f"[model-host] pid {os.getpid()} listening on 127.0.0.1:{port} "
-          f"device={device or 'unknown'}", flush=True)
+    logger.info("pid %d listening on 127.0.0.1:%d device=%s", os.getpid(), port,
+                device or "unknown")
     try:
         scheduler.run()
     finally:
@@ -612,10 +626,25 @@ def serve(backend: Backend | None = None) -> int:
         except OSError:
             pass
         lock.close()
-        print("[model-host] stopped", flush=True)
+        logger.info("stopped")
     return 0
 
 
+def _configure_logging() -> None:
+    """Prefix every host log line with a local ISO timestamp, seconds precision (B-049).
+
+    Factored out of the ``__main__`` block so a test can install the same formatter without
+    running the host's main loop. ``force=True`` makes it reconfigure the root logger even when
+    a test harness (or a previous call) already attached a handler.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [model-host] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+        force=True,
+    )
+
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    _configure_logging()
     sys.exit(serve())

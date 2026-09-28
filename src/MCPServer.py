@@ -2283,6 +2283,7 @@ class _ReindexDebouncer:
                 return          # the queued run scans the disk when it starts, so it sees this change too
             self._queued = True
         try:
+            from datetime import datetime  # B-049: stamp the watchdog's start/complete lines
             from incremental_indexer import INDEX_DIR, run_incremental
             from index_lock import WRITE_LOCK, describe_holder, holder, try_acquire
             with _reindex_lock:
@@ -2302,10 +2303,12 @@ class _ReindexDebouncer:
                     self.schedule(_BUSY_RETRY_S)
                     return
                 with lock:
-                    print("\n[Watchdog] Change detected — running incremental reindex...")
+                    print(f"\n[{datetime.now():%H:%M:%S}] [Watchdog] Change detected — "
+                          f"running incremental reindex...")
                     run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
                     _reload_indexes()
-            print("[Watchdog] Reindex complete — in-memory indexes reloaded.\n")
+            print(f"[{datetime.now():%H:%M:%S}] [Watchdog] Reindex complete — "
+                  f"in-memory indexes reloaded.\n")
         except Exception as exc:
             print(f"[Watchdog] Reindex failed: {exc}\n")
 

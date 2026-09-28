@@ -68,9 +68,10 @@ import hashlib
 import os
 import subprocess
 import sys
+import time
 import traceback
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -1000,6 +1001,36 @@ _SUMMARY_SLICE = 192
 _EMBED_WINDOW_TEXTS = 256
 
 
+def _hms(now: Optional[datetime] = None) -> str:
+    """Local HH:MM:SS, used to stamp progress lines and phase banners (B-049)."""
+    return (now or datetime.now()).strftime("%H:%M:%S")
+
+
+def _format_summary_progress(
+    done: int,
+    total: int,
+    slice_count: int,
+    slice_seconds: float,
+    now: datetime,
+) -> str:
+    """Render a ``[summarize N/M · HH:MM:SS · R/min last slice · ETA ~HH:MM]`` line (B-049).
+
+    The rate comes from the slice that just finished, not the average since the run started:
+    pass 1 processes texts longest-first, so throughput climbs roughly 3-11x over a run, and an
+    average-since-start rate underestimates how close the run is to done. ``now`` and the elapsed
+    slice time are passed in rather than read from the clock here, so the ETA math is testable
+    without sleeping or a real clock.
+    """
+    rate_per_min = (slice_count / slice_seconds * 60.0) if slice_seconds > 0 else 0.0
+    remaining = max(total - done, 0)
+    if rate_per_min > 0:
+        eta = (now + timedelta(minutes=remaining / rate_per_min)).strftime("%H:%M")
+    else:
+        eta = "?"
+    return (f"  [summarize {done}/{total} · {now.strftime('%H:%M:%S')} · "
+            f"{rate_per_min:.0f}/min last slice · ETA ~{eta}]")
+
+
 def run_summarization_pass(
     to_index:   list[str],
     repo_path:  str,
@@ -1028,7 +1059,7 @@ def run_summarization_pass(
     Unloading between every tier instead would mean reloading a 3 GB model on
     each alternation, which costs far more than the thrashing it avoids.
     """
-    print("━━ Pass 1 of 2: summarization (embedding model not loaded) ━━", flush=True)
+    print(f"[{_hms()}] ━━ Pass 1 of 2: summarization (embedding model not loaded) ━━", flush=True)
     # ADR-027: collect every uncached chunk in the repository first, then
     # summarize them together, longest first. Calling the summarizer per file
     # and tier handed it ~4 chunks at a time, so the batch never grew past its
@@ -1063,11 +1094,14 @@ def run_summarization_pass(
     total_new = 0
     for start in range(0, len(todo), _SUMMARY_SLICE):
         part = todo[start:start + _SUMMARY_SLICE]
+        _slice_started = time.monotonic()
         summaries = summarizer.summarize_batch([t for _h, t in part])
         pairs = [(h, sm) for (h, _t), sm in zip(part, summaries) if sm]
         db.cache_summaries(pairs)
         total_new += len(pairs)
-        print(f"  [summarize {start + len(part)}/{len(todo)}]", flush=True)
+        _slice_elapsed = time.monotonic() - _slice_started
+        print(_format_summary_progress(start + len(part), len(todo), len(part),
+                                       _slice_elapsed, datetime.now()), flush=True)
     print(f"  Pass 1 done: {total_chunks} chunks seen, {total_new} newly summarized",
           flush=True)
     # ADR-027: empty summaries leave no cache row, so without this line a partly
@@ -1280,7 +1314,7 @@ def _run_incremental(
         unsummarized = run_summarization_pass(to_index, repo_path, db, summarizer)
         summarizer.shutdown()          # child process exits; its GPU memory returns
         summarizer = _CacheOnlySummarizer()
-        print("━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
+        print(f"[{_hms()}] ━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
 
     # B-050 (ADR-040): collect a window of prepared files and embed their pending
     # texts in one call, instead of once per (file, tier). `pending_plans` and
@@ -1390,7 +1424,7 @@ def _run_incremental(
 
     # Flush FAISS indexes to disk.
     # Chunk payloads are already in SQLite (committed per-file by upsert_file).
-    print("Saving indexes...")
+    print(f"[{_hms()}] Saving indexes...")
     index_manager.save_all()
 
     # ADR-025 §4/§5: record run-level freshness facts from this one chokepoint that
@@ -1407,7 +1441,7 @@ def _run_incremental(
 
     status = "with errors" if errors else "with warnings" if unsummarized else "successfully"
     print(
-        f"Done {status}.  "
+        f"[{_hms()}] Done {status}.  "
         f"files={s['files']}  symbols={s['symbols']}  "
         f"chunks={s['chunks']}  edges={s['edges']}"
     )

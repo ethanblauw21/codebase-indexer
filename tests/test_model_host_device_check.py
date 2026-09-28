@@ -8,6 +8,7 @@ tests for the write side.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 
@@ -51,7 +52,7 @@ def test_write_host_json_omits_device_when_not_given(tmp_path):
     assert "device" not in payload
 
 
-def test_serve_records_the_backends_resolved_device(tmp_path, monkeypatch, capsys):
+def test_serve_records_the_backends_resolved_device(tmp_path, monkeypatch, caplog):
     """serve() wires backend.describe()['device'] into host.json and the startup line.
 
     The scheduler and server are faked so this runs synchronously with no thread,
@@ -81,13 +82,14 @@ def test_serve_records_the_backends_resolved_device(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(mh, "HostScheduler", FakeScheduler)
     monkeypatch.setattr(mh, "_write_host_json", lambda port, device=None: calls.append((port, device)))
 
+    caplog.set_level(logging.INFO, logger=mh.__name__)
     mh.serve(backend=FakeBackend())
 
     assert calls == [(5150, "cpu")]
-    assert "device=cpu" in capsys.readouterr().out
+    assert "device=cpu" in caplog.text
 
 
-def test_serve_logs_unknown_when_the_backend_reports_no_device(tmp_path, monkeypatch, capsys):
+def test_serve_logs_unknown_when_the_backend_reports_no_device(tmp_path, monkeypatch, caplog):
     class FakeBackend:
         def describe(self):
             return {"embed_model_id": "fake"}
@@ -110,10 +112,11 @@ def test_serve_logs_unknown_when_the_backend_reports_no_device(tmp_path, monkeyp
     monkeypatch.setattr(mh, "HostScheduler", FakeScheduler)
     monkeypatch.setattr(mh, "_write_host_json", lambda port, device=None: calls.append((port, device)))
 
+    caplog.set_level(logging.INFO, logger=mh.__name__)
     mh.serve(backend=FakeBackend())
 
     assert calls == [(5151, None)]
-    assert "device=unknown" in capsys.readouterr().out
+    assert "device=unknown" in caplog.text
 
 
 # ── model_client: _host_device ────────────────────────────────────────────────
