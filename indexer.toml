@@ -15,6 +15,12 @@ repo_root = "."
 # Directory where FAISS indexes and graph.db are stored.
 index_dir = ".code-index"
 
+# ADR-038 (B-053): a linked git worktree (`git worktree add`) is refused as an index
+# writer — no watchdog, and `reindex` / `code-indexer` refuse — because parallel
+# sessions in worktrees would each drive a rebuild. Set true in a worktree that exists
+# only to hold the index (e.g. a detached `origin/main` checkout).
+allow_linked_worktree = false
+
 # Optional: path to a rules.yaml file for risk analysis.
 # When absent, no rules are applied (copy examples/firebase-rules.yaml).
 # rules_file = "rules.yaml"

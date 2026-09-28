@@ -915,6 +915,22 @@ def run_incremental(
     prune: bool = False,
     interactive: bool = True,
 ) -> None:
+    """Run one indexing pass holding the index's write.lock (ADR-038, B-033).
+
+    Raises `index_lock.IndexBusy` at once if another process is writing this index:
+    two writers used to overwrite each other's FAISS saves. See `_run_incremental`.
+    """
+    from index_lock import WRITE_LOCK, acquire
+    with acquire(INDEX_DIR, WRITE_LOCK, "build"):
+        _run_incremental(repo_path, prune=prune, interactive=interactive)
+
+
+def _run_incremental(
+    repo_path: str,
+    *,
+    prune: bool,
+    interactive: bool,
+) -> None:
     """
     Main entry point.  Execution order is chosen for crash safety:
 
@@ -1199,8 +1215,24 @@ def main() -> None:
         help="apply bulk deletions without asking. Above max(50, 20%%) of the index, "
              "deletions are confirmed first; this answers yes in advance.",
     )
+    parser.add_argument(
+        "--allow-worktree",
+        action="store_true",
+        help="index this linked git worktree anyway (ADR-038). Prefer "
+             "[indexer] allow_linked_worktree = true in its indexer.toml.",
+    )
     args = parser.parse_args()
-    run_incremental(prune=args.prune)
+    from index_lock import IndexBusy, worktree_refusal
+    refusal = None if args.allow_worktree else worktree_refusal(REPO_PATH)
+    if refusal:
+        print(f"Refused: {refusal}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        run_incremental(prune=args.prune)
+    except IndexBusy as exc:
+        print(f"Refused: another process is writing this index ({exc}). "
+              f"Wait for it to finish, then run again.", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

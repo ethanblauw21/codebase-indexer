@@ -208,3 +208,16 @@ def model_host_idle_exit_s() -> float:
 def model_host_spawn_timeout_s() -> float:
     """How long a client waits for a host it started to begin listening."""
     return max(1.0, float(_host_cfg().get("spawn_timeout_s", DEFAULT_MODEL_HOST_SPAWN_TIMEOUT_S)))
+
+
+# ---------------------------------------------------------------------------
+# Index writers (ADR-038) — [indexer] in indexer.toml.
+# ---------------------------------------------------------------------------
+
+DEFAULT_ALLOW_LINKED_WORKTREE = False
+
+
+def allow_linked_worktree(start_dir: str | None = None) -> bool:
+    """Whether a linked git worktree may write its index (B-053). Read fresh each call."""
+    return bool(load_indexer_config(start_dir).get("indexer", {})
+                .get("allow_linked_worktree", DEFAULT_ALLOW_LINKED_WORKTREE))

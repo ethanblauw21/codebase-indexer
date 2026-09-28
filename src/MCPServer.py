@@ -25,8 +25,45 @@ from core import jina_tokenizer, MultiIndexManager, DocumentStore
 from hybrid_retriever import HybridRetriever, RetrievedChunk
 from iterative_retriever import IterativeRetriever, RetrievalSession
 
+def _server_instructions(repo_path: str | None = None) -> str:
+    """What every connected agent is told about this index (ADR-038, B-053).
+
+    Names the folder and the commit the index was built from, read from index_meta,
+    so an agent working on another branch or worktree knows which hits to distrust.
+    Kept short: every session pays for it.
+    """
+    repo_path = repo_path or os.getcwd()
+    commit = verified = None
+    db_path = os.path.join(repo_path, ".code-index", "graph.db")
+    if os.path.exists(db_path):
+        try:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            try:
+                meta = dict(con.execute(
+                    "SELECT key, value FROM index_meta "
+                    "WHERE key IN ('last_indexed_commit', 'last_verified_at')").fetchall())
+            finally:
+                con.close()
+            commit = meta.get("last_indexed_commit")
+            verified = meta.get("last_verified_at")
+        except sqlite3.Error:
+            pass
+    built = (f"commit {commit[:10]}, last verified {verified}" if commit
+             else "no finished build yet")
+    return (
+        f"This code index reflects ONE checkout: {repo_path} ({built}). "
+        "It does not see edits in other branches or worktrees. For any file your branch "
+        "changed (git diff --name-only <that commit>...HEAD, plus uncommitted edits), Read "
+        "the file itself: index hits for it show the indexed version, and line numbers may "
+        "be off. Use the index for how the rest of the codebase works. "
+        "Never call `reindex` from a git worktree made for separate or parallel work; it "
+        "refuses there, and one server per index keeps it current on its own. "
+        "`index_status` reports freshness."
+    )
+
+
 # Initialize MCP Server
-mcp = FastMCP("Local Codebase RAG")
+mcp = FastMCP("Local Codebase RAG", instructions=_server_instructions())
 
 # Lazy index state — loaded on first tool call so the MCP handshake
 # completes instantly even when FAISS indexes / doc_store.json are large.
@@ -37,10 +74,35 @@ t2_index = None
 t3_index = None
 
 
+def _faiss_stamp(index_dir: str = ".code-index") -> tuple:
+    """(name, mtime_ns, size) of every saved FAISS index: changes whenever any process saves."""
+    try:
+        names = sorted(n for n in os.listdir(index_dir) if n.endswith(".faiss"))
+    except OSError:
+        return ()
+    stamp = []
+    for n in names:
+        try:
+            st = os.stat(os.path.join(index_dir, n))
+        except OSError:
+            continue
+        stamp.append((n, st.st_mtime_ns, st.st_size))
+    return tuple(stamp)
+
+
+_loaded_stamp: tuple | None = None   # _faiss_stamp() when the in-memory indexes were loaded
+
+
 def _ensure_indexes():
-    global index_manager, doc_store, t1_index, t2_index, t3_index
+    global index_manager, doc_store, t1_index, t2_index, t3_index, _loaded_stamp
     if doc_store is not None:
+        # ADR-038 (B-033 fix 3): another process (the watching server, or a terminal
+        # build) saved since this server loaded; serve the new vectors, not the old.
+        if _loaded_stamp is not None and _faiss_stamp() != _loaded_stamp:
+            print("[MCP] The index was saved by another process; reloading.")
+            _reload_indexes()
         return
+    _loaded_stamp = _faiss_stamp()
     index_manager = MultiIndexManager()
     doc_store = DocumentStore()
     t1_index = index_manager.load_or_create("tier1_surgical")
@@ -1311,9 +1373,25 @@ def reindex(changed_files_only: bool = False) -> str:
 
     Returns a summary of chunks added/updated/removed, then reloads the in-memory indexes.
     """
-    # ADR-036: a watchdog reindex in flight finishes first; this one then runs alone.
+    from incremental_indexer import INDEX_DIR
+    from index_lock import WRITE_LOCK, IndexBusy, acquire, worktree_refusal
+    # ADR-038 (B-053): parallel-work worktrees never drive a rebuild. Raised, not
+    # returned, so the client sees isError rather than a successful refusal.
+    refusal = worktree_refusal(os.getcwd())
+    if refusal:
+        raise RuntimeError(f"reindex refused: {refusal}")
+    # ADR-036: a watchdog reindex in flight in this process finishes first; this one
+    # then runs alone. ADR-038: a run in ANOTHER process is not waited on (it can take
+    # an hour); the call fails at once and names it.
     with _reindex_lock:
-        return _reindex(changed_files_only)
+        try:
+            with acquire(INDEX_DIR, WRITE_LOCK, "reindex tool"):
+                return _reindex(changed_files_only)
+        except IndexBusy as exc:
+            raise RuntimeError(
+                f"reindex refused: another process is writing this index ({exc}). "
+                f"Its run picks up the current files; call index_status after it finishes."
+            ) from exc
 
 
 def _reindex(changed_files_only: bool) -> str:
@@ -2145,9 +2223,10 @@ def _reload_indexes() -> None:
     acquired only for the brief reference-swap itself.
     """
     global index_manager, doc_store, t1_index, t2_index, t3_index
-    global _hybrid_retriever, _iterative_retriever, _index_generation
+    global _hybrid_retriever, _iterative_retriever, _index_generation, _loaded_stamp
 
     # Phase 1: build (slow — reads FAISS files + SQLite)
+    new_stamp = _faiss_stamp()      # taken first: a save during the load triggers one more reload
     new_im = MultiIndexManager()
     new_ds = DocumentStore()
     new_t1 = new_im.load_or_create("tier1_surgical")
@@ -2162,6 +2241,7 @@ def _reload_indexes() -> None:
         t2_index             = new_t2
         t3_index             = new_t3
         _index_generation   += 1
+        _loaded_stamp        = new_stamp
         _hybrid_retriever    = None
         _iterative_retriever = None
 
@@ -2188,11 +2268,11 @@ class _ReindexDebouncer:
         self._lock   = threading.Lock()
         self._queued = False    # a fired run is waiting for _reindex_lock
 
-    def schedule(self) -> None:
+    def schedule(self, delay: float | None = None) -> None:
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
-            self._timer = threading.Timer(self._delay, self._fire)
+            self._timer = threading.Timer(self._delay if delay is None else delay, self._fire)
             self._timer.daemon = True
             self._timer.start()
 
@@ -2203,16 +2283,54 @@ class _ReindexDebouncer:
                 return          # the queued run scans the disk when it starts, so it sees this change too
             self._queued = True
         try:
-            from incremental_indexer import run_incremental
+            from incremental_indexer import INDEX_DIR, run_incremental
+            from index_lock import WRITE_LOCK, describe_holder, holder, try_acquire
             with _reindex_lock:
                 with self._lock:
                     self._queued = False    # from here on, a new change needs a new run
-                print("\n[Watchdog] Change detected — running incremental reindex...")
-                run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
-                _reload_indexes()
+                # ADR-038 (B-033): a first build is an hour of GPU work nobody sees
+                # from inside a server. Only a finished build is kept current here.
+                if not _index_built(INDEX_DIR):
+                    print("[Watchdog] No finished index here yet; skipped. Build it once "
+                          "with `code-indexer` from a terminal.")
+                    return
+                lock = try_acquire(INDEX_DIR, WRITE_LOCK, "watchdog")
+                if lock is None:
+                    print(f"[Watchdog] Another process is writing this index "
+                          f"({describe_holder(holder(INDEX_DIR, WRITE_LOCK) or {})}); "
+                          f"retrying in {_BUSY_RETRY_S:.0f} s.")
+                    self.schedule(_BUSY_RETRY_S)
+                    return
+                with lock:
+                    print("\n[Watchdog] Change detected — running incremental reindex...")
+                    run_incremental(interactive=False)   # ADR-026 §5 — nobody is watching
+                    _reload_indexes()
             print("[Watchdog] Reindex complete — in-memory indexes reloaded.\n")
         except Exception as exc:
             print(f"[Watchdog] Reindex failed: {exc}\n")
+
+
+# ADR-038: how long a watchdog waits before retrying when another process is writing.
+_BUSY_RETRY_S = 60.0
+# ADR-038: how often a server without the watch lock checks whether it has freed up.
+_WATCH_RETRY_S = 60.0
+
+
+def _index_built(index_dir: str) -> bool:
+    """True once a build has finished here: index_meta has last_verified_at (ADR-025 §4)."""
+    db_path = os.path.abspath(os.path.join(index_dir, "graph.db"))
+    if not os.path.exists(db_path):
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+        try:
+            row = con.execute(
+                "SELECT value FROM index_meta WHERE key = 'last_verified_at'").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+    return bool(row and row[0])
 
 
 if _WATCHDOG_AVAILABLE:
@@ -2284,12 +2402,55 @@ def start_watchdog(repo_path: str | None = None, debounce_seconds: float = 3.0):
     if repo_path is None:
         repo_path = os.getcwd()
 
+    # ADR-038 (B-053): no watchdog in a worktree made for parallel work.
+    from index_lock import WATCH_LOCK, describe_holder, holder, try_acquire, worktree_refusal
+    refusal = worktree_refusal(repo_path)
+    if refusal:
+        print(f"[Watchdog] Off: {refusal}")
+        return None
+
+    # ADR-038: one watchdog per index. The others serve the read tools, and one of
+    # them takes over when the watching server exits (the OS frees its lock).
+    index_dir = os.path.join(repo_path, ".code-index")
+    watch_lock = try_acquire(index_dir, WATCH_LOCK, "watchdog")
+    if watch_lock is None:
+        print(f"[Watchdog] Standby — another server watches this index "
+              f"({describe_holder(holder(index_dir, WATCH_LOCK) or {})}); "
+              f"checking again every {_WATCH_RETRY_S:.0f} s.")
+        _retry_watch(repo_path, debounce_seconds, index_dir)
+        return None
+
+    return _start_observer(repo_path, debounce_seconds, watch_lock)
+
+
+def _retry_watch(repo_path: str, debounce_seconds: float, index_dir: str) -> None:
+    """Try for the watch lock again in _WATCH_RETRY_S, until this server gets it."""
+    from index_lock import WATCH_LOCK, try_acquire
+
+    def _attempt() -> None:
+        lock = try_acquire(index_dir, WATCH_LOCK, "watchdog")
+        if lock is None:
+            _retry_watch(repo_path, debounce_seconds, index_dir)
+            return
+        print("[Watchdog] The watching server exited; this one takes over.")
+        _start_observer(repo_path, debounce_seconds, lock)
+
+    timer = threading.Timer(_WATCH_RETRY_S, _attempt)
+    timer.daemon = True
+    timer.start()
+
+
+_observers: list = []   # observers started after startup, kept alive with their locks
+
+
+def _start_observer(repo_path: str, debounce_seconds: float, watch_lock):
     debouncer = _ReindexDebouncer(delay=debounce_seconds)
     handler   = _CodeChangeHandler(debouncer, repo_path)
     observer  = Observer()
     observer.schedule(handler, repo_path, recursive=True)
     observer.daemon = True
     observer.start()
+    _observers.append((observer, watch_lock))   # the lock is held for the life of the process
     print(f"[Watchdog] Active — watching '{repo_path}' (debounce={debounce_seconds}s)")
     return observer
 

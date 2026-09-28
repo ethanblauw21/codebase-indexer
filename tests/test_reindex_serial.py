@@ -41,7 +41,9 @@ class Runs:
 
 
 @pytest.fixture
-def runs(monkeypatch):
+def runs(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)         # ADR-038's lock files go in a scratch .code-index
+    monkeypatch.setattr(MCPServer, "_index_built", lambda index_dir: True)
     r = Runs()
     monkeypatch.setattr(incremental_indexer, "run_incremental", r)
     monkeypatch.setattr(MCPServer, "_reload_indexes", lambda: None)
