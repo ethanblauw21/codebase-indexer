@@ -1,6 +1,6 @@
 # ADR-041: The Model Host Records Its Device, and a CUDA Client Corrects a CPU One
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-28
 **Branch:** `feature/b051-host-device-check`
 **Reviewer:** @edb
