@@ -137,7 +137,14 @@ def test_surplus_alone_is_removed_and_saved_on_an_unchanged_repo(env, capsys):
 
 def test_save_all_writes_the_summary_index_first(tmp_path, monkeypatch):
     written = []
-    monkeypatch.setattr(core.faiss, "write_index", lambda _idx, path: written.append(os.path.basename(path)))
+    real_write = core.faiss.write_index
+
+    def record(idx, path):
+        # save_all writes each index to <name>.faiss.tmp, then renames it (#49).
+        written.append(os.path.basename(path).removesuffix(".tmp"))
+        real_write(idx, path)
+
+    monkeypatch.setattr(core.faiss, "write_index", record)
     mgr = core.MultiIndexManager(str(tmp_path))
     for name in ("tier1_surgical", "tier2_component", "tier3_architectural", "summary"):
         mgr.load_or_create(name, dimension=4)
