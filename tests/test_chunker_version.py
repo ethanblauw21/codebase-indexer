@@ -50,17 +50,21 @@ def test_a_fresh_build_records_the_version(env):
 
 
 def test_a_build_killed_midway_leaves_no_marker_and_warns(env, monkeypatch):
+    """B-050 (ADR-040): pass 2 now calls `_prepare_file` then `_write_plan` per file
+    instead of one `ingest_file` call, so this simulated kill hooks `_write_plan` —
+    the per-file FAISS-add-plus-SQLite-commit point `ingest_file` used to be killed
+    at — rather than `ingest_file` itself."""
     repo, db_path = env
-    real_ingest = ii.ingest_file
+    real_write = ii._write_plan
     calls = []
 
-    def ingest_then_die(*args, **kwargs):
+    def write_then_die(*args, **kwargs):
         calls.append(1)
         if len(calls) == 2:
             raise KeyboardInterrupt  # not caught by the per-file handler, like a kill
-        return real_ingest(*args, **kwargs)
+        return real_write(*args, **kwargs)
 
-    monkeypatch.setattr(ii, "ingest_file", ingest_then_die)
+    monkeypatch.setattr(ii, "_write_plan", write_then_die)
     with pytest.raises(KeyboardInterrupt):
         ii.run_incremental(repo, interactive=False)
 
@@ -70,7 +74,7 @@ def test_a_build_killed_midway_leaves_no_marker_and_warns(env, monkeypatch):
 
     # The next ordinary run finishes the files but is not a fresh build, so the
     # index stays marked as unknown until a full rebuild.
-    monkeypatch.setattr(ii, "ingest_file", real_ingest)
+    monkeypatch.setattr(ii, "_write_plan", real_write)
     ii.run_incremental(repo, interactive=False)
     assert _marker(db_path)[0] is None
 

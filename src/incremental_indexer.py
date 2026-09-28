@@ -666,25 +666,113 @@ def dedupe_chunks_by_scope(chunks: list) -> list:
     return [chunk for i, chunk in enumerate(chunks) if last[chunk.scope] == i]
 
 
-def ingest_file(
+class _FilePlan:
+    """One file's parsed, chunked and (if applicable) summarized state, waiting on
+    embedding vectors.
+
+    B-050 (ADR-040): pass 2 used to call `embed_batch` once per (file, tier) — plus
+    once per tier for summaries — so the GPU never saw a batch bigger than one
+    file's smallest tier, mostly 1-4 texts. Splitting `ingest_file` into "prepare"
+    (this), "embed" and "write" (`_write_plan`) lets `run_incremental`'s pass 2 embed
+    a whole window of files in one call. `ingest_file` still runs all three steps
+    back to back for exactly one file — unchanged for a single-file watchdog run and
+    for the tests that call it directly.
+    """
+
+    __slots__ = (
+        "rel_path", "content_hash", "content_changed_at", "authored_at",
+        "symbols", "edges", "references", "symbol_types",
+        "tier_chunks", "tier_ids", "tier_texts", "summary_items",
+        "tier_vectors", "summary_vectors",
+    )
+
+    def __init__(
+        self,
+        rel_path: str,
+        content_hash: str,
+        content_changed_at: Optional[str],
+        authored_at: Optional[str],
+        symbols: list,
+        edges: list,
+        references: list,
+        symbol_types: list,
+        tier_chunks: dict[str, list],
+        tier_ids: dict[str, list[int]],
+        tier_texts: dict[str, list[str]],
+        summary_items: dict[str, list[tuple[int, str]]],
+    ) -> None:
+        self.rel_path = rel_path
+        self.content_hash = content_hash
+        self.content_changed_at = content_changed_at
+        self.authored_at = authored_at
+        self.symbols = symbols
+        self.edges = edges
+        self.references = references
+        self.symbol_types = symbol_types
+        self.tier_chunks = tier_chunks
+        self.tier_ids = tier_ids
+        self.tier_texts = tier_texts
+        self.summary_items = summary_items
+        self.tier_vectors: dict[str, np.ndarray] = {}
+        self.summary_vectors: dict[str, np.ndarray] = {}
+
+    def pending_texts(self) -> list[str]:
+        """Every text still needing a vector, in the fixed order `scatter` expects
+        back: each tier's code texts (`TIER_CONFIGS` order), then each tier's
+        summary texts (same order)."""
+        texts: list[str] = []
+        for tier_name, _, _ in TIER_CONFIGS:
+            texts.extend(self.tier_texts.get(tier_name, ()))
+        for tier_name, _, _ in TIER_CONFIGS:
+            texts.extend(s for _fid, s in self.summary_items.get(tier_name, ()))
+        return texts
+
+    def scatter(self, vectors: np.ndarray) -> None:
+        """Split `vectors` — already normalized and aligned to `pending_texts()` —
+        into this file's per-tier code and summary vectors."""
+        offset = 0
+        for tier_name, _, _ in TIER_CONFIGS:
+            n = len(self.tier_texts.get(tier_name, ()))
+            if n:
+                self.tier_vectors[tier_name] = vectors[offset:offset + n]
+            offset += n
+        for tier_name, _, _ in TIER_CONFIGS:
+            items = self.summary_items.get(tier_name, ())
+            n = len(items)
+            if n:
+                self.summary_vectors[tier_name] = vectors[offset:offset + n]
+            offset += n
+
+
+def _embed_texts(texts: list[str]) -> np.ndarray:
+    """Embed `texts` through the model host when enabled, else in-process
+    (ADR-028) — the one import/call point `ingest_file` and B-050's cross-file
+    batching in `run_incremental` share."""
+    from model_client import embed_batch   # ADR-028: host when enabled, else core
+    return embed_batch(texts)
+
+
+def _prepare_file(
     rel_path:      str,
     content:       str,
     content_hash:  str,
-    faiss_indexes: dict[str, faiss.Index],
     doc_store:     DocumentStore,
     db:            CodeDB,
     resolver:      Optional[ImportResolver] = None,
     summarizer:    Optional[object] = None,
     content_changed_at: Optional[str] = None,
     authored_at:        Optional[str] = None,
-) -> dict[str, int]:
-    """
-    Full pipeline for one file: AST parse → three-tier chunking → embedding
-    → FAISS add_with_ids → DocumentStore cache update → SQLite upsert.
+) -> _FilePlan:
+    """Everything `ingest_file` did before it touched the embedder: AST parse,
+    three-tier chunking, import-edge resolution, and summary-cache lookups
+    (calling `summarizer` for any miss, exactly as before). No embedding, no
+    FAISS, no SQLite — those happen once the returned plan has vectors
+    (see `_write_plan`).
 
-    Returns {tier_name: chunk_count} for progress logging.
+    The DocumentStore text/tag cache is populated here, same as it always was:
+    it does not depend on the embedding and MCP reads should see it as soon as
+    the chunk exists.
     """
-
     print(f"  [ingest:{rel_path}] chunking...", flush=True)
     tier_chunks: dict[str, list] = chunk_all_tiers(rel_path, content)
     print(f"  [ingest:{rel_path}] chunks: " +
@@ -705,16 +793,18 @@ def ingest_file(
                 if resolved:
                     edge.resolved_target = resolved
 
-    for tier_name, chunks in tier_chunks.items():
-        faiss_idx = faiss_indexes[tier_name]
+    tier_ids:      dict[str, list[int]] = {}
+    tier_texts:    dict[str, list[str]] = {}
+    summary_items: dict[str, list[tuple[int, str]]] = {}
 
-        texts_to_embed: list[str] = []
-        all_ids: list[int] = []
+    for tier_name, chunks in tier_chunks.items():
+        ids: list[int] = []
+        texts: list[str] = []
 
         for chunk in chunks:
             fid = stable_id(tier_name, rel_path, chunk.scope)
-            texts_to_embed.append(chunk.text)
-            all_ids.append(fid)
+            ids.append(fid)
+            texts.append(chunk.text)
 
             # Keep the DocumentStore cache in sync for MCP server reads
             doc_store.add(fid, {
@@ -725,23 +815,25 @@ def ingest_file(
                 "tags":  chunk.tags,
             })
 
-        if not texts_to_embed:
+        tier_ids[tier_name] = ids
+        tier_texts[tier_name] = texts
+
+        if not texts:
             print(f"  [ingest:{rel_path}] {tier_name}: no chunks, skipping", flush=True)
             continue
 
         # ADR-030: code vectors are code only. Summaries get their own vectors in
-        # the summary index, under the chunk's id, added below.
-        summary_pairs: list[tuple[int, str]] = []
+        # the summary index, under the chunk's id, added by _write_plan.
         if summarizer is not None and TIER_NUM[tier_name] in summarizer_tiers():
-            print(f"  [ingest:{rel_path}] {tier_name}: summarizing {len(texts_to_embed)} chunks...", flush=True)
-            text_hashes = [chunk_text_hash(t) for t in texts_to_embed]
+            print(f"  [ingest:{rel_path}] {tier_name}: summarizing {len(texts)} chunks...", flush=True)
+            text_hashes = [chunk_text_hash(t) for t in texts]
             cached = db.get_cached_summaries(text_hashes)
 
             uncached_idx = [i for i, h in enumerate(text_hashes) if h not in cached]
             print(f"  [ingest:{rel_path}] {tier_name}: {len(uncached_idx)} cache misses → LLM", flush=True)
             if uncached_idx:
                 new_summaries = summarizer.summarize_batch(
-                    [texts_to_embed[i] for i in uncached_idx]
+                    [texts[i] for i in uncached_idx]
                 )
                 new_pairs = [
                     (text_hashes[i], s)
@@ -754,52 +846,123 @@ def ingest_file(
                         cached[text_hashes[i]] = s
             print(f"  [ingest:{rel_path}] {tier_name}: summarization done", flush=True)
 
-            for fid, h in zip(all_ids, text_hashes):
+            pairs: list[tuple[int, str]] = []
+            for fid, h in zip(ids, text_hashes):
                 summary = cached.get(h, "")
                 if summary:
-                    summary_pairs.append((fid, summary))
+                    pairs.append((fid, summary))
                     entry = doc_store.get(fid)
                     if entry is not None:
                         entry["summary"] = summary
+            if pairs:
+                summary_items[tier_name] = pairs
 
-        print(f"  [ingest:{rel_path}] {tier_name}: embedding {len(texts_to_embed)} texts...", flush=True)
-        from model_client import embed_batch   # ADR-028: host when enabled, else core
-        vec_matrix: np.ndarray = embed_batch(texts_to_embed)
-        print(f"  [ingest:{rel_path}] {tier_name}: embedding done, shape={vec_matrix.shape}", flush=True)
-
-        faiss.normalize_L2(vec_matrix)
-
-        id_array: np.ndarray = to_faiss_ids(all_ids)
-        faiss_idx.add_with_ids(vec_matrix, id_array)
-        del vec_matrix, id_array  # FAISS copied the data; free embedding matrix per tier
-        print(f"  [ingest:{rel_path}] {tier_name}: FAISS add done", flush=True)
-
-        summary_idx = faiss_indexes.get(SUMMARY_INDEX)
-        if summary_pairs and summary_idx is not None:
-            svecs: np.ndarray = embed_batch([s for _fid, s in summary_pairs])
-            faiss.normalize_L2(svecs)
-            summary_idx.add_with_ids(svecs, to_faiss_ids([fid for fid, _s in summary_pairs]))
-            del svecs
-            print(f"  [ingest:{rel_path}] {tier_name}: {len(summary_pairs)} summary vectors added", flush=True)
-
-    print(f"  [ingest:{rel_path}] writing SQLite...", flush=True)
-    db.upsert_file(
-        path=rel_path,
+    return _FilePlan(
+        rel_path=rel_path,
         content_hash=content_hash,
-        symbols=symbols,
-        edges=edges,
-        chunks_by_tier={
-            TIER_NUM[tier_name]: chunks
-            for tier_name, chunks in tier_chunks.items()
-        },
-        references=references,
-        symbol_types=symbol_types,
         content_changed_at=content_changed_at,
         authored_at=authored_at,
+        symbols=symbols,
+        edges=edges,
+        references=references,
+        symbol_types=symbol_types,
+        tier_chunks=tier_chunks,
+        tier_ids=tier_ids,
+        tier_texts=tier_texts,
+        summary_items=summary_items,
     )
-    print(f"  [ingest:{rel_path}] SQLite done", flush=True)
 
-    return {name: len(cks) for name, cks in tier_chunks.items()}
+
+def _write_plan(
+    plan:          _FilePlan,
+    faiss_indexes: dict[str, faiss.Index],
+    doc_store:     DocumentStore,
+    db:            CodeDB,
+) -> dict[str, int]:
+    """FAISS `add_with_ids` for every tier (and the summary index), then the
+    SQLite upsert — the write half of `ingest_file`, run once `plan.scatter()` has
+    given it vectors. This is the per-file commit point: a chunk row is written
+    only after that file's vectors are in the in-memory FAISS index, exactly as
+    `ingest_file` always did it, so a kill between two files' writes leaves the
+    same partial state ADR-037's `reconcile_vectors` already heals on the next run.
+    """
+    for tier_name, _, _ in TIER_CONFIGS:
+        ids = plan.tier_ids.get(tier_name)
+        if not ids:
+            continue
+
+        id_array = to_faiss_ids(ids)
+        faiss_indexes[tier_name].add_with_ids(plan.tier_vectors[tier_name], id_array)
+        print(f"  [ingest:{plan.rel_path}] {tier_name}: FAISS add done", flush=True)
+
+        items = plan.summary_items.get(tier_name)
+        summary_idx = faiss_indexes.get(SUMMARY_INDEX)
+        if items and summary_idx is not None:
+            summary_idx.add_with_ids(
+                plan.summary_vectors[tier_name], to_faiss_ids([fid for fid, _s in items])
+            )
+            print(f"  [ingest:{plan.rel_path}] {tier_name}: {len(items)} summary vectors added", flush=True)
+
+    print(f"  [ingest:{plan.rel_path}] writing SQLite...", flush=True)
+    db.upsert_file(
+        path=plan.rel_path,
+        content_hash=plan.content_hash,
+        symbols=plan.symbols,
+        edges=plan.edges,
+        chunks_by_tier={
+            TIER_NUM[tier_name]: chunks
+            for tier_name, chunks in plan.tier_chunks.items()
+        },
+        references=plan.references,
+        symbol_types=plan.symbol_types,
+        content_changed_at=plan.content_changed_at,
+        authored_at=plan.authored_at,
+    )
+    print(f"  [ingest:{plan.rel_path}] SQLite done", flush=True)
+
+    return {name: len(cks) for name, cks in plan.tier_chunks.items()}
+
+
+def ingest_file(
+    rel_path:      str,
+    content:       str,
+    content_hash:  str,
+    faiss_indexes: dict[str, faiss.Index],
+    doc_store:     DocumentStore,
+    db:            CodeDB,
+    resolver:      Optional[ImportResolver] = None,
+    summarizer:    Optional[object] = None,
+    content_changed_at: Optional[str] = None,
+    authored_at:        Optional[str] = None,
+) -> dict[str, int]:
+    """
+    Full pipeline for one file: AST parse → three-tier chunking → embedding
+    → FAISS add_with_ids → DocumentStore cache update → SQLite upsert.
+
+    Returns {tier_name: chunk_count} for progress logging.
+
+    This is `_prepare_file` → one `embed_batch` call for everything this file
+    needs → `_write_plan`, for exactly one file, synchronously — the single-file
+    reference path. B-050's cross-file batching in `run_incremental`'s pass 2 calls
+    those same three pieces directly instead, so one `embed_batch` call can cover
+    a whole window of files rather than one file's one tier; a single-file
+    watchdog reindex still runs this function.
+    """
+    plan = _prepare_file(
+        rel_path, content, content_hash, doc_store, db,
+        resolver=resolver, summarizer=summarizer,
+        content_changed_at=content_changed_at, authored_at=authored_at,
+    )
+
+    texts = plan.pending_texts()
+    if texts:
+        print(f"  [ingest:{rel_path}] embedding {len(texts)} text(s)...", flush=True)
+        vectors = _embed_texts(texts)
+        faiss.normalize_L2(vectors)
+        print(f"  [ingest:{rel_path}] embedding done, shape={vectors.shape}", flush=True)
+        plan.scatter(vectors)
+
+    return _write_plan(plan, faiss_indexes, doc_store, db)
 
 
 # ---------------------------------------------------------------------------
@@ -827,6 +990,14 @@ class _CacheOnlySummarizer:
 
 # Chunks per summarize_batch call in pass 1, and per cache write.
 _SUMMARY_SLICE = 192
+
+# B-050 (ADR-040): pass 2's embedding window, in pending texts across however many
+# queued files it takes to reach it. 8x the embedder's own internal GPU batch size
+# (32) — big enough to amortize the call/RPC overhead well past one small file,
+# small enough that a huge repo never holds more than a window's worth of chunk
+# text and vectors in memory at once. The window also flushes once at the end of
+# `to_index`, whatever is left in it.
+_EMBED_WINDOW_TEXTS = 256
 
 
 def run_summarization_pass(
@@ -1111,7 +1282,51 @@ def _run_incremental(
         summarizer = _CacheOnlySummarizer()
         print("━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
 
+    # B-050 (ADR-040): collect a window of prepared files and embed their pending
+    # texts in one call, instead of once per (file, tier). `pending_plans` and
+    # `pending_counts` stay parallel: `pending_counts[i]` is how many of
+    # `pending_texts`' entries — starting at the running offset — belong to
+    # `pending_plans[i]`. `_flush_pending` embeds whatever is queued, slices the
+    # result back to each plan, and writes each file in the order it was queued —
+    # the same order and the same per-file commit point `ingest_file` always used,
+    # so a kill between two files' writes is healed by reconcile_vectors exactly as
+    # before (see ADR-040).
     errors = 0
+    pending_plans:  list[_FilePlan] = []
+    pending_counts: list[int] = []
+    pending_texts:  list[str] = []
+
+    def _flush_pending() -> None:
+        nonlocal errors
+        if not pending_plans:
+            return
+        vectors: Optional[np.ndarray] = None
+        if pending_texts:
+            print(f"  [embed] batch: {len(pending_texts)} text(s) across "
+                  f"{len(pending_plans)} file(s)", flush=True)
+            vectors = _embed_texts(pending_texts)
+            faiss.normalize_L2(vectors)
+
+        offset = 0
+        for plan, n in zip(pending_plans, pending_counts):
+            try:
+                if n:
+                    plan.scatter(vectors[offset:offset + n])
+                counts = _write_plan(plan, faiss_indexes, doc_store, db)
+                t1 = counts.get("tier1_surgical",       0)
+                t2 = counts.get("tier2_component",       0)
+                t3 = counts.get("tier3_architectural",   0)
+                print(f"  ✓  {plan.rel_path}  (T1:{t1} | T2:{t2} | T3:{t3})")
+            except Exception:
+                errors += 1
+                print(f"  ✗  {plan.rel_path}")
+                traceback.print_exc()
+            offset += n
+
+        pending_plans.clear()
+        pending_counts.clear()
+        pending_texts.clear()
+
     for rel_path in to_index:
         full_path = os.path.join(repo_path, rel_path)
         ext = Path(rel_path).suffix.lower()
@@ -1131,13 +1346,11 @@ def _run_incremental(
                 )
                 continue
 
-            print("[loop]   calling ingest_file...", flush=True)
-
-            counts = ingest_file(
+            print("[loop]   preparing (chunk/parse/summarize)...", flush=True)
+            plan = _prepare_file(
                 rel_path=rel_path,
                 content=content,
                 content_hash=disk_hashes[rel_path],
-                faiss_indexes=faiss_indexes,
                 doc_store=doc_store,
                 db=db,
                 resolver=resolver,
@@ -1145,16 +1358,22 @@ def _run_incremental(
                 content_changed_at=_cc_at,
                 authored_at=_auth_at,
             )
-            t1 = counts.get("tier1_surgical",       0)
-            t2 = counts.get("tier2_component",       0)
-            t3 = counts.get("tier3_architectural",   0)
-            print("[loop]   ingest_file returned", flush=True)
-            print(f"  ✓  {rel_path}  (T1:{t1} | T2:{t2} | T3:{t3})")
+            texts = plan.pending_texts()
+            pending_plans.append(plan)
+            pending_counts.append(len(texts))
+            pending_texts.extend(texts)
+            print("[loop]   queued for batched embedding", flush=True)
 
         except Exception:
             errors += 1
             print(f"  ✗  {rel_path}")
             traceback.print_exc()
+            continue
+
+        if len(pending_texts) >= _EMBED_WINDOW_TEXTS:
+            _flush_pending()
+
+    _flush_pending()
 
     # ADR-021: resolve CALLS-edge bare callee names to in-repo FQNs so the graph
     # Traverse step has real neighbours to walk. Runs once here, over the now-complete
