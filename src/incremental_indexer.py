@@ -1233,6 +1233,17 @@ def _run_incremental(
             )
         }
 
+    # ADR-042: switching [indexer].source switches the hash kind (an MD5 of the
+    # folder's file vs git's blob id), so every file compares "modified" without its
+    # content having changed. A different-kind hash says nothing about when the
+    # content changed, so those files are stamped as on a first index (git history),
+    # not now(): otherwise the switch reads as every file changing at once.
+    _rehashed: set[str] = set()
+    if diff.modified:
+        _stored = dict(db._conn.execute("SELECT path, content_hash FROM files"))
+        _rehashed = {p for p in diff.modified
+                     if p in _stored and len(_stored[p]) != len(disk_hashes[p])}
+
     for path in stale_paths:
         db.delete_file(path)
 
@@ -1253,8 +1264,9 @@ def _run_incremental(
         if rel in _healed_stamps:
             return _healed_stamps[rel]
         committer, author = _git_times.get(rel, (None, None))
-        if rel in _new_set:
-            # First index of this path → back-date. Rules, in order:
+        if rel in _new_set or rel in _rehashed:
+            # First index of this path (or first under this hash kind) → back-date.
+            # Rules, in order:
             if rel in _dirty:
                 changed = _run_now          # rule 2: indexed the dirty version, not the committed one
             elif committer:
