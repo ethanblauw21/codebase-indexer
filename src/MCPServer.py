@@ -1623,7 +1623,7 @@ def _reindex(changed_files_only: bool) -> str:
 
 
 @mcp.tool()
-def index_status(since: str = "1d") -> str:
+def index_status(since: str = "1d", limit: int = 20) -> str:
     """Report index freshness and which files changed recently (ADR-025 §6).
 
     Use this to answer "what changed in this codebase lately?" and "is the index
@@ -1637,6 +1637,8 @@ def index_status(since: str = "1d") -> str:
     that point are listed — content_changed_at, not index-write time — so a file
     re-indexed today but unchanged in a week does not show up. Files with no git
     history (untracked / vendored) carry a NULL stamp and are correctly excluded.
+    `limit` caps the list at its newest entries (default 20; 0 lists all); the
+    count shown is always the full one.
 
     Reports: last_verified_at, last_indexed_commit vs current HEAD (with the list
     of diverged files when stale), files_total, and the recent-change list.
@@ -1780,10 +1782,16 @@ def index_status(since: str = "1d") -> str:
             )
 
     lines.append(f"\nfiles with content changed since {cutoff}  ({len(rows)}):")
-    if rows:
-        lines.extend(f"    {ts}  {path}" for path, ts in rows)
+    # Every connected session reads this output, and a bulk change (a merge, a
+    # source switch) listed hundreds of files. The newest `limit` are shown.
+    shown = rows if limit <= 0 else rows[:limit]
+    if shown:
+        lines.extend(f"    {ts}  {path}" for path, ts in shown)
     else:
         lines.append("    (none)")
+    if len(shown) < len(rows):
+        lines.append(f"    … {len(rows) - len(shown)} more; pass limit=0 to list all, "
+                     "or a shorter `since`")
 
     return "\n".join(lines)
 

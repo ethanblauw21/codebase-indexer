@@ -61,3 +61,20 @@ def test_relative_and_iso_forms_still_work(stamped_index):
     stamped_index([("src/a.py", "2000-01-01T00:00:00Z")])
     assert "(0)" in M.index_status(since="7d").split("files with content changed since")[1]
     assert "src/a.py" in M.index_status(since="1999-12-31T00:00:00")
+
+
+def test_the_recent_list_is_capped_at_the_newest_entries(stamped_index):
+    # A bulk change (a merge, a source switch) used to list every file to every session.
+    stamped_index([(f"src/f{i:03}.py", f"2026-09-28T12:{i // 60:02}:{i % 60:02}Z")
+                   for i in range(100)])
+    out = M.index_status(since="2026-09-01T00:00:00Z")
+    changed = out.split("files with content changed since")[1]
+    assert "(100)" in changed                         # the count is the full one
+    listed = [ln for ln in changed.splitlines() if ln.startswith("    2026-")]
+    assert len(listed) == 20
+    assert listed[0].endswith("src/f099.py")          # newest first
+    assert "… 80 more; pass limit=0" in changed
+    everything = M.index_status(since="2026-09-01T00:00:00Z", limit=0)
+    assert "more; pass limit" not in everything
+    assert sum(ln.startswith("    2026-") for ln in
+               everything.split("files with content changed since")[1].splitlines()) == 100
