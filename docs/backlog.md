@@ -91,6 +91,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-051](#b-051) | The shared model host runs on whatever interpreter launched it, so a CPU-only env can put every project's models on the CPU | InventoryApp go-live, 2026-09-28 | S | **done** (#72, ADR-041) |
 | [B-056](#b-056) | Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols | @edb grill, 2026-09-28 | M (Stage 1) + M (Stage 2) | shaped |
 | [B-057](#b-057) | A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild | incident, 2026-09-29 | S | shaped |
+| [B-058](#b-058) | Moving a symbol's line numbers re-summarizes it, because the summary cache is keyed on its `Lines:` header | @edb, 2026-09-29 | S | promoted → ADR-045 |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -1881,3 +1882,25 @@ error". Point that at a scratch index or a test target, never the live one. Insp
 60 s timeout kills any full rebuild.
 
 **Depends on:** none. **Related:** B-035 / ADR-037 (killed-run holes), ADR-038 (locks).
+
+### B-058 — Moving a symbol's line numbers re-summarizes it, because the summary cache is keyed on its `Lines:` header
+
+**Source:** @edb, 2026-09-29, after a slow GanttWebApp update · **Status:** promoted → ADR-045 · **Size:** S
+
+**What happened.** Repointing GanttWebApp to `integration/staging-2026-10-01` was a 57-file
+change (+5,008 / −486 lines). It took about 14 min against 30–40 min for the whole project,
+because it regenerated about 950 summaries (a full index makes about 3,500). The run was
+healthy: the model host held 5.6 GB of real VRAM with no spill, at about 3 summaries a second.
+
+**Cause.** `chunk_summaries` is keyed by MD5 of the chunk text, and every tier-1 text carries
+`Lines: a-b` in its header (`ast_chunker._symbol_rich_text`). Lines inserted above a symbol
+change that header without changing the code, and the key changes with it. Of the 681 tier-1
+misses in the 42 code files, **370 differed only in their line numbers.** The 270 tier-2/3
+misses are sliding windows that really shift, which is inherent to fixed-size slices.
+
+**Want.** Key the summary on the text without the line numbers. Keep the header in the stored
+text, because `MCPServer` reads line ranges from it. None of the 7,258 cached summaries (Gantt
+plus this repo) mentions a line number.
+
+**Depends on:** none. **Related:** ADR-040 (two-pass summarization, whose passes must agree on
+the key), ADR-030 (summary index).
