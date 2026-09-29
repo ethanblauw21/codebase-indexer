@@ -51,10 +51,10 @@ def call_tool(tool_id: str, params: dict) -> str:
 
 def get_file_chunks(file_path: str) -> list[dict]:
     srv = _get_server()
-    srv._ensure_indexes()
+    store = srv._ensure_indexes().doc_store
     search = file_path.replace("\\", "/")
     chunks: list[dict] = []
-    for doc_id, doc in srv.doc_store.docs.items():
+    for doc_id, doc in store.docs.items():
         doc_f = doc.get("file", "").replace("\\", "/")
         if search in doc_f or doc_f.endswith(search.split("/")[-1]):
             tier_raw = doc.get("tier", "")

@@ -22,9 +22,8 @@ from db import CodeDB  # noqa: E402
 def stamped_index(tmp_path, monkeypatch):
     """An index dir whose files table holds the given (path, content_changed_at) rows."""
     monkeypatch.setattr(incremental_indexer, "INDEX_DIR", str(tmp_path))
-    monkeypatch.setattr(M, "_ensure_indexes", lambda: None)
-    for name in ("t1_index", "t2_index", "t3_index"):
-        monkeypatch.setattr(M, name, SimpleNamespace(ntotal=0))
+    empty = SimpleNamespace(ntotal=0)
+    monkeypatch.setattr(M, "_ensure_indexes", lambda: SimpleNamespace(tiers=(empty,) * 3))
 
     def install(rows):
         with CodeDB(str(tmp_path / "graph.db")) as db, db._tx() as cur:

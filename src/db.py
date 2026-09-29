@@ -31,10 +31,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Callable, Iterator, Optional
 
 from ast_chunker import Chunk, Edge, Reference, Symbol, SymbolType
 
@@ -363,6 +364,20 @@ def _opt_int(value) -> Optional[int]:
 # CodeDB
 # ---------------------------------------------------------------------------
 
+def _split_sql(script: str) -> list[str]:
+    """Split a migration script into statements, so each can run on one cursor
+    inside a transaction (``executescript`` would commit around them)."""
+    stmts, buf = [], ""
+    for line in script.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            stmts.append(buf.strip())
+            buf = ""
+    if buf.strip():
+        raise ValueError(f"incomplete SQL statement in migration: {buf.strip()[:80]!r}")
+    return stmts
+
+
 class CodeDB:
     """
     Thin wrapper around a SQLite connection for the Code Intelligence Engine.
@@ -401,6 +416,7 @@ class CodeDB:
 
     def _init_db(self) -> None:
         self._conn.executescript(_PRAGMA_SQL)
+        self._recover_interrupted_edges_swap()
         self._conn.executescript(_DDL_SQL)
         self._migrate_edges()
         self._migrate_edge_candidate()
@@ -425,14 +441,8 @@ class CodeDB:
         the kind CHECK-constraint change, no table swap is needed. No-ops once
         the column exists.
         """
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
-        }
-        if "candidate" not in cols:
-            self._conn.execute(
-                "ALTER TABLE edges ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0"
-            )
+        self._migrate(lambda: "candidate" in self._columns("edges"),
+                      "ALTER TABLE edges ADD COLUMN candidate INTEGER NOT NULL DEFAULT 0;")
 
     def _migrate_edge_confidence(self) -> None:
         """
@@ -440,12 +450,8 @@ class CodeDB:
         that predate it (ADR-008 §4). Nullable, no default — NULL means "derive from
         candidate" via effective_confidence(). Plain ADD COLUMN; no-ops once present.
         """
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
-        }
-        if "confidence" not in cols:
-            self._conn.execute("ALTER TABLE edges ADD COLUMN confidence REAL")
+        self._migrate(lambda: "confidence" in self._columns("edges"),
+                      "ALTER TABLE edges ADD COLUMN confidence REAL;")
 
     def _migrate_edge_receiver_type(self) -> None:
         """
@@ -454,12 +460,8 @@ class CodeDB:
         the receiver type could not be inferred. Only `call_resolver` reads it. Plain
         ADD COLUMN; no-ops once present.
         """
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
-        }
-        if "receiver_type" not in cols:
-            self._conn.execute("ALTER TABLE edges ADD COLUMN receiver_type TEXT")
+        self._migrate(lambda: "receiver_type" in self._columns("edges"),
+                      "ALTER TABLE edges ADD COLUMN receiver_type TEXT;")
 
     def _migrate_edge_import_binding(self) -> None:
         """
@@ -489,14 +491,9 @@ class CodeDB:
         swap needed. No-ops once the columns exist. Existing rows get NULL and are
         backfilled from git on the next run (§2's one-time backfill).
         """
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(files)").fetchall()
-        }
-        if "content_changed_at" not in cols:
-            self._conn.execute("ALTER TABLE files ADD COLUMN content_changed_at TEXT")
-        if "authored_at" not in cols:
-            self._conn.execute("ALTER TABLE files ADD COLUMN authored_at TEXT")
+        for col in ("content_changed_at", "authored_at"):
+            self._migrate(lambda col=col: col in self._columns("files"),
+                          f"ALTER TABLE files ADD COLUMN {col} TEXT;")
 
     def _seed_index_meta(self) -> None:
         """ADR-025 §4: ensure schema_version is present so a reader can detect
@@ -533,20 +530,8 @@ class CodeDB:
         Uses table-swap pattern because SQLite cannot ALTER TABLE to change
         a CHECK constraint.  Safe to run on every startup — no-ops if already done.
         """
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
-        }
-        if "resolved_target" in cols:
-            # Check constraint was already expanded; run PRAGMA optimize once
-            try:
-                self._conn.execute("PRAGMA optimize")
-            except Exception:
-                pass
-            return
-
         # Drop any leftover temp table from a previous partial migration, then swap
-        self._conn.executescript("""
+        ran = self._migrate(lambda: "resolved_target" in self._columns("edges"), """
         DROP TABLE IF EXISTS edges_v2;
         CREATE TABLE edges_v2 (
             id              INTEGER PRIMARY KEY,
@@ -573,8 +558,13 @@ class CodeDB:
         CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target, kind);
         CREATE INDEX IF NOT EXISTS idx_edges_resolved    ON edges(resolved_target)
             WHERE resolved_target IS NOT NULL;
-        PRAGMA optimize;
         """)
+        if not ran:
+            # Check constraint was already expanded; run PRAGMA optimize once
+            try:
+                self._conn.execute("PRAGMA optimize")
+            except sqlite3.Error:
+                pass
 
     def _migrate_edge_kinds(self) -> None:
         """
@@ -590,13 +580,13 @@ class CodeDB:
 
         Idempotent: no-ops once the constraint already lists READS.
         """
-        row = self._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'"
-        ).fetchone()
-        if row and row[0] and "'READS'" in row[0]:
-            return
+        def done() -> bool:
+            row = self._conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'"
+            ).fetchone()
+            return bool(row and row[0] and "'READS'" in row[0])
 
-        self._conn.executescript("""
+        if self._migrate(done, """
         DROP TABLE IF EXISTS edges_v3;
         CREATE TABLE edges_v3 (
             id              INTEGER PRIMARY KEY,
@@ -627,8 +617,8 @@ class CodeDB:
         CREATE INDEX IF NOT EXISTS idx_edges_target_kind ON edges(target, kind);
         CREATE INDEX IF NOT EXISTS idx_edges_resolved    ON edges(resolved_target)
             WHERE resolved_target IS NOT NULL;
-        PRAGMA optimize;
-        """)
+        """):
+            self._conn.execute("PRAGMA optimize")
 
     def _migrate_symbol_locations(self) -> None:
         """
@@ -640,7 +630,9 @@ class CodeDB:
         symbols.  Phase 2 (C# partial classes) will write multiple rows per
         symbol directly via upsert_file.
         """
-        self._conn.executescript("""
+        missing = ("SELECT 1 FROM symbols s WHERE NOT EXISTS ("
+                   "SELECT 1 FROM symbol_locations sl WHERE sl.symbol_id = s.id) LIMIT 1")
+        self._migrate(lambda: self._conn.execute(missing).fetchone() is None, """
         INSERT OR IGNORE INTO symbol_locations
             (symbol_id, file_id, start_line, end_line, text)
         SELECT s.id, s.file_id, s.start_line, s.end_line, s.text
@@ -649,6 +641,66 @@ class CodeDB:
             SELECT 1 FROM symbol_locations sl WHERE sl.symbol_id = s.id
         );
         """)
+
+    # ------------------------------------------------------------------
+    # Migration helpers (#55)
+    # ------------------------------------------------------------------
+
+    def _columns(self, table: str) -> set[str]:
+        return {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+
+    def _migrate(self, done: Callable[[], bool], script: str) -> bool:
+        """Run one schema migration as a single transaction. Returns True if it ran.
+
+        The connection is in autocommit mode (``isolation_level=None``) and
+        ``executescript`` commits statement by statement, so a table swap run that
+        way (``DROP TABLE edges``, then ``ALTER TABLE edges_v2 RENAME TO edges``)
+        left no ``edges`` table if the process died between the two. The next open
+        recreated it empty, and unchanged file hashes meant nothing refilled it
+        (#55). SQLite DDL is transactional, so here every statement of the script
+        runs inside one ``BEGIN IMMEDIATE`` ... ``COMMIT``.
+
+        ``done`` is checked again once the write lock is held. Two processes can
+        open one index at once (a server and a CLI run), and the second must not
+        repeat a swap the first finished while it waited: the older swaps copy only
+        the columns they knew about.
+        """
+        if done():
+            return False
+        cur = self._conn.cursor()
+        cur.execute("BEGIN IMMEDIATE")
+        try:
+            if done():
+                cur.execute("ROLLBACK")
+                return False
+            for stmt in _split_sql(script):
+                cur.execute(stmt)
+            cur.execute("COMMIT")
+        except BaseException:
+            if self._conn.in_transaction:
+                cur.execute("ROLLBACK")
+            raise
+        finally:
+            cur.close()
+        return True
+
+    def _recover_interrupted_edges_swap(self) -> None:
+        """Finish an edges table swap that a crash interrupted before #55's fix.
+
+        That crash left the rows in ``edges_v2`` or ``edges_v3`` and no ``edges``
+        table. Left alone, the DDL would create an empty ``edges`` table and the
+        next migration would drop the leftover copy, and every edge with it.
+        """
+        tables = {r[0] for r in self._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "edges" in tables:
+            return
+        for leftover in ("edges_v3", "edges_v2"):     # the newer swap first
+            if leftover in tables:
+                print(f"[db] finishing an interrupted migration: renaming {leftover} to edges",
+                      file=sys.stderr, flush=True)
+                self._migrate(lambda: False, f"ALTER TABLE {leftover} RENAME TO edges;")
+                return
 
     # ------------------------------------------------------------------
     # Transaction helper

@@ -246,18 +246,82 @@ def _project() -> str:
     return os.path.basename(os.getcwd())
 
 
+# ── when the host fails (ADR-048, #66) ──────────────────────────────────────
+
+def _host_call(path: str, body: dict, timeout: float) -> dict:
+    """One request to the host. If the host died during it, once more through a fresh one.
+
+    A host that crashed or was killed mid-request used to send that one request
+    to the in-process fallback, which loaded a full model copy into this client
+    for a single batch. ``ensure_host`` starts a new host when none answers, so a
+    dead host is replaced instead. A host that still answers is not restarted:
+    the failure was this request's, and the host may be serving others.
+    """
+    ensure_host()
+    try:
+        return _call("POST", path, body, timeout=timeout)
+    except HostUnavailable:
+        if _host_answers():
+            raise
+        _say_once("host-died", f"model host stopped answering during {path}; starting a new one")
+        ensure_host()
+        return _call("POST", path, body, timeout=timeout)
+
+
+def _host_answers() -> bool:
+    try:
+        status()
+        return True
+    except HostUnavailable:
+        return False
+
+
+def _host_may_hold_gpu() -> bool:
+    """Whether a running host may have models on the GPU: it answers, and its recorded
+    device is CUDA or unknown (a host older than ADR-041 records none).
+
+    While one does, an in-process fallback must not load on the GPU too: two copies
+    of the models overflow the 8 GB card the host exists to protect (#66), and
+    Windows pages the overflow to system RAM with no error (WDDM).
+    """
+    if not _host_answers():
+        return False
+    host_device = _host_device()
+    return host_device is None or host_device.startswith("cuda")
+
+
+def _release_fallback_embedder() -> None:
+    """The host is serving again: drop an in-process embedder a fallback loaded."""
+    unload = getattr(sys.modules.get("core"), "unload_embed_model", None)
+    if unload is not None and unload():
+        print("[model-client] model host is serving again; released the in-process "
+              "embedder", flush=True)
+
+
+def _fallback_embed_device() -> str | None:
+    """Where an in-process embed may load: the CPU while a host may hold the GPU."""
+    if _host_may_hold_gpu():
+        _say_once("embed-cpu", "the model host is running but failed this request; "
+                  "embedding in-process on the CPU so the GPU holds one copy")
+        return "cpu"
+    return None
+
+
 # ── drop-ins ────────────────────────────────────────────────────────────────
 
 def embed(text):
     """core.embed, through the host when [model_host].enabled."""
     if config.model_host_enabled():
         try:
-            ensure_host()
-            return model_host.decode_vectors(
-                _call("POST", "/v1/embed", {"texts": [text], "kind": "query", "project": _project()},
-                      timeout=_EMBED_TIMEOUT_S))[0]
+            out = model_host.decode_vectors(
+                _host_call("/v1/embed", {"texts": [text], "kind": "query", "project": _project()},
+                           timeout=_EMBED_TIMEOUT_S))[0]
+            _release_fallback_embedder()
+            return out
         except HostUnavailable as exc:
             _say_once("embed", f"model host unavailable ({exc}); embedding in-process")
+            import core
+            return core.embed(text, device=_fallback_embed_device())
     import core
     return core.embed(text)
 
@@ -266,12 +330,15 @@ def embed_batch(texts: list[str], batch_size: int = 32):
     """core.embed_batch, through the host when [model_host].enabled."""
     if config.model_host_enabled() and texts:
         try:
-            ensure_host()
-            return model_host.decode_vectors(
-                _call("POST", "/v1/embed", {"texts": list(texts), "kind": "index", "project": _project()},
-                      timeout=_EMBED_TIMEOUT_S))
+            out = model_host.decode_vectors(
+                _host_call("/v1/embed", {"texts": list(texts), "kind": "index", "project": _project()},
+                           timeout=_EMBED_TIMEOUT_S))
+            _release_fallback_embedder()
+            return out
         except HostUnavailable as exc:
             _say_once("embed", f"model host unavailable ({exc}); embedding in-process")
+            import core
+            return core.embed_batch(texts, batch_size=batch_size, device=_fallback_embed_device())
     import core
     return core.embed_batch(texts, batch_size=batch_size)
 
@@ -279,28 +346,39 @@ def embed_batch(texts: list[str], batch_size: int = 32):
 class HostSummarizer:
     """IsolatedChunkSummarizer's interface, answered by the host.
 
-    Falls back to a real IsolatedChunkSummarizer the first time the host fails,
-    and stays on it for the rest of the run, so one index never mixes a
-    half-finished host run with a second worker loading beside it.
+    A host that dies mid-request is replaced and the request retried once
+    (ADR-048). If the host still can't answer:
+    - while a host that may hold the GPU is running, that slice gets no summaries.
+      A worker would load a second copy on the card (#66). Empty summaries are not
+      cached, so the next run summarizes them.
+    - with no usable host at all, it falls back to a real IsolatedChunkSummarizer
+      and stays on it for the rest of the run, so one index never mixes a
+      half-finished host run with a second worker loading beside it.
     """
 
     def __init__(self) -> None:
         self._fallback = None
         self.summarized = 0
         self.empty = 0
+        self.skipped = 0
 
     def summarize_batch(self, codes: list[str]) -> list[str]:
         if not codes:
             return []
         if self._fallback is None:
             try:
-                ensure_host()
-                out = _call("POST", "/v1/summarize", {"codes": list(codes), "project": _project()},
-                            timeout=_EMBED_TIMEOUT_S + _SUMMARY_TIMEOUT_PER_TEXT_S * len(codes))["summaries"]
+                out = _host_call("/v1/summarize", {"codes": list(codes), "project": _project()},
+                                 timeout=_EMBED_TIMEOUT_S + _SUMMARY_TIMEOUT_PER_TEXT_S * len(codes))["summaries"]
                 self.summarized += sum(1 for s in out if s)
                 self.empty += sum(1 for s in out if not s)
                 return out
             except HostUnavailable as exc:
+                if _host_may_hold_gpu():
+                    _say_once("summarize-skip", f"model host failed a summary request ({exc}) "
+                              "but is still running; skipping those summaries rather than "
+                              "loading a second copy on the GPU. The next run retries them.")
+                    self.skipped += len(codes)
+                    return [""] * len(codes)
                 _say_once("summarize", f"model host unavailable ({exc}); summarizing in-process")
                 from summarizer import IsolatedChunkSummarizer
                 self._fallback = IsolatedChunkSummarizer()
@@ -308,6 +386,8 @@ class HostSummarizer:
 
     def stats_line(self) -> str:
         line = f"via model host: {self.summarized} summarized, {self.empty} empty"
+        if self.skipped:
+            line += f", {self.skipped} skipped (host failing, GPU in use)"
         if self._fallback is not None:
             line += f" | in-process fallback: {self._fallback.stats_line()}"
         return line

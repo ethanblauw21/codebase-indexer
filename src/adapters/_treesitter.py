@@ -1,6 +1,7 @@
 """Shared tree-sitter helpers used by all adapters that parse with tree-sitter grammars."""
 from __future__ import annotations
 
+import sys
 import warnings
 from typing import Optional
 
@@ -18,7 +19,10 @@ def run_query(lang: Language, pattern: str, node: Node) -> list[tuple[Node, str]
     Uses the tree-sitter 0.25+ QueryCursor API.  The older lang.query().captures()
     path is kept as a fallback but is deprecated upstream.
 
-    Returns [] on any query compilation or execution failure so callers degrade gracefully.
+    Returns [] on any query compilation or execution failure so callers degrade
+    gracefully, and reports the failure once per (language, query) on stderr (#54):
+    a grammar upgrade that breaks a query would otherwise extract nothing for that
+    construct, with no sign anywhere outside the conformance scorecard.
     """
     try:
         with warnings.catch_warnings():
@@ -27,8 +31,19 @@ def run_query(lang: Language, pattern: str, node: Node) -> list[tuple[Node, str]
         cursor = QueryCursor(q)
         raw = cursor.captures(node)      # dict: {capture_name: [Node, ...]}
         return [(n, cap) for cap, nodes in raw.items() for n in nodes]
-    except Exception:
+    except Exception as exc:
+        key = (id(lang), pattern)
+        if key not in _REPORTED:
+            _REPORTED.add(key)
+            first = pattern.strip().splitlines()[0] if pattern.strip() else ""
+            print(f"[tree-sitter] query failed, extracting nothing for it: "
+                  f"{type(exc).__name__}: {exc} | query starts: {first[:80]!r}",
+                  file=sys.stderr, flush=True)
         return []
+
+
+# (language, query) pairs whose failure was already reported by run_query.
+_REPORTED: set[tuple[int, str]] = set()
 
 
 def leading_doc(node: Node, src: bytes) -> Optional[Node]:
