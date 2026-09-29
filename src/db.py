@@ -475,14 +475,10 @@ class CodeDB:
         All nullable, no default: NULL is the "written before ADR-044" signal the resolver
         keys on. Only `call_resolver` and the import resolvers read them.
         """
-        cols = {
-            row[1]
-            for row in self._conn.execute("PRAGMA table_info(edges)").fetchall()
-        }
         for name, sql_type in (("bound_module", "TEXT"), ("member_call", "INTEGER"),
                                ("external", "INTEGER")):
-            if name not in cols:
-                self._conn.execute(f"ALTER TABLE edges ADD COLUMN {name} {sql_type}")
+            self._migrate(lambda name=name: name in self._columns("edges"),
+                          f"ALTER TABLE edges ADD COLUMN {name} {sql_type};")
 
     def _migrate_files_freshness(self) -> None:
         """

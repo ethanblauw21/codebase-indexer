@@ -1,6 +1,6 @@
 # ADR-044: Imports Are Captured and Resolved, and a Call Resolves Only Through the Scope Its Shape Allows
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-29
 **Branch:** `feature/adr-044-python-imports`
 **Reviewer:** @edb
@@ -218,3 +218,4 @@ branch with the two hints nulled.
 - [x] Measure on a copy of this repo's index (Results)
 - [x] Measure on copies of TS indexes: GanttWebApp and InventoryApp-V2 (Results)
 - [x] Retrieval check before/after: **no query moved** (Results)
+- [x] On merging master after ADR-046: `_migrate_edge_import_binding` adds each column through `CodeDB._migrate`, so it is atomic and re-checked under the write lock like the other migrations. A copy of the GanttWebApp index opened with ADR-044, ADR-045 and ADR-046 together: 6,718 edges kept, the three columns added.
