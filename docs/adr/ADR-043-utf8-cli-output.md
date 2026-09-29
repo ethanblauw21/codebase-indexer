@@ -70,8 +70,20 @@ cannot encode (lone surrogates only) prints as `?` instead of raising.
 
 ## Implementation Log
 
-- [ ] `src/utf8_stdio.py` + `pyproject.toml` `py-modules` entry
-- [ ] `incremental_indexer.main()` calls it first; `MCPServer._utf8_stdio()` delegates
-- [ ] Test: a cp1252 child crashes on the banner without the helper and prints UTF-8 with it; `main()` calls the helper before parsing
-- [ ] Verify on Windows: `code-indexer > log` completes on this repo
-- [ ] B-008 → done in `docs/backlog.md`
+- [x] `src/utf8_stdio.py` + `pyproject.toml` `py-modules` entry (7aa1e81)
+- [x] `incremental_indexer.main()` calls it first; `MCPServer._utf8_stdio()` delegates
+- [x] Test (`tests/test_utf8_stdio.py`): a cp1252 child crashes on the banner without the helper,
+  prints UTF-8 with it, and `main()` survives a cp1252 stdout. The `main()` test **fails** with
+  the call removed. Full suite: 645 passed, 1 skipped.
+- [x] Verified on Windows: `python src/incremental_indexer.py > log` with no `PYTHONIOENCODING`
+  exits 0 on this repo, and the log is UTF-8 with the banner intact.
+- [x] B-008 → done in `docs/backlog.md`
+
+**Notes:**
+- 2026-09-29, MCP Inspector 2.8.0: `tools/list --strict` exits 0 with all 14 tools. A
+  `tools/call reindex` times out at Inspector's fixed 60 s. The **unchanged** server times out
+  the same way (68 s), so this is not ADR-043's doing: a no-change reindex over MCP takes more than
+  a minute. Not chased here. Outputs are in `gpu-crash-repro/telemetry/adr043/` (gitignored).
+- 2026-09-29: `master`'s `pyproject.toml` `py-modules` list is the old one. `chore/cleanup-and-docs`
+  (aa4212f) rewrites it, so whichever merges second resolves a one-line conflict: keep
+  `"utf8_stdio"`.
