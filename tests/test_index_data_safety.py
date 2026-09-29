@@ -117,23 +117,26 @@ def test_a_full_rebuild_that_succeeds_removes_its_backup(reindex_env):
     assert reloads
 
 
-def test_reindex_resets_both_retrievers(reindex_env, monkeypatch):
-    monkeypatch.undo()   # use the real _reload_indexes, with stub index objects
+def test_reindex_replaces_the_whole_index_state(reindex_env, monkeypatch):
+    """#51, now ADR-047: after a rebuild, both retrievers come from the new
+    generation, because they belong to the one IndexState that is swapped."""
+    monkeypatch.undo()   # use the real _reload_indexes, with a stub retriever
     _, index_dir, _ = reindex_env
 
-    class _StubIM:
-        def load_or_create(self, name):
-            return None
+    class _StubRetriever:
+        _db = object()
 
     monkeypatch.setattr(ii, "run_incremental", lambda **kw: None)
     monkeypatch.setattr(ii, "INDEX_DIR", index_dir)
-    monkeypatch.setattr(MCPServer, "_ensure_indexes", lambda: None)
-    monkeypatch.setattr(MCPServer, "MultiIndexManager", _StubIM)
-    monkeypatch.setattr(MCPServer, "DocumentStore", lambda: None)
-    monkeypatch.setattr(MCPServer, "_hybrid_retriever", object())
-    monkeypatch.setattr(MCPServer, "_iterative_retriever", object())
+    monkeypatch.setattr(MCPServer, "HybridRetriever", _StubRetriever)
+    monkeypatch.setattr(MCPServer, "IterativeRetriever", lambda base, db: ("iterative", base))
+    old = MCPServer._load_state()
+    old_iterative = old.iterative()
+    monkeypatch.setattr(MCPServer, "_state", old)
 
     MCPServer._reindex(changed_files_only=False)
 
-    assert MCPServer._hybrid_retriever is None
-    assert MCPServer._iterative_retriever is None
+    new = MCPServer._state
+    assert new is not old and new.generation > old.generation
+    assert new.retriever is not old.retriever
+    assert new.iterative() != old_iterative and new.iterative()[1] is new.retriever

@@ -247,8 +247,8 @@ def test_a_save_by_another_process_is_reloaded_before_the_next_call(index_dir, m
         fh.write(b"v1")
     reloads = []
     monkeypatch.setattr(MCPServer, "_reload_indexes", lambda: reloads.append(1))
-    monkeypatch.setattr(MCPServer, "doc_store", object())
-    monkeypatch.setattr(MCPServer, "_loaded_stamp", MCPServer._faiss_stamp())
+    from types import SimpleNamespace
+    monkeypatch.setattr(MCPServer, "_state", SimpleNamespace(stamp=MCPServer._faiss_stamp()))
 
     MCPServer._ensure_indexes()
     assert reloads == []                # nothing saved since the load
