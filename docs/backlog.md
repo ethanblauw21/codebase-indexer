@@ -90,6 +90,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-055](#b-055) | Pass 2 waits for each embed call before preparing the next window | B-050 follow-up, 2026-09-28 | S | **done** (#78, ADR-040 addendum) |
 | [B-051](#b-051) | The shared model host runs on whatever interpreter launched it, so a CPU-only env can put every project's models on the CPU | InventoryApp go-live, 2026-09-28 | S | **done** (#72, ADR-041) |
 | [B-056](#b-056) | Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols | @edb grill, 2026-09-28 | M (Stage 1) + M (Stage 2) | shaped |
+| [B-057](#b-057) | A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild | incident, 2026-09-29 | S | shaped |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -1844,3 +1845,40 @@ standard library.
 
 **Depends on:** none. **Related:** B-043, which Python import resolution partly unblocks; ADR-021 and
 ADR-011 (call resolution order and receiver types); ADR-032 (search budget); ADR-042 (git-mode source).
+
+<a id="b-057"></a>
+### B-057 — A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild
+
+**Source:** incident, 2026-09-29 · **Status:** shaped · **Size:** S
+
+**What happened.** While checking ADR-043, an agent called the `reindex` tool through MCP Inspector
+twice (09:07 and 09:09) against this repo's live index, with no arguments, expecting a quick
+check. `changed_files_only` **defaults to `False`**, so each call was a full rebuild. Inspector
+gives up on a request after a fixed 60 s and kills the server, which cut both rebuilds off:
+
+1. Run 1: `_snapshot_index` saved the good index to `.pre-full-reindex/`, wiped it, and was
+   killed partway through the rebuild.
+2. Run 2: `_snapshot_index` runs `shutil.rmtree(backup_dir)` ("left by a killed earlier run"),
+   which **deleted the only good copy**. It then snapshotted run 1's half-built state (7 files)
+   as the new "backup" and was killed too.
+
+Result: 25 of 158 files, no tier vector files, and a backup that couldn't restore anything.
+Recovered with a full rebuild (`MCPServer.reindex(False)` in-process). It took about 3 min
+because all 3,114 summaries were still cached in `graph.db`, and the result matched the prior
+index exactly (158 files, 2,476 chunks, vectors = rows). A watchdog-less gap followed: the
+killed server had held `watch.lock`.
+
+**Two defects, independent:**
+- **The backup is deleted on the assumption that it's stale** (`MCPServer._snapshot_index`).
+  A backup left by a killed run is the *good* copy, the one that run was protecting. Fix: if
+  `.pre-full-reindex/` exists at the start of a full rebuild, restore it first (the previous run
+  never finished), or refuse and say so. Never delete it.
+- **A destructive default.** `reindex()` with no arguments wipes the index. Any client that
+  calls it bare (an agent, a checklist, Inspector) gets a full rebuild. Consider defaulting to
+  incremental, or requiring the full rebuild to be requested explicitly.
+
+**Also worth a line in CONTRIBUTING §5.** Its checklist says to verify "`reindex` runs without
+error". Point that at a scratch index or a test target, never the live one. Inspector's fixed
+60 s timeout kills any full rebuild.
+
+**Depends on:** none. **Related:** B-035 / ADR-037 (killed-run holes), ADR-038 (locks).
