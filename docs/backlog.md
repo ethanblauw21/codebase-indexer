@@ -89,6 +89,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-054](#b-054) | A line-ending-only difference counts as a changed file (raw-byte MD5) | InventoryApp fork, 2026-09-28 | S | shaped |
 | [B-055](#b-055) | Pass 2 waits for each embed call before preparing the next window | B-050 follow-up, 2026-09-28 | S | **done** (#78, ADR-040 addendum) |
 | [B-051](#b-051) | The shared model host runs on whatever interpreter launched it, so a CPU-only env can put every project's models on the CPU | InventoryApp go-live, 2026-09-28 | S | **done** (#72, ADR-041) |
+| [B-056](#b-056) | Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols | @edb grill, 2026-09-28 | M (Stage 1) + M (Stage 2) | shaped |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -1674,3 +1675,172 @@ index was missing about 20% of current `main`.
   `tools/pass2_bench.py` times pass 2 before B-050, with B-050 and with B-055 on an already-built
   index. Measured on GanttWebApp 2026-09-28: pass 2 334 s before B-050, 266 s with it, 194 s with
   the overlap (−42%); pass 2 is now GPU-bound (ADR-040, Measurement).
+
+<a id="b-056"></a>
+### B-056 — Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols
+
+**Source:** @edb grill, 2026-09-28 · **Status:** shaped · **Size:** M (Stage 1) + M (Stage 2)
+
+**The want.** When a returned chunk calls into a third-party package, say which package it is and
+what it does, in one short line. Frontier models mostly know `zod` or `json.loads`. A small, locally
+hosted model often doesn't, and concise readable context should help it, as long as it stays to the
+important details and doesn't turn into bloat.
+
+**What the grill found in the code today:**
+- Only TS/JS imports resolve. `ImportResolver` (`src/import_resolver.py:92`) returns `None` for any
+  specifier without `./`, `../` or a tsconfig alias. So no Python, C# or C++ IMPORTS edge gets a
+  `resolved_target`. This repo has 557 IMPORTS edges and none of them resolve (see B-043).
+- **Python relative imports are dropped entirely.** `_IMPORT_QUERY` (`src/adapters/python_adapter.py:20`)
+  matches only `dotted_name`. `from .x import y`, `from . import y` and `from ..a.b import y` produce
+  no edge (checked 2026-09-28 against sample source).
+- **Calls into dependencies can bind to in-repo symbols.** `call_resolver.py` tries "unique
+  repo-wide name" first (line 119), before it looks at imports. The Python call query records
+  `json.loads(...)` as a call to `loads`, with no receiver (`python_adapter.py:26`). So if the repo
+  defines exactly one `loads`, the call resolves to it at full confidence. That breaks the
+  resolver's own prefer-unknown rule. The TS query drops the receiver the same way (`z.object()` →
+  `object`).
+- Nothing reads manifests. Dependencies appear only as the raw strings in unresolved IMPORTS edges.
+  GanttWebApp has two manifests (the root one and `functions/package.json`), so a file's owner is its
+  **nearest** manifest.
+
+**Shaped decisions (grill, 2026-09-28):**
+
+*Stage 1: imports, packages, binding, display*
+- **Ecosystems:** TS/JS and Python. C# (`PackageReference` + NuGet XML docs) and C++ come later.
+- **`file_imports` table:** file, local name → module, normalized package (`numpy.linalg` → `numpy`,
+  `@scope/pkg/sub` → `@scope/pkg`), resolved in-repo path if any. Written in `ingest_file` **in the
+  same transaction as the file's edges**, so the watcher keeps it current and a killed run can't
+  leave it half-written (the B-035 lesson). It is a table of its own, not rows in `symbols`: that
+  table feeds `find_dead_code`, communities and call candidates.
+- **`packages` table:** ecosystem, name, version → one-line description, manifest path. Filled when a
+  manifest is ingested (`package.json`, `pyproject.toml`, `requirements*.txt`). Descriptions are read
+  **locally**: `node_modules/<pkg>/package.json` `description`, and the `Summary:` line in
+  `site-packages` `*.dist-info/METADATA`. No network and no hosted registry. SQLite, not a JSON file:
+  the daemon and the server's reindex both write.
+- **Manifests become scannable** (`scan_policy.is_scannable()`, the way `.csproj` already is), so
+  editing `package.json` triggers an update.
+- **Git mode (ADR-042):** the version comes from the committed manifest or lockfile, to match the
+  indexed code. The description comes from what's installed on disk, because a one-line description
+  almost never changes between versions. If the package isn't installed, show name and version only.
+- **Python import fixes:** capture `relative_import`, and resolve dotted and relative names to repo
+  files against the package layout. That also gives B-043 real import links.
+- **External binding in `call_resolver`:** adapters record the **receiver identifier** on member
+  calls. A call whose bare name or receiver is the local name of an *external* import in that file is
+  `external`, and none of the ADR-021 steps run for it. Other calls run the ADR-021 order unchanged.
+  The rule does **not** require in-repo calls to come through an import, because Apps Script has
+  none. Binding is always on, since it's a correctness fix.
+- **Standard library and platform modules** (`os`, `json`, `fs`, `path`): bound as external, never
+  described.
+- **Display-only.** Nothing is added to embedded chunk text: appended summaries cost intent
+  0.436→0.380, a repeated class header cost −0.10, and the 512-token window would cut code. At
+  result time, match the file's imported local names as whole words in each returned chunk's text.
+  That catches calls, namespace receivers, types and JSX. Emit one line per package the chunk uses:
+
+  ```
+  uses: p-limit@5.0.0 — Run multiple promise-returning & async functions with limited concurrency
+  ```
+
+  Caps: the first sentence, at most ~120 characters; at most 5 packages per chunk (most-used first,
+  then `+N more`); in-repo imports never listed; the lines count against the search budget (ADR-032).
+- **Tools:** `semantic_code_search`, `find_similar_code` and the iterative search. Tools that print
+  file lists stay unchanged. On by default, with `[dependencies] enabled = false` to turn the lines
+  off.
+- **Stage 1 gate:** tests, including a resolution-conformance fixture for external binding (precision
+  stays 1.0). Chunk text and stable_ids must be **byte-identical** before and after, which proves
+  retrieval can't move. Also report how many previously resolved CALLS edges flip to external on
+  this repo and on Gantt, with a reviewed sample.
+
+*Stage 2: member summaries (gated on the A/B below)*
+- **`package_members` table:** package, version, member → signature, one-line summary. Filled
+  lazily, **only for members the repo actually imports or calls**, and cached by version. Sources,
+  all built-in docs read statically:
+  - **TS/JS:** JSDoc in the package's `.d.ts` files. The TS grammar already parses them.
+  - **Python:** the `.pyi` stub first, whether from `types-*` or bundled with `py.typed`. It has
+    cleaner signatures and often the docstring. Otherwise the `.py` source, parsed with `ast`. That
+    reads the same string `__doc__` would return, without importing the module; importing would run
+    third-party code at index time. C extensions have runtime-only docstrings: use the `.pyi` if
+    there is one, otherwise name only.
+  - **Rust (future, no adapter yet):** `///` doc comments in `~/.cargo/registry/src/<registry>/<crate>-<version>/`.
+    The path already carries the version.
+
+  The display becomes `uses: p-limit.pLimit(concurrency) — …`.
+- **Resolve members along the package's export path, never by name search** (prototype finding,
+  2026-09-28, `gpu-crash-repro/dep_ab.py`). A search of the whole package for the first `def`/`class`
+  with a matching name returned the wrong function for 4 of the ~12 members tried: `np.array` →
+  `numpy.char.array`, `nx.betweenness_centrality` → the bipartite variant, and `torch.cuda` and
+  `anyio.run` → unrelated functions. For a small model a wrong line is worse than none. Start at
+  the imported module's `__init__`, follow `from .x import name` and `from x import *` the way the
+  import system does, and emit no line where the trail ends (C extensions, lazy loaders such as
+  `transformers`' `_LazyModule`). Also cap the signature at 4 parameters: `transformers.pipeline`
+  has 17.
+
+**A/B, 2026-09-28: the lines did not help Qwen2.5-Coder-1.5B.** The harness is
+`gpu-crash-repro/dep_ab.py`, with data in `dep_ab/` (gitignored). Setup:
+- 26 questions about this repo that each hinge on library behavior, written by an agent that
+  never saw the lines.
+- Retrieval ran once, on an index refreshed to 5abfa39.
+- Three arms over the **same chunks**: A is today's output, B adds the package lines, C adds
+  package and member lines. The lines cost +129 tokens per question on average for B, +210 for C.
+- Greedy answers, graded blind 0–2 by an agent that saw shuffled X/Y/Z labels.
+
+| | mean | vs A (win / tie / loss) | sign-flip p |
+|---|---|---|---|
+| A (today) | 0.73 | | |
+| B (package lines) | 0.62 | 2 / 19 / 5 | 0.46 |
+| C (package + members) | 0.69 | 4 / 17 / 5 | 1.00 |
+
+- No subset favored B or C. The 13 questions that don't name the library came out at B-A ±0.
+- **Mechanism, from the grade notes:** the model mostly ignored the lines. What changed between
+  arms was which detail greedy decoding happened to mention, and that moved in both directions.
+  An example is q23, where +18 tokens dropped the fixed-seed point.
+- **Floor:** 10 of 26 questions scored 0 in arm A. The 1.5B model's limits and retrieval misses
+  set the ceiling, not missing library knowledge.
+- **The content is too thin for these questions.** The answers needed library behavior (IDs
+  surviving `remove_ids`, `-1` padding when k > ntotal, `frombuffer` being read-only). A one-line
+  package summary never carries that, and a first-sentence docstring rarely does.
+- **Budget interaction (Stage 1 design note):** charging the lines to the 4,000-token budget
+  swapped whole chunks on q10, where a 3,959-token chunk just fit without its line. If the lines
+  ship, render them outside the budget, or reserve room for them.
+
+**Follow-up readers, 2026-09-29:** the same 78 prompts, the same rubric and a fresh blind
+grader for each reader.
+- **Haiku 4.5** ran as three subagents in a Latin square: the arm rotates by question, so no single
+  agent's style lines up with an arm. A first run with one agent per arm was confounded (one agent
+  wrote answers half as long as the others) and has been set aside in `haiku_v1_confounded/`.
+- **Qwen2.5-Coder-7B-Instruct** ran in NF4 4-bit with bitsandbytes, using about 7.9 GB on the 8 GB
+  card at ~10–15 s per answer.
+
+| Reader | A | B | C | B−A (win/tie/loss, p) | C−A (win/tie/loss, p) |
+|---|---|---|---|---|---|
+| Qwen 1.5B | 0.73 | 0.62 | 0.69 | 2/19/5, 0.46 | 4/17/5, 1.00 |
+| Qwen 7B (4-bit) | 1.00 | 1.12 | 1.00 | 4/21/1, 0.37 | 2/22/2, 1.00 |
+| Haiku 4.5 | 1.38 | 1.15 | 1.31 | 4/12/10, 0.18 | 6/13/7, 0.81 |
+| **Pooled (n=78)** | | | | **10/52/16, −0.08, p 0.33** | **12/52/14, −0.04, p 0.71** |
+
+No reader shows a gain that holds up. The one positive number, 7B's B arm, points the opposite way
+from the other two readers, and the pooled result is flat to slightly negative. Haiku, the reader
+that uses its context most (it scores highest), is the one B hurts most. Its grade notes show
+answers drifting toward a generic description of the library ("required transitively … for
+distributed training") and away from how this repo uses it. That's the same purpose-text effect
+that made appended summaries hurt retrieval, but it's suggestive only.
+
+**Consequence for this item:** the display half (the Stage 1 lines and all of Stage 2) is
+**dropped**. That removes the `packages` table, manifest parsing, description reads, manifests as
+scannable files, the git-mode version rule and the export-path resolver. The Stage 1
+*correctness* work stands on its own merits: `file_imports`, the Python import fixes and external
+binding in `call_resolver`. Revisit the display only with a different premise (for example full
+member docs, or a reader that asks for them through a tool), not a bigger model; three sizes
+have been tried. The harness re-runs in one command per step (`gpu-crash-repro/dep_ab.py`).
+- **Promotion gate:** about 20 questions about Gantt/InventoryApp code that hinge on a dependency.
+  @edb's local model answers each from search results with and without the lines, graded blind.
+  Stage 2 promotes only if the Stage 1 lines measurably help.
+
+**Rejected in the grill:** a hosted description registry (ops work that the local-suite direction
+rules out); on-demand npm/PyPI fetches as a default (network dependency, and it sends the
+dependency list to a third party; could come back later as opt-in and cached by version); injecting
+descriptions into embedded text (measured harm, above); a JSON-file store; imports as `symbols` rows;
+a package-level "imports" block per file (lists packages the chunk never touches); describing the
+standard library.
+
+**Depends on:** none. **Related:** B-043, which Python import resolution partly unblocks; ADR-021 and
+ADR-011 (call resolution order and receiver types); ADR-032 (search budget); ADR-042 (git-mode source).
