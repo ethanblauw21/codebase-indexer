@@ -1,0 +1,18 @@
+{
+  "feature": "python/relative_imports",
+  "language": "python",
+  "tier": "A",
+  "note": "ADR-044 §1: a relative import is an import edge with its specifier as written. Dots only gives one edge per imported name (`.sibling`, `.other`: the aliased name, not the alias); a wildcard keeps the bare dots.",
+  "symbols": [
+    {"fqn": "run", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "relative_imports.py", "target": ".sibling", "kind": "import"},
+    {"source": "relative_imports.py", "target": ".other", "kind": "import"},
+    {"source": "relative_imports.py", "target": ".store", "kind": "import"},
+    {"source": "relative_imports.py", "target": "..shared.config", "kind": "import"},
+    {"source": "relative_imports.py", "target": "..up", "kind": "import"},
+    {"source": "relative_imports.py", "target": ".", "kind": "import"},
+    {"source": "run", "target": "load", "kind": "call"}
+  ]
+}

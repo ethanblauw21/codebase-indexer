@@ -10,14 +10,21 @@ the resolver, so it cannot see this.
 Each fixture is scored TWICE through the real pipeline (`parse_file` → `db.upsert_file` →
 `resolve_call_edges`), on the same source:
 
-    typed    — edges keep their `receiver_type` hint     (ADR-011)
-    baseline — the hint is stripped before indexing       (ADR-021, name-only resolution)
+    typed    — edges keep their hints: `receiver_type` (ADR-011), `bound_module` and
+               `member_call` (ADR-044)
+    baseline — the hints are stripped before indexing     (ADR-021, name-only resolution)
 
-The delta between the two is the lift *attributable to receiver typing* — same parser, same
-resolver, the hint the only difference. Ground truth lives beside the source at
+The delta between the two is the lift *attributable to the hints* — same parser, same
+resolver, the hints the only difference. Ground truth lives beside the source at
 `tests/fixtures/resolution/<language>/<feature>.resolution.json`:
 
-    {"calls": [{"source": <caller fqn>, "target": <bare callee>, "expected": <fqn|null>}, ...]}
+    {"calls": [{"source": <caller fqn>, "target": <bare callee>, "expected": <fqn|null>}, ...],
+     "support": ["pkg/mod.py", ...]}
+
+`support` (optional, ADR-044) lists more files, relative to the fixture's folder, indexed with
+it so its imports have something to resolve to. Only the main file's calls are scored. Every
+file is indexed under its path relative to that folder, and imports are resolved and
+classified as at ingest (`ImportResolver` for TS/JS, `resolve_python_imports` for Python).
 
 `expected` is the single correct in-repo target, or `null` where the call is *correctly
 unresolvable* (prefer-unknown, §2 — external receiver type, chained receiver, overload set).
@@ -35,10 +42,15 @@ Metrics, per language, over the declared call sites:
     resolution rate = hits / resolvable              (coverage of the resolvable universe)
     precision       = hits / (hits + wrong)          (are the resolutions we assert correct?)
 
-§4 pass condition (encoded in `check_baseline` and gated by tests/test_resolution_conformance.py):
-    rate(typed) > rate(baseline)  AND  precision(typed) == 1.0  AND  precision(baseline) == 1.0
-    (the baseline is prefer-unknown too — it fails to resolve ambiguous names, it never
-     mis-resolves; the lift must come entirely from resolving MORE, never from guessing.)
+Pass condition (encoded in `check_baseline` and gated by tests/test_resolution_conformance.py),
+per language, as amended by ADR-044 §4:
+    precision(typed) == 1.0  AND  rate(typed) >= rate(baseline)
+    AND (rate(typed) > rate(baseline)  OR  precision(typed) > precision(baseline))
+ADR-011 also required precision(baseline) == 1.0. That holds for receiver typing, whose
+baseline is prefer-unknown, but not for import binding: the ADR-021 baseline resolves
+`json.loads` to an in-repo `loads`, which is the defect ADR-044 fixes. The committed baseline
+file now guards baseline precision against regression instead, so a language whose baseline
+precision is 1.0 keeps exactly the protection it had.
 
 CPU-only: `upsert_file` is called with no chunks, so nothing is embedded — pure tree-sitter +
 SQLite, no model load, no GPU (consistent with the extraction harness).
@@ -69,7 +81,8 @@ from conformance_eval import normalize_fqn  # reuse the path-prefix normalizer  
 _FIXTURE_ROOT = os.path.join(_ROOT, "tests", "fixtures", "resolution")
 _BASELINE_PATH = os.path.join(_ROOT, "benchmarks", "resolution", "baseline.json")
 
-_LANG_BY_EXT = {".cs": "csharp", ".cpp": "cpp", ".cc": "cpp", ".h": "cpp", ".hpp": "cpp"}
+_LANG_BY_EXT = {".cs": "csharp", ".cpp": "cpp", ".cc": "cpp", ".h": "cpp", ".hpp": "cpp",
+                ".py": "python", ".ts": "typescript", ".tsx": "typescript", ".js": "javascript"}
 _SOURCE_EXTS = tuple(_LANG_BY_EXT)
 
 _REGIMES = ("typed", "baseline")
@@ -99,26 +112,38 @@ def discover_fixtures() -> list[dict]:
     return sorted(fixtures, key=lambda f: f["expected_path"])
 
 
-def _resolved_map(source_path: str, content: str, strip_hints: bool) -> dict:
-    """Index one source through the real pipeline and return {(norm_source, target): resolved}.
+def _resolved_map(source_path: str, support: list[str], strip_hints: bool) -> dict:
+    """Index a fixture through the real pipeline and return {(norm_source, target): resolved}
+    for the main file's calls.
 
-    `strip_hints=True` nulls every edge's `receiver_type` before indexing, reproducing the
-    ADR-021 (name-only) regime on the identical parse — the hint is the only variable.
+    `strip_hints=True` nulls every edge's `receiver_type`, `bound_module` and `member_call`
+    before indexing, reproducing the ADR-021 (name-only) regime on the identical parse — the
+    hints are the only variable.
     """
     from ast_chunker import parse_file
     from db import CodeDB
     from call_resolver import resolve_call_edges
+    from import_resolver import ImportResolver, resolve_python_imports
 
-    result = parse_file(source_path, content)
-    edges = result.edges
-    if strip_hints:
-        for e in edges:
-            e.receiver_type = None
-
+    root = os.path.dirname(source_path)
+    main = os.path.basename(source_path)
+    resolver = ImportResolver(root)
     tmpdir = tempfile.mkdtemp(prefix="resoleval_")
     db = CodeDB(os.path.join(tmpdir, "graph.db"))
     try:
-        db.upsert_file(source_path, "hash:" + source_path, result.symbols, edges)
+        for rel in [main, *support]:
+            with open(os.path.join(root, rel), encoding="utf-8") as fh:
+                result = parse_file(rel, fh.read())
+            web = os.path.splitext(rel)[1].lower() in ImportResolver.EXTENSIONS
+            for e in result.edges:
+                if strip_hints:
+                    e.receiver_type = e.bound_module = e.member_call = None
+                if e.kind == "import":          # as incremental_indexer's ingest does
+                    e.resolved_target = resolver.resolve(e.target, rel)
+                    if web:
+                        e.external = resolver.classify(e.target, e.resolved_target)
+            db.upsert_file(rel, "hash:" + rel, result.symbols, result.edges)
+        resolve_python_imports(db)
         resolve_call_edges(db)
         rows = db._conn.execute(
             "SELECT source_fqn, target, resolved_target FROM edges WHERE kind = 'CALLS'"
@@ -128,6 +153,8 @@ def _resolved_map(source_path: str, content: str, strip_hints: bool) -> dict:
 
     out: dict = {}
     for src, tgt, resolved in rows:
+        if src.split("::", 1)[0] in support:
+            continue                            # a support file's own calls are not scored
         out[(normalize_fqn(src), tgt)] = resolved
     return out
 
@@ -161,8 +188,7 @@ def score_fixture(fixture: dict) -> dict:
         )
     with open(fixture["expected_path"], encoding="utf-8") as fh:
         spec = json.load(fh)
-    with open(fixture["source_path"], encoding="utf-8") as fh:
-        content = fh.read()
+    support = spec.get("support", [])
 
     ext = os.path.splitext(fixture["source_path"])[1].lower()
     language = spec.get("language") or _LANG_BY_EXT.get(ext, "unknown")
@@ -173,7 +199,7 @@ def score_fixture(fixture: dict) -> dict:
     regimes: dict = {}
     emitted_keys: set = set()
     for regime in _REGIMES:
-        actual = _resolved_map(fixture["source_path"], content, strip_hints=(regime == "baseline"))
+        actual = _resolved_map(fixture["source_path"], support, strip_hints=(regime == "baseline"))
         emitted_keys = set(actual)  # identical across regimes (same parse); captured once
         counts = {"hit": 0, "wrong": 0, "unknown_ok": 0, "miss": 0}
         details = []
@@ -271,11 +297,12 @@ def render_scorecard(results: dict) -> str:
     n_lang = len(by_lang)
     lines.append(
         f"{n_fix} fixture(s) across {n_lang} language(s)  —  "
-        f"baseline = ADR-021 (name-only), typed = ADR-011 (receiver-type hint)\n"
+        f"baseline = ADR-021 (name-only), typed = with the ADR-011/044 hints\n"
     )
     for lang, regimes in by_lang.items():
         b, t = regimes["baseline"], regimes["typed"]
         lift = round(t["rate"] - b["rate"], 4)
+        plift = round(t["precision"] - b["precision"], 4)
         lines.append(f"[{lang}]")
         lines.append(
             f"  baseline   rate={b['rate']:.3f}  precision={b['precision']:.3f}"
@@ -285,7 +312,7 @@ def render_scorecard(results: dict) -> str:
             f"  typed      rate={t['rate']:.3f}  precision={t['precision']:.3f}"
             f"   (hit={t['hit']}/{t['resolvable']} resolvable, wrong={t['wrong']})"
         )
-        lines.append(f"  LIFT       +{lift:.3f} resolution rate, precision held\n")
+        lines.append(f"  LIFT       +{lift:.3f} resolution rate, +{plift:.3f} precision\n")
 
     # Per-fixture misses/wrongs in the typed regime — the honest gaps.
     detail = []
@@ -324,11 +351,12 @@ def _baseline_view(results: dict) -> dict:
 def check_baseline(results: dict, tol: float = 1e-4) -> list[str]:
     """Return regression/invariant-violation messages (empty = pass).
 
-    Enforces the ADR-011 §4 contract on the live numbers AND guards the committed baseline:
+    Enforces the contract (ADR-011 §4, amended by ADR-044 §4) on the live numbers AND guards
+    the committed baseline:
       1. typed precision == 1.0            (the correctness gate — no wrong edges)
-      2. baseline precision == 1.0         (the lift is more-resolved, never guessed)
-      3. typed rate > baseline rate        (there IS a lift)
-      4. no regression vs committed typed rate/precision
+      2. typed rate >= baseline rate       (the hints never cost coverage)
+      3. a lift in rate or in precision    (the hints do something)
+      4. no regression vs the committed typed rate/precision and baseline precision
       5. structural integrity holds        (ground truth complete)
     """
     problems: list[str] = []
@@ -338,12 +366,12 @@ def check_baseline(results: dict, tol: float = 1e-4) -> list[str]:
         t, b = regimes["typed"], regimes["baseline"]
         if t["precision"] + tol < 1.0:
             problems.append(f"{lang}: typed precision {t['precision']:.4f} < 1.0 — a wrong edge (§2 gate)")
-        if b["precision"] + tol < 1.0:
-            problems.append(f"{lang}: baseline precision {b['precision']:.4f} < 1.0 — baseline mis-resolved")
-        if t["rate"] <= b["rate"] + tol:
+        if t["rate"] + tol < b["rate"]:
+            problems.append(f"{lang}: typed rate {t['rate']:.4f} below baseline {b['rate']:.4f}")
+        if t["rate"] <= b["rate"] + tol and t["precision"] <= b["precision"] + tol:
             problems.append(
-                f"{lang}: no resolution lift — typed rate {t['rate']:.4f} "
-                f"not above baseline {b['rate']:.4f} (§4)"
+                f"{lang}: no lift — typed rate {t['rate']:.4f} / precision {t['precision']:.4f} "
+                f"vs baseline {b['rate']:.4f} / {b['precision']:.4f}"
             )
 
     if os.path.isfile(_BASELINE_PATH):
@@ -353,12 +381,13 @@ def check_baseline(results: dict, tol: float = 1e-4) -> list[str]:
             if lang not in cur:
                 problems.append(f"{lang}: present in baseline, absent now")
                 continue
-            for metric in ("rate", "precision"):
-                base_val = regimes["typed"][metric]
-                cur_val = cur[lang]["typed"][metric]
+            for regime, metric in (("typed", "rate"), ("typed", "precision"),
+                                   ("baseline", "precision")):
+                base_val = regimes[regime][metric]
+                cur_val = cur[lang][regime][metric]
                 if cur_val + tol < base_val:
                     problems.append(
-                        f"{lang}/typed/{metric} regressed: {cur_val:.4f} < {base_val:.4f}"
+                        f"{lang}/{regime}/{metric} regressed: {cur_val:.4f} < {base_val:.4f}"
                     )
     else:
         problems.append(f"no baseline at {_BASELINE_PATH} — run --write-baseline first")
