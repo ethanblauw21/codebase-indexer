@@ -52,6 +52,7 @@ py-modules = [
     "RecFileSearch",
     "stable_id",
     "summarizer",
+    "utf8_stdio",
 ]
 
 [tool.setuptools.packages.find]

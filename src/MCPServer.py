@@ -2673,14 +2673,11 @@ def _utf8_stdio() -> None:
     pipe's text encoding is the ANSI code page (cp1252), not UTF-8. The indexer's
     first line is a "━━" banner, so every watchdog reindex died on its first print
     with UnicodeEncodeError. The protocol is unaffected: it has its own UTF-8
-    writer on a private copy of the pipe (see _claim_stdout).
+    writer on a private copy of the pipe (see _claim_stdout). The body is shared with
+    the code-indexer CLI (ADR-043).
     """
-    import sys
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-        except (AttributeError, ValueError):
-            pass    # not a TextIOWrapper (already replaced by a harness); leave it
+    from utf8_stdio import utf8_stdio
+    utf8_stdio()
 
 
 def _detach_stdin() -> None:
