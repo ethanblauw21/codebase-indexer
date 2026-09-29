@@ -1,6 +1,6 @@
 # ADR-043: `code-indexer` Writes UTF-8, Wherever Its Output Goes
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-29
 **Branch:** `feature/adr-043-utf8-cli-output`
 **Reviewer:** @edb
