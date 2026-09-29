@@ -1,6 +1,6 @@
 # ADR-048: A Model-Host Failure Never Puts Two Model Copies on the GPU
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-29
 **Branch:** `feature/adr-048-host-fallback`
 **Reviewer:** @edb
