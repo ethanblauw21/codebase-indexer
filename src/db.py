@@ -355,6 +355,11 @@ def _normalise_edge_kind(raw: str) -> str:
     return _EDGE_KIND_MAP.get(raw.lower(), raw.upper())
 
 
+def _opt_int(value) -> Optional[int]:
+    """A tri-state flag for SQLite: None stays NULL (ADR-044's legacy signal)."""
+    return None if value is None else int(value)
+
+
 # ---------------------------------------------------------------------------
 # CodeDB
 # ---------------------------------------------------------------------------
@@ -422,6 +427,9 @@ class CodeDB:
         # before it runs. Placing it earlier fails on databases old enough to
         # predate candidate/confidence/receiver_type.
         self._migrate_edge_kinds()
+        # ADR-044: after the rebuild above, which copies only the columns it lists, so a
+        # column added before it would be dropped on every fresh or pre-READS database.
+        self._migrate_edge_import_binding()
         self._migrate_symbol_locations()
         self._migrate_files_freshness()
         self._seed_index_meta()
@@ -454,6 +462,23 @@ class CodeDB:
         """
         self._migrate(lambda: "receiver_type" in self._columns("edges"),
                       "ALTER TABLE edges ADD COLUMN receiver_type TEXT;")
+
+    def _migrate_edge_import_binding(self) -> None:
+        """
+        Idempotent additive migration (ADR-044): the call-shape and import-binding columns.
+
+          bound_module  CALLS: the import specifier the callee or its receiver binds to
+          member_call   CALLS: 1 if a site is a member call on a non-import receiver, 0 if
+                        not, NULL for edges written before ADR-044 (the legacy rule)
+          external      IMPORTS: 1 dependency, 0 in-repo, NULL unknown
+
+        All nullable, no default: NULL is the "written before ADR-044" signal the resolver
+        keys on. Only `call_resolver` and the import resolvers read them.
+        """
+        for name, sql_type in (("bound_module", "TEXT"), ("member_call", "INTEGER"),
+                               ("external", "INTEGER")):
+            self._migrate(lambda name=name: name in self._columns("edges"),
+                          f"ALTER TABLE edges ADD COLUMN {name} {sql_type};")
 
     def _migrate_files_freshness(self) -> None:
         """
@@ -880,15 +905,20 @@ class CodeDB:
             # Edges
             cur.executemany(
                 """
-                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target, candidate, confidence, receiver_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO edges(source_fqn, target, kind, resolved_target, candidate,
+                                            confidence, receiver_type, bound_module,
+                                            member_call, external)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (e.source_fqn, e.target, _normalise_edge_kind(e.kind),
                      getattr(e, "resolved_target", None),
                      int(getattr(e, "candidate", False)),
                      getattr(e, "confidence", None),
-                     getattr(e, "receiver_type", None))
+                     getattr(e, "receiver_type", None),
+                     getattr(e, "bound_module", None),
+                     _opt_int(getattr(e, "member_call", None)),
+                     _opt_int(getattr(e, "external", None)))
                     for e in edges
                 ],
             )

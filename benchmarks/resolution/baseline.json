@@ -18,5 +18,25 @@
       "precision": 1.0,
       "rate": 1.0
     }
+  },
+  "python": {
+    "baseline": {
+      "precision": 0.5,
+      "rate": 0.25
+    },
+    "typed": {
+      "precision": 1.0,
+      "rate": 0.75
+    }
+  },
+  "typescript": {
+    "baseline": {
+      "precision": 0.3333,
+      "rate": 0.3333
+    },
+    "typed": {
+      "precision": 1.0,
+      "rate": 1.0
+    }
   }
 }

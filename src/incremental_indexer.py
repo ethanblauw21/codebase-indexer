@@ -84,7 +84,7 @@ from call_resolver import resolve_call_edges
 from config import embed_overlap, summarization_enabled, summarizer_model_id, summarizer_tiers
 from core import MultiIndexManager, DocumentStore
 from db import CodeDB
-from import_resolver import ImportResolver
+from import_resolver import ImportResolver, resolve_python_imports
 import index_location as _index_location
 from source import WorkingTreeSource, check_anchor, make_source, md5_file  # noqa: F401 (md5_file re-exported)
 from scan_policy import PROJECT_EXTS, PROJECT_FILES
@@ -742,11 +742,15 @@ def _prepare_file(
     print(f"  [ingest:{rel_path}] AST done: {len(symbols)} symbols, {len(edges)} edges", flush=True)
 
     if resolver is not None:
+        # ADR-044 §2: TS/JS imports are classified here, Python's in resolve_python_imports.
+        is_web = os.path.splitext(rel_path)[1].lower() in ImportResolver.EXTENSIONS
         for edge in edges:
             if edge.kind == "import":
                 resolved = resolver.resolve(edge.target, rel_path)
                 if resolved:
                     edge.resolved_target = resolved
+                if is_web:
+                    edge.external = resolver.classify(edge.target, resolved)
 
     tier_ids:      dict[str, list[int]] = {}
     tier_texts:    dict[str, list[str]] = {}
@@ -1461,9 +1465,17 @@ def _run_incremental(
               "— the two passes disagree about chunking, and those chunks were "
               "embedded without a summary.")
 
+    # ADR-044: Python imports resolve against the whole file list as it is now, so an
+    # import un-resolves when its target is deleted. Before calls: the import-scoped
+    # strategy reads these.
+    imp = resolve_python_imports(db)
+    print(f"  Python imports: {imp['resolved']} resolved | {imp['unresolved']} unresolved "
+          f"({imp['external']} external)")
     res = resolve_call_edges(db)
     print(f"  Call resolution: {res['resolved']} resolved | "
-          f"{res['typed']} typed | {res['ambiguous']} ambiguous | {res['external']} external")
+          f"{res['typed']} typed | {res['bound_scoped']} import-bound | "
+          f"{res['ambiguous']} ambiguous | {res['external']} external | "
+          f"{res['bound_external']} into dependencies")
 
     # Flush FAISS indexes to disk.
     # Chunk payloads are already in SQLite (committed per-file by upsert_file).
