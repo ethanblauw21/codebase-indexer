@@ -3,11 +3,11 @@ import sqlite3
 import faiss
 import numpy as np
 faiss.omp_set_num_threads(1)
-# Silence ML backend noise
+# Silence ML backend noise. No process-wide warnings filter (#54): it hid every
+# warning in each process that imports this module. Loading and running both models
+# with `-W always` emitted none, so nothing needed hiding.
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-import warnings
-warnings.filterwarnings("ignore")
 
 from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
