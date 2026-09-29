@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import sys
 from contextlib import contextmanager
@@ -38,6 +39,24 @@ from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from ast_chunker import Chunk, Edge, Reference, Symbol, SymbolType
+
+
+# ADR-045: a tier-1 chunk's header ends with `Lines: a-b`, right before `Code:`. Lines
+# above a symbol moving shifts those numbers without changing the code, and keying the
+# summary on them re-summarized every symbol below an edit (370 of 681 tier-1 misses on
+# a 57-file GanttWebApp update, 2026-09-29). The summary never depends on them.
+_LINES_HEADER_RE = re.compile(r"\nLines: \d+-\d+\Z")
+_CODE_MARKER = "\nCode:\n"
+SUMMARY_KEY_VERSION = "no-lines"
+
+
+def summary_cache_key(text: str) -> str:
+    """The `chunk_summaries` key for a chunk's text: its MD5 with the header's
+    `Lines: a-b` left out. Text without that header (tier 2/3) keys as before."""
+    head, marker, body = text.partition(_CODE_MARKER)
+    if marker:
+        head = _LINES_HEADER_RE.sub("", head, count=1)
+    return hashlib.md5((head + marker + body).encode()).hexdigest()
 
 # ---------------------------------------------------------------------------
 # Return type for graph queries
@@ -179,8 +198,9 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_tags     ON chunks(tags) WHERE tags != '';
 
 -- -------------------------------------------------------------------------
--- chunk_summaries — LLM extraction cache keyed by MD5(chunk_text)
--- Survives file moves and renames: same code → same hash → same cached summary.
+-- chunk_summaries — LLM extraction cache keyed by summary_cache_key(chunk_text): MD5 of
+-- the text without its `Lines:` header (ADR-045), so a symbol that only moved keeps its
+-- summary. A rename re-summarizes tier 1, whose header names the file.
 -- -------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS chunk_summaries (
     text_hash  TEXT PRIMARY KEY,
@@ -433,6 +453,7 @@ class CodeDB:
         self._migrate_symbol_locations()
         self._migrate_files_freshness()
         self._seed_index_meta()
+        self._migrate_summary_keys()
 
     def _migrate_edge_candidate(self) -> None:
         """
@@ -498,6 +519,33 @@ class CodeDB:
         self._conn.execute(
             "INSERT OR IGNORE INTO index_meta(key, value) VALUES('schema_version', '1')"
         )
+
+    def _migrate_summary_keys(self) -> None:
+        """ADR-045: copy each cached summary to its line-free key, once per database.
+
+        The old key is MD5 of the chunk text as stored in `chunks`, so every indexed
+        chunk's summary can be re-keyed without the model. Old rows stay: an older
+        indexer on the same database keeps finding them, and they cost a few KB.
+        """
+        if self.meta_get("summary_key") == SUMMARY_KEY_VERSION:
+            return
+        pairs = []
+        for (text,) in self._conn.execute("SELECT text FROM chunks"):
+            new = summary_cache_key(text)
+            old = hashlib.md5(text.encode()).hexdigest()
+            if new != old:
+                pairs.append((new, old))
+        with self._tx() as cur:
+            cur.executemany(
+                "INSERT OR IGNORE INTO chunk_summaries(text_hash, summary, created_at) "
+                "SELECT ?, summary, created_at FROM chunk_summaries WHERE text_hash = ?",
+                pairs,
+            )
+            cur.execute(
+                "INSERT INTO index_meta(key, value) VALUES('summary_key', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (SUMMARY_KEY_VERSION,),
+            )
 
     # ------------------------------------------------------------------
     # index_meta accessors (ADR-025 §4)

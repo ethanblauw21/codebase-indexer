@@ -64,7 +64,6 @@ pointer.  Always deduplicate the id array first (np.unique preserves int64).
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import subprocess
 import sys
@@ -83,7 +82,7 @@ from ast_chunker import chunk_file_ast, fallback_token_chunker, parse_file
 from call_resolver import resolve_call_edges
 from config import embed_overlap, summarization_enabled, summarizer_model_id, summarizer_tiers
 from core import MultiIndexManager, DocumentStore
-from db import CodeDB
+from db import CodeDB, summary_cache_key
 from import_resolver import ImportResolver, resolve_python_imports
 import index_location as _index_location
 from source import WorkingTreeSource, check_anchor, make_source, md5_file  # noqa: F401 (md5_file re-exported)
@@ -595,8 +594,9 @@ def chunk_all_tiers(rel_path: str, content: str) -> dict[str, list]:
 
 
 def chunk_text_hash(text: str) -> str:
-    """Cache key for one chunk's summary. Must agree across both passes."""
-    return hashlib.md5(text.encode()).hexdigest()
+    """Cache key for one chunk's summary. Must agree across both passes. Line numbers
+    are not part of it (ADR-045): see db.summary_cache_key."""
+    return summary_cache_key(text)
 
 
 def dedupe_chunks_by_scope(chunks: list) -> list:

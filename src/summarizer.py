@@ -41,7 +41,8 @@ It is not an Ollama model and does not require Ollama to be running.
 
 SQLite summary cache
 ---------------------
-Summaries are cached in the `chunk_summaries` table keyed by MD5(chunk_text).
+Summaries are cached in the `chunk_summaries` table keyed by `db.summary_cache_key`
+(MD5 of the chunk text without its `Lines:` header, ADR-045).
 On every incremental run only new or modified chunks are sent to the LLM.
 Unchanged code (even if the file was re-scanned) reuses the cached summary at
 zero LLM cost, making repeated runs nearly instant regardless of model size.
