@@ -80,10 +80,13 @@ cannot encode (lone surrogates only) prints as `?` instead of raising.
 - [x] B-008 → done in `docs/backlog.md`
 
 **Notes:**
-- 2026-09-29, MCP Inspector 2.8.0: `tools/list --strict` exits 0 with all 14 tools. A
-  `tools/call reindex` times out at Inspector's fixed 60 s. The **unchanged** server times out
-  the same way (68 s), so this is not ADR-043's doing: a no-change reindex over MCP takes more than
-  a minute. Not chased here. Outputs are in `gpu-crash-repro/telemetry/adr043/` (gitignored).
+- 2026-09-29, MCP Inspector 2.8.0: `tools/list --strict` exits 0 with all 14 tools. **Correction:**
+  I first wrote here that a `tools/call reindex` "times out because a no-change reindex takes
+  over a minute". That was wrong. `reindex()` defaults to a **full rebuild**, and both calls
+  (this branch's server and the unchanged one) were full rebuilds of the live index. Inspector
+  killed them at its fixed 60 s, which wiped the index and its backup (B-057). A full rebuild
+  restored it the same morning, identical to before. Nothing in ADR-043 is involved. Outputs are
+  in `gpu-crash-repro/telemetry/adr043/` (gitignored).
 - 2026-09-29: `master`'s `pyproject.toml` `py-modules` list is the old one. `chore/cleanup-and-docs`
   (aa4212f) rewrites it, so whichever merges second resolves a one-line conflict: keep
   `"utf8_stdio"`.
