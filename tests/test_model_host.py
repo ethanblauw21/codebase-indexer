@@ -280,7 +280,7 @@ def test_client_falls_back_in_process_when_the_host_cannot_start(tmp_path, monke
     monkeypatch.setattr(mc, "_skip_until", 0.0)
     monkeypatch.setattr(mc, "_warned", set())
     fake_core = type(sys)("core")
-    fake_core.embed_batch = lambda texts, batch_size=32: np.ones((len(texts), 4), np.float32)
+    fake_core.embed_batch = lambda texts, batch_size=32, device=None: np.ones((len(texts), 4), np.float32)
     monkeypatch.setitem(sys.modules, "core", fake_core)
     assert mc.embed_batch(["x", "y"]).shape == (2, 4)
     assert "embedding in-process" in capsys.readouterr().out
