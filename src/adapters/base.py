@@ -69,6 +69,16 @@ class Edge:
     # resolution: call_resolver restricts candidates to those owned by a type of this name
     # and only a unique match resolves — a wrong hint can fail to match, never fabricate an
     # edge. Read exclusively by call_resolver; inert everywhere else.
+    bound_module: Optional[str] = None
+    # ADR-044, CALLS: the import specifier (as written in this file's IMPORTS edge) that the
+    # callee name — or, for a member call, its receiver — is bound to, when EVERY call site
+    # this edge collapses binds through that same import. None if unbound or mixed.
+    member_call: Optional[bool] = None
+    # ADR-044, CALLS: True if any collapsed site is a member call on a receiver that is not an
+    # import (`self.x()`, `store.get()`), where "one candidate in an imported file" is unsound.
+    # None = an adapter that does not compute it; the resolver keeps its pre-ADR-044 behavior.
+    external: Optional[bool] = None
+    # ADR-044, IMPORTS: True for a dependency, False for an in-repo module, None unknown.
 
 
 @dataclass

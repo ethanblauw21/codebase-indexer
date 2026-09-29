@@ -198,14 +198,87 @@ def _extract_context_edges(node: Node, src: bytes, enclosing_fqn: str) -> list[E
     return edges
 
 
-def _extract_calls(node: Node, src: bytes, lang: Language) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
+def _import_bindings(root: Node, src: bytes) -> dict[str, Optional[str]]:
+    """This file's `local name -> import specifier` map (ADR-044 §1).
+
+    Default (`import X from "m"`), namespace (`* as ns`) and named imports (`{ a, b as c }`)
+    each bind their local name to the specifier. A name two imports bind maps to None.
+    """
+    bindings: dict[str, Optional[str]] = {}
+
+    def bind(name: str, spec: str) -> None:
+        bindings[name] = spec if bindings.get(name, spec) == spec else None
+
+    for stmt in root.children:
+        if stmt.type != "import_statement":
+            continue
+        source = stmt.child_by_field_name("source")
+        clause = next((c for c in stmt.children if c.type == "import_clause"), None)
+        if source is None or clause is None:
+            continue
+        spec = node_text(source, src)[1:-1]     # the quotes; the IMPORTS edge holds the fragment
+        for c in clause.children:
+            if c.type == "identifier":
+                bind(node_text(c, src), spec)
+            elif c.type == "namespace_import":
+                ident = next((i for i in c.children if i.type == "identifier"), None)
+                if ident is not None:
+                    bind(node_text(ident, src), spec)
+            elif c.type == "named_imports":
+                for s in c.children:
+                    if s.type == "import_specifier":
+                        local = s.child_by_field_name("alias") or s.child_by_field_name("name")
+                        if local is not None:
+                            bind(node_text(local, src), spec)
+    return bindings
+
+
+_UNBOUND = object()
+
+
+def _receiver_root(node: Node) -> Optional[Node]:
+    """The leftmost identifier of `a.b.c`, or None when the chain starts elsewhere
+    (`this.x`, `f().x`, `a[0].x`)."""
+    while node.type == "member_expression":
+        node = node.child_by_field_name("object")
+        if node is None:
+            return None
+    return node if node.type == "identifier" else None
+
+
+def _extract_calls(
+    node: Node, src: bytes, lang: Language, bindings: Optional[dict[str, Optional[str]]] = None,
+) -> list[tuple[str, Optional[str], bool]]:
+    """(callee name, bound_module, member_call) per distinct callee, in first-seen order.
+
+    ADR-044 §1, as in the Python adapter: `bound_module` survives only when every collapsed
+    site binds through the same import; `member_call` is True when any site is a method call
+    on something that is not an import.
+    """
+    bindings = bindings or {}
+    order: list[str] = []
+    sites: dict[str, list[tuple[object, bool]]] = {}
     for n, _ in run_query(lang, _CALL_QUERY, node):
         name = node_text(n, src)
-        if name not in seen:
-            seen.add(name)
-            result.append(name)
+        parent = n.parent
+        if parent is not None and parent.type == "member_expression":
+            obj = parent.child_by_field_name("object")
+            head = _receiver_root(obj) if obj is not None else None
+            spec = bindings.get(node_text(head, src), _UNBOUND) if head is not None else _UNBOUND
+            site = (spec, spec is _UNBOUND)
+        else:
+            site = (bindings.get(name, _UNBOUND), False)
+        if name not in sites:
+            order.append(name)
+            sites[name] = []
+        sites[name].append(site)
+
+    result = []
+    for name in order:
+        specs = {spec for spec, _ in sites[name]}
+        only = next(iter(specs)) if len(specs) == 1 else _UNBOUND
+        result.append((name, only if isinstance(only, str) else None,
+                       any(member for _, member in sites[name])))
     return result
 
 
@@ -228,7 +301,8 @@ class _WebAdapter:
             for n, _ in run_query(lang, _IMPORT_QUERY, root)
         ]
 
-        symbols, call_edges, symbol_types = self._extract_symbols(root, src, path, lang, ext)
+        symbols, call_edges, symbol_types = self._extract_symbols(
+            root, src, path, lang, ext, _import_bindings(root, src))
         references = self._extract_references(root, src, lang, symbols)
 
         return ParseResult(
@@ -260,6 +334,7 @@ class _WebAdapter:
         file_path: str,
         lang: Language,
         ext: str,
+        bindings: Optional[dict[str, Optional[str]]] = None,
     ) -> tuple[list[Symbol], list[Edge], list[SymbolType]]:
         symbols:      list[Symbol]     = []
         edges:        list[Edge]       = []
@@ -295,8 +370,9 @@ class _WebAdapter:
             )
             symbols.append(sym)
             scope_node = call_scope or node
-            for call_name in _extract_calls(scope_node, src, lang):
-                edges.append(Edge(source_fqn=fqn, target=call_name, kind="call"))
+            for call_name, bound, member in _extract_calls(scope_node, src, lang, bindings):
+                edges.append(Edge(source_fqn=fqn, target=call_name, kind="call",
+                                  bound_module=bound, member_call=member))
             edges.extend(_extract_context_edges(scope_node, src, fqn))
             if class_ctx:
                 class_fqn = build_fqn(file_path, None, class_ctx)
@@ -427,8 +503,10 @@ class _WebAdapter:
                             text          = node_text(node, src),
                         )
                         symbols.append(sym)
-                        for call_name in _extract_calls(value_node, src, lang):
-                            edges.append(Edge(source_fqn=fqn, target=call_name, kind="call"))
+                        for call_name, bound, member in _extract_calls(
+                                value_node, src, lang, bindings):
+                            edges.append(Edge(source_fqn=fqn, target=call_name, kind="call",
+                                              bound_module=bound, member_call=member))
                         edges.extend(_extract_context_edges(value_node, src, fqn))
                         if class_ctx:
                             class_fqn = build_fqn(file_path, None, class_ctx)
