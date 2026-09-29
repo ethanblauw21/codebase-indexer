@@ -93,8 +93,8 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-057](#b-057) | A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild | incident, 2026-09-29 | S | shaped |
 | [B-058](#b-058) | Moving a symbol's line numbers re-summarizes it, because the summary cache is keyed on its `Lines:` header | @edb, 2026-09-29 | S | promoted → ADR-045 |
 | [B-059](#b-059) | A crash mid-migration can empty the edges graph, and three places swallow failures silently (#55, #54) | 2026-09-27 assessment; @edb, 2026-09-29 | S | promoted → ADR-046 |
-| [B-060](#b-060) | Tool calls read loose index globals that a swap can change mid-call, block the event loop, and hold a second copy of the index (#52, #53, #63) | 2026-09-27 assessment; @edb, 2026-09-29 | M | shaped |
-| [B-061](#b-061) | When the model host is unreachable, the fallback may load a second model copy on the 8 GB card (#66, suspected) | 2026-09-27 assessment; @edb, 2026-09-29 | S–M | raw |
+| [B-060](#b-060) | Tool calls read loose index globals that a swap can change mid-call, block the event loop, and hold a second copy of the index (#52, #53, #63) | 2026-09-27 assessment; @edb, 2026-09-29 | M | promoted → ADR-047 |
+| [B-061](#b-061) | When the model host is unreachable, the fallback may load a second model copy on the 8 GB card (#66, suspected) | 2026-09-27 assessment; @edb, 2026-09-29 | S–M | promoted → ADR-048 |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -1929,7 +1929,7 @@ process-wide `warnings.filterwarnings("ignore")`; `MCPServer` has two `except sq
 ### B-060 — Tool calls read loose index globals that a swap can change mid-call
 
 **Source:** GitHub #52, #53 and #63 (2026-09-27 project assessment); @edb, 2026-09-29 ·
-**Status:** shaped · **Size:** M
+**Status:** promoted → ADR-047 · **Size:** M
 
 One shipping unit, because all three come from the index being loose module globals in
 `MCPServer.py`:
@@ -1952,7 +1952,7 @@ away. This is also the first step of #62 (split `MCPServer.py`).
 ### B-061 — The model host fallback may load a second model copy on the 8 GB card
 
 **Source:** GitHub #66 (2026-09-27 project assessment, suspected, not reproduced); @edb,
-2026-09-29 · **Status:** raw · **Size:** S–M
+2026-09-29 · **Status:** promoted → ADR-048 · **Size:** S–M
 
 When the host can't be reached, `model_client` falls back to in-process models. If an MCP
 server already holds a warm embedder, that is a second ~3 GB copy on the card ADR-028 exists to
