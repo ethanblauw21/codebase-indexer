@@ -1,6 +1,6 @@
 # ADR-047: One Index State per Tool Call, Run off the Event Loop
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-29
 **Branch:** `feature/adr-047-index-state`
 **Reviewer:** @edb
