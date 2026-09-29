@@ -51,8 +51,11 @@ def _server_instructions(repo_path: str | None = None) -> str:
                 con.close()
             commit = meta.get("last_indexed_commit")
             verified = meta.get("last_verified_at")
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            # The instructions then say "no finished build yet"; say why (#54).
+            import sys
+            print(f"[MCP] could not read index_meta from {db_path}: {exc}",
+                  file=sys.stderr, flush=True)
     built = (f"commit {commit[:10]}, last verified {verified}" if commit
              else "no finished build yet")
     if ref is not None:
@@ -1610,8 +1613,10 @@ def _reindex(changed_files_only: bool) -> str:
                             "WHERE path = ? AND content_hash = ?",
                             (_cc, _au, _p, _h),
                         )
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            # Files keep the git-backdated stamps the rebuild wrote; say so (#54).
+            print(f"[MCP] could not restore {len(_preserved)} preserved freshness "
+                  f"stamps after the rebuild: {exc}")
 
     mode = "Incremental" if changed_files_only else "Full"
     output = _captured.getvalue().strip()
