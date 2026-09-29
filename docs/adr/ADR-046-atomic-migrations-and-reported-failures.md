@@ -1,6 +1,6 @@
 # ADR-046: Schema Migrations Are Atomic, and Swallowed Failures Are Reported
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-29
 **Branch:** `feature/adr-046-atomic-migrations`
 **Reviewer:** @edb
