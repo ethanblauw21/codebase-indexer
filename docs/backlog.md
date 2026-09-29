@@ -1865,8 +1865,7 @@ gives up on a request after a fixed 60 s and kills the server, which cut both re
 Result: 25 of 158 files, no tier vector files, and a backup that couldn't restore anything.
 Recovered with a full rebuild (`MCPServer.reindex(False)` in-process). It took about 3 min
 because all 3,114 summaries were still cached in `graph.db`, and the result matched the prior
-index exactly (158 files, 2,476 chunks, vectors = rows). A watchdog-less gap followed: the
-killed server had held `watch.lock`.
+index exactly (158 files, 2,476 chunks, vectors = rows).
 
 **Two defects, independent:**
 - **The backup is deleted on the assumption that it's stale** (`MCPServer._snapshot_index`).
