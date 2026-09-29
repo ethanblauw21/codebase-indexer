@@ -182,6 +182,15 @@ branch with the two hints nulled.
   Gantt, 1,064 TS: 684 resolved, 362 external. V2, 2,865 TS: 1,881 resolved (was 538), 981 external.
 - Follow-up number (Alternatives, row 4): unbound member calls that still resolve through
   "unique repo-wide": 511 here, 114 on Gantt, 9 on V2.
+- **Retrieval: unchanged.** Stack: `study/bge.base` from the 2026-09-25 chunk-shape study (PR
+  #42), which is the shipped shape on BAAI/bge-code-v1. Repos: p-queue, zustand, click, and
+  held-out lru-cache, bullmq. Setup: arm B (graph on, reranker off), summaries on, queries
+  embedded on CPU. Two copies with byte-identical FAISS and chunks, one with stored edges and one
+  with this branch's. The CALLS resolutions differ in 120 edges across click, bullmq and zustand,
+  yet **0 of 310 queries changed** in any grade (orig, intent, file/any, file/whole). This
+  matches the standing finding that the graph step is inert under RRF without a reranker. The
+  graph tools (blast radius, test coverage, communities, `verify_candidate_edges`) are where
+  this ADR shows. Script: `gpu-crash-repro/adr044_retrieval_bge.py`.
 - Resolution harness: Python baseline rate 0.25 / precision 0.50 → typed 0.75 / 1.00. TS 0.33 /
   0.33 → 1.00 / 1.00. C# and C++ unchanged at 0.40 → 1.00, precision 1.00.
 
@@ -208,4 +217,4 @@ branch with the two hints nulled.
 - [x] Unit tests (`tests/test_call_shape_resolution.py`, 21): bindings and collapse rules per adapter; classification; module index; round trip; every §3 rule; legacy `.py` and `.ts` rows. `test_import_scoped_tiebreak` moved to `.ts` paths, since a legacy `.py` row no longer import-scopes. Full suite: 667 passed, 1 skipped.
 - [x] Measure on a copy of this repo's index (Results)
 - [x] Measure on copies of TS indexes: GanttWebApp and InventoryApp-V2 (Results)
-- [ ] Retrieval check before/after
+- [x] Retrieval check before/after: **no query moved** (Results)
