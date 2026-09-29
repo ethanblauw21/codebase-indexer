@@ -60,7 +60,10 @@ result's line range (`_CHUNK_LINES_RE`). And the summary doesn't depend on it: *
 
 **Better:** an edit that inserts or removes lines no longer re-summarizes the unchanged symbols
 below it. Replaying the GanttWebApp update against the cache as it stood before the run: **953
-LLM calls with the old key, 596 with the new one, 357 fewer (37%).** No summary is regenerated
+LLM calls with the old key, 596 with the new one, 357 fewer (37%).** In time it is much less,
+because the calls saved are all short tier-1 prompts. Timing the same prompts through the model
+host: **879 s of summarizing with the old key, 771 s with the new one, 108 s saved (12%).** Tier 2
+and 3 are 276 of the remaining calls but 596 s of the 771. No summary is regenerated
 by the upgrade: the migration takes 0.07 s on GanttWebApp's database, and all 3,501 chunks find
 their summary under the new key.
 
@@ -92,4 +95,4 @@ their summary under the new key.
 - [x] `db.summary_cache_key`, `SUMMARY_KEY_VERSION`; `incremental_indexer.chunk_text_hash` delegates to it
 - [x] `CodeDB._migrate_summary_keys`, once per database via `index_meta.summary_key`
 - [x] Tests (`tests/test_summary_cache_key.py`, 9): moved symbol keeps its key; changed code, tags or type change it; headerless text keys as before; both passes agree; the real tier-1 builder with two lines inserted above a function; migration re-keys, keeps old rows, runs once, marks a fresh database. Full suite 650 passed, 1 skipped; flake8 clean.
-- [x] Replay of the 2026-09-29 GanttWebApp update: 953 → 596 LLM calls. Migration on a copy of its database: 0.07 s, 3,501 / 3,501 chunks keep their summary.
+- [x] Replay of the 2026-09-29 GanttWebApp update: 953 → 596 LLM calls; timed through the model host, 879 s → 771 s of summarizing (−12%). Migration on a copy of its database: 0.07 s, 3,501 / 3,501 chunks keep their summary.
