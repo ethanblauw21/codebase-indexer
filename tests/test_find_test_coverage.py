@@ -23,9 +23,11 @@ def _docs(*paths):
 
 @pytest.fixture
 def stub_index(monkeypatch):
+    state = SimpleNamespace(doc_store=None)
+
     def install(*paths):
-        monkeypatch.setattr(M, "doc_store", SimpleNamespace(docs=_docs(*paths)))
-    monkeypatch.setattr(M, "_ensure_indexes", lambda: None)
+        state.doc_store = SimpleNamespace(docs=_docs(*paths))
+    monkeypatch.setattr(M, "_ensure_indexes", lambda: state)
     monkeypatch.setattr(M, "_search", lambda q, top_n=10: [])
     return install
 

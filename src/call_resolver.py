@@ -28,6 +28,18 @@ past it would risk a wrong edge (§2, prefer-unknown).
     3. import-scoped     — exactly one candidate in a file the source file IMPORTS.
     4. else              — 0 candidates (external) or still ≥2 (collision) → leave NULL.
 
+**Bound** (ADR-044) — the adapter recorded that the callee, or its receiver, is bound to one
+of the file's imports (``bound_module``). That import decides the scope, before the order above:
+    - a dependency (``external`` = 1)  → external, unresolved, whatever the repo defines.
+    - in-repo, resolved to a file      → exactly one candidate in that file. When the file has
+      none (a barrel that only re-exports), the unique repo-wide rule alone may still apply.
+    - in-repo but unresolved           → the unique repo-wide rule alone.
+    - unknown                          → unresolved (prefer-unknown).
+An unbound member call (``member_call`` = 1, ``self.x()`` / ``store.get()``) skips the
+import-scoped step: nothing says the method lives in an imported file. Edges from before
+ADR-044 (``member_call`` NULL, and every edge of an adapter that does not compute it) resolve
+as before, except that a ``.py`` source skips import-scoping, which it never reached before.
+
 The pass recomputes **all** CALLS edges each run, so a resolution is demoted back to NULL if
 a later-added symbol makes its name ambiguous — a stale resolution never outlives the
 uniqueness that justified it (ADR-021 §3).
@@ -80,26 +92,30 @@ def resolve_call_edges(db) -> dict:
     ):
         owner_of[member_fqn] = type_fqn
 
-    # importing file path → set of imported file ids (IMPORTS.resolved_target is a path)
+    # importing file path → set of imported file ids (IMPORTS.resolved_target is a path), and
+    # (importing file, specifier) → (imported file id, external) for bound calls (ADR-044)
     imported_ids: dict[str, set[int]] = defaultdict(set)
-    for src, rt in conn.execute(
-        "SELECT source_fqn, resolved_target FROM edges "
-        "WHERE kind = 'IMPORTS' AND resolved_target IS NOT NULL"
+    import_of: dict[tuple[str, str], tuple[int | None, int | None]] = {}
+    for src, target, rt, external in conn.execute(
+        "SELECT source_fqn, target, resolved_target, external FROM edges WHERE kind = 'IMPORTS'"
     ):
-        fid = path_to_id.get(rt)
+        fid = path_to_id.get(rt) if rt is not None else None
         if fid is not None:
             imported_ids[src].add(fid)
+        import_of[(src, target)] = (fid, external)
 
     updates: list[tuple[str | None, float | None, int]] = []
-    stats = {"resolved": 0, "typed": 0, "ambiguous": 0, "external": 0}
+    stats = {"resolved": 0, "typed": 0, "ambiguous": 0, "external": 0,
+             "bound_scoped": 0, "bound_external": 0}
 
-    for eid, source_fqn, bare, receiver_type, confidence in conn.execute(
-        "SELECT id, source_fqn, target, receiver_type, confidence "
+    for eid, source_fqn, bare, receiver_type, confidence, bound, member in conn.execute(
+        "SELECT id, source_fqn, target, receiver_type, confidence, bound_module, member_call "
         "FROM edges WHERE kind = 'CALLS'"
     ):
         cands = by_name.get(bare, [])
         resolved: str | None = None
         new_conf: float | None = confidence   # preserve any pre-set confidence by default
+        src_file = _source_file(source_fqn)
 
         if receiver_type:
             # ADR-011: restrict to candidates owned by a type whose name matches the hint.
@@ -116,16 +132,33 @@ def resolve_call_edges(db) -> dict:
             else:
                 # hint matched zero or several: unknown, and NO positional fallback.
                 stats["ambiguous"] += 1
+        elif bound is not None:
+            # ADR-044 §3: the import the call goes through decides the scope.
+            fid, external = import_of.get((src_file, bound), (None, None))
+            in_file = [fqn for fqn, cid in cands if fid is not None and cid == fid]
+            if external == 1:
+                stats["bound_external"] += 1
+            elif external == 0 and len(in_file) == 1:
+                resolved = in_file[0]
+                stats["bound_scoped"] += 1
+            elif external == 0 and not in_file and len(cands) == 1:
+                resolved = cands[0][0]        # a barrel, or an import that did not resolve
+                stats["resolved"] += 1
+            elif not cands:
+                stats["external"] += 1
+            else:
+                stats["ambiguous"] += 1
         elif len(cands) == 1:
             resolved = cands[0][0]
             stats["resolved"] += 1
         elif len(cands) > 1:
-            src_id = path_to_id.get(_source_file(source_fqn))
+            src_id = path_to_id.get(src_file)
             same = [fqn for fqn, fid in cands if fid == src_id]
             if len(same) == 1:
                 resolved = same[0]
-            else:
-                imp = imported_ids.get(_source_file(source_fqn), set())
+            elif member == 0 or (member is None and not src_file.endswith(".py")):
+                # Import-scoping is sound only for a bare call (ADR-044 §3).
+                imp = imported_ids.get(src_file, set())
                 scoped = [fqn for fqn, fid in cands if fid in imp]
                 if len(scoped) == 1:
                     resolved = scoped[0]

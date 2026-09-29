@@ -59,20 +59,40 @@ def test_no_regression_and_lift_holds_vs_baseline():
     assert not problems, "resolution conformance:\n  " + "\n  ".join(problems)
 
 
+# ADR-011's languages: the hint is a receiver type. ADR-044's: the hint is an import binding,
+# whose ADR-021 baseline mis-resolves by design (the defect ADR-044 fixes).
+_RECEIVER_TYPED = ("cpp", "csharp")
+
+
 def test_receiver_typing_lifts_rate_with_precision_held():
     """Per language, spelled out independently of the committed baseline file: the receiver-
     type hint resolves strictly MORE of the resolvable universe, and neither regime ever
     mis-resolves (the correctness gate, §2)."""
     by_lang = re.run()["by_language"]
-    assert by_lang, "no languages scored"
-    for lang, regimes in by_lang.items():
-        typed, base = regimes["typed"], regimes["baseline"]
+    assert set(_RECEIVER_TYPED) <= set(by_lang), "a receiver-typed language lost its fixtures"
+    for lang in _RECEIVER_TYPED:
+        typed, base = by_lang[lang]["typed"], by_lang[lang]["baseline"]
         assert typed["precision"] == 1.0, f"{lang}: typed precision below 1.0 — a wrong edge"
         assert base["precision"] == 1.0, f"{lang}: baseline mis-resolved (should prefer-unknown)"
         assert typed["rate"] > base["rate"], (
             f"{lang}: no lift — typed rate {typed['rate']} <= baseline {base['rate']}"
         )
         assert typed["wrong"] == 0, f"{lang}: typed regime emitted {typed['wrong']} wrong edge(s)"
+
+
+def test_import_binding_lifts_precision_without_costing_rate():
+    """ADR-044 §4, per import-bound language: no wrong edge with the hints, no coverage lost
+    to them, and the baseline's wrong edges (a call into a dependency resolved to an in-repo
+    namesake) are exactly what the hints remove."""
+    by_lang = re.run()["by_language"]
+    bound = [lang for lang in by_lang if lang not in _RECEIVER_TYPED]
+    assert {"python", "typescript"} <= set(bound)
+    for lang in bound:
+        typed, base = by_lang[lang]["typed"], by_lang[lang]["baseline"]
+        assert typed["wrong"] == 0, f"{lang}: typed regime emitted {typed['wrong']} wrong edge(s)"
+        assert typed["rate"] >= base["rate"], f"{lang}: the hints cost coverage"
+        assert base["wrong"] > 0, (
+            f"{lang}: the baseline mis-resolves nothing — the fixture no longer shows defect 3")
 
 
 def test_baseline_leaves_ambiguous_names_unresolved():

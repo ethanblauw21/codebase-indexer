@@ -23,6 +23,10 @@ _IMPORT_QUERY = """
 (import_from_statement module_name: (dotted_name) @path)
 """
 
+# ADR-044 §1: `from .x import y` parses its module as a relative_import, which the query
+# above never matched, so every relative import was dropped.
+_RELATIVE_IMPORT_QUERY = "(import_from_statement module_name: (relative_import) @rel)"
+
 _CALL_QUERY = """
 (call
   function: [
@@ -44,14 +48,140 @@ def _is_overload(node: Node, src: bytes) -> bool:
                     for c in parent.children if c.type == "decorator"))
 
 
-def _extract_calls(node: Node, src: bytes) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
+def _relative_import_targets(root: Node, src: bytes) -> list[str]:
+    """Import targets for relative imports, as written: `.x`, `..a.b` (ADR-044 §1).
+
+    Dots only (`from . import a, b as c`) gives one target per imported name (`.a`, `.b`),
+    because Python binds the submodule when one exists and a bare `.` names nothing
+    specific. A wildcard (`from . import *`) has no names and keeps the bare prefix.
+    """
+    targets: list[str] = []
+    for rel, _ in run_query(_GRAMMAR, _RELATIVE_IMPORT_QUERY, root):
+        spec = node_text(rel, src)
+        if any(c.type == "dotted_name" for c in rel.children):
+            targets.append(spec)
+            continue
+        names = []
+        for n in rel.parent.children_by_field_name("name"):
+            if n.type == "aliased_import":
+                n = n.child_by_field_name("name")
+            names.append(spec + node_text(n, src))
+        targets.extend(names or [spec])
+    return targets
+
+
+def _import_bindings(root: Node, src: bytes) -> dict[str, Optional[str]]:
+    """This file's `local dotted name -> import specifier` map (ADR-044 §1).
+
+    The specifier is the IMPORTS edge target the name came from, so the resolver can look
+    that edge up. `import a.b` binds `a.b` and `a`; `import a.b as x` binds `x`;
+    `from m import n as k` binds `k` to `m`. A name bound by two different imports maps to
+    None: it is still an import, but which one is unknown. Wildcards bind nothing.
+    """
+    # A name a statement binds outright beats the `a` that `import a.b` implies.
+    exact: dict[str, Optional[str]] = {}
+    implied: dict[str, Optional[str]] = {}
+
+    def bind(name: str, spec: str, is_exact: bool = True) -> None:
+        tier = exact if is_exact else implied
+        tier[name] = spec if tier.get(name, spec) == spec else None
+
+    def walk(node: Node) -> None:
+        if node.type == "import_statement":
+            for n in node.children_by_field_name("name"):
+                if n.type == "aliased_import":
+                    path, alias = n.child_by_field_name("name"), n.child_by_field_name("alias")
+                    if path is not None and alias is not None:
+                        bind(node_text(alias, src), node_text(path, src))
+                elif n.type == "dotted_name":
+                    spec = node_text(n, src)
+                    bind(spec, spec)
+                    parts = spec.split(".")
+                    for i in range(1, len(parts)):
+                        bind(".".join(parts[:i]), spec, is_exact=False)
+            return
+        if node.type == "import_from_statement":
+            mod = node.child_by_field_name("module_name")
+            if mod is None:
+                return
+            spec = node_text(mod, src)
+            dots_only = (mod.type == "relative_import"
+                         and not any(c.type == "dotted_name" for c in mod.children))
+            for n in node.children_by_field_name("name"):
+                local = n
+                if n.type == "aliased_import":
+                    local = n.child_by_field_name("alias")
+                    n = n.child_by_field_name("name")
+                if local is None or n is None:
+                    continue
+                # `from . import a` is its own edge, `.a` (see _relative_import_targets).
+                bind(node_text(local, src), spec + node_text(n, src) if dots_only else spec)
+            return
+        for child in node.children:
+            walk(child)
+
+    walk(root)
+    return {**implied, **exact}
+
+
+def _dotted(node: Node, src: bytes) -> Optional[str]:
+    """`a` or `a.b.c` when the node is a plain identifier chain, else None (`f().x`, `a[0]`)."""
+    if node.type == "identifier":
+        return node_text(node, src)
+    if node.type == "attribute":
+        obj, attr = node.child_by_field_name("object"), node.child_by_field_name("attribute")
+        head = _dotted(obj, src) if obj is not None else None
+        if head is not None and attr is not None:
+            return f"{head}.{node_text(attr, src)}"
+    return None
+
+
+_UNBOUND = object()
+
+
+def _bound_spec(name: Optional[str], bindings: dict[str, Optional[str]]):
+    """The binding of the longest prefix of `name` that is an import, else _UNBOUND."""
+    if name is None:
+        return _UNBOUND
+    parts = name.split(".")
+    for i in range(len(parts), 0, -1):
+        prefix = ".".join(parts[:i])
+        if prefix in bindings:
+            return bindings[prefix]
+    return _UNBOUND
+
+
+def _extract_calls(
+    node: Node, src: bytes, bindings: dict[str, Optional[str]]
+) -> list[tuple[str, Optional[str], bool]]:
+    """(callee name, bound_module, member_call) per distinct callee, in first-seen order.
+
+    ADR-044 §1: one CALLS edge collapses every site with the same callee name, so
+    `bound_module` is kept only when every site binds through the same import, and
+    `member_call` is True when any site calls a method on something that is not an import.
+    """
+    order: list[str] = []
+    sites: dict[str, list[tuple[object, bool]]] = {}
     for n, _ in run_query(_GRAMMAR, _CALL_QUERY, node):
         name = node_text(n, src)
-        if name not in seen:
-            seen.add(name)
-            result.append(name)
+        parent = n.parent
+        if parent is not None and parent.type == "attribute":
+            recv = parent.child_by_field_name("object")
+            spec = _bound_spec(_dotted(recv, src) if recv is not None else None, bindings)
+            site = (spec, spec is _UNBOUND)
+        else:
+            site = (_bound_spec(name, bindings), False)
+        if name not in sites:
+            order.append(name)
+            sites[name] = []
+        sites[name].append(site)
+
+    result = []
+    for name in order:
+        specs = {spec for spec, _ in sites[name]}
+        only = next(iter(specs)) if len(specs) == 1 else _UNBOUND
+        bound = only if isinstance(only, str) else None
+        result.append((name, bound, any(member for _, member in sites[name])))
     return result
 
 
@@ -65,9 +195,12 @@ class PythonAdapter:
         import_edges = [
             Edge(source_fqn=path, target=node_text(n, src), kind="import")
             for n, _ in run_query(_GRAMMAR, _IMPORT_QUERY, root)
+        ] + [
+            Edge(source_fqn=path, target=t, kind="import")
+            for t in _relative_import_targets(root, src)
         ]
 
-        symbols, call_edges = self._extract_symbols(root, src, path)
+        symbols, call_edges = self._extract_symbols(root, src, path, _import_bindings(root, src))
         references          = self._extract_references(root, src, symbols)
 
         return ParseResult(
@@ -105,8 +238,10 @@ class PythonAdapter:
     # ------------------------------------------------------------------
 
     def _extract_symbols(
-        self, root: Node, src: bytes, file_path: str
+        self, root: Node, src: bytes, file_path: str,
+        bindings: Optional[dict[str, Optional[str]]] = None,
     ) -> tuple[list[Symbol], list[Edge]]:
+        bindings = bindings or {}
         symbols: list[Symbol] = []
         rank_of: dict[int, tuple[int, int]] = {}
         edges:   list[Edge]   = []
@@ -173,8 +308,9 @@ class PythonAdapter:
                     # window whether a property's logic is in its getter or its setter.
                     rank_of[id(sym)] = (1 if _is_overload(node, src) else 0, -len(sym.text))
                     symbols.append(sym)
-                    for call_name in _extract_calls(node, src):
-                        edges.append(Edge(source_fqn=fqn, target=call_name, kind="call"))
+                    for call_name, bound, member in _extract_calls(node, src, bindings):
+                        edges.append(Edge(source_fqn=fqn, target=call_name, kind="call",
+                                          bound_module=bound, member_call=member))
                     if class_ctx:
                         class_fqn = build_fqn(file_path, None, class_ctx)
                         edges.append(Edge(source_fqn=class_fqn, target=fqn, kind="owns"))

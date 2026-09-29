@@ -42,7 +42,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-005](#b-005) | Stale "150+ languages" / "ADR-004 tiers" pointers in the research docs | doc sweep, 2026-07-27 | S | raw |
 | [B-006](#b-006) | Supply-chain release verification (SBOM, signing) | study §9.6 | L | raw · trigger-gated |
 | [B-007](#b-007) | Verifiable retrieval — Merkle proofs over served index results | study §9.6 | L | raw · trigger-gated |
-| [B-008](#b-008) | Indexer crashes on a Windows `cp1252` console before indexing a single file | found 2026-07-27 | S | shaped |
+| [B-008](#b-008) | Indexer crashes on a Windows `cp1252` console before indexing a single file | found 2026-07-27 | S | **done** (#79, ADR-043) |
 | [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
 | [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
@@ -296,7 +296,14 @@ and would supply the structure this builds on.
 <a id="b-008"></a>
 ### B-008 — Indexer crashes on a Windows `cp1252` console
 
-**Source:** found 2026-07-27, launching a CPU reindex · **Status:** shaped · **Size:** S
+**Source:** found 2026-07-27, launching a CPU reindex · **Status:** done (#79, [ADR-043](adr/ADR-043-utf8-cli-output.md)) · **Size:** S
+
+> **Fixed 2026-09-29 (ADR-043).** Hit again on 2026-09-28 with `python src/incremental_indexer.py > log`.
+> The server had already fixed it for itself (ADR-036); the CLI never did. The fix takes the first
+> option below: `code-indexer`'s `main()` reconfigures stdout/stderr to UTF-8 first, through the
+> server's helper, which now lives in `src/utf8_stdio.py`. One correction to the text below: a
+> real console window was never affected, since Python gives it UTF-8 (PEP 528). Only pipes and
+> redirected files get cp1252.
 
 `run_incremental()` prints a banner containing box-drawing characters
 (`src/incremental_indexer.py:605`). When stdout is not UTF-8 — a stock Windows console, or any piped

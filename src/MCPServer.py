@@ -1,19 +1,24 @@
+import contextvars
+import functools
 import os
 import re
 import shutil
 import sqlite3
 import threading
+from dataclasses import dataclass, field
+
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
-# H4 — watchdog reload guard
+# Index state (ADR-047)
 # ---------------------------------------------------------------------------
-# Build new index objects before acquiring the lock (IO-bound, can be slow),
-# then swap the globals atomically.  In-flight tool calls that already hold a
-# reference to the old FAISS/DocumentStore objects complete against that
-# generation; new calls see the freshly loaded generation.
+# The loaded index is ONE immutable IndexState, swapped as a single reference
+# under _reload_lock. Every tool call binds the state current at its entry
+# (_bind_index) and reads only that one for the rest of the call, so a watchdog
+# or ref-poller swap mid-call can't mix generations (#52): the call finishes
+# against the state it started with, and the next call sees the new one.
 _reload_lock = threading.Lock()
-_index_generation = 0   # incremented on every swap; useful for logging
 
 try:
     from watchdog.observers import Observer
@@ -21,7 +26,7 @@ try:
     _WATCHDOG_AVAILABLE = True
 except ImportError:
     _WATCHDOG_AVAILABLE = False
-from core import jina_tokenizer, MultiIndexManager, DocumentStore
+from core import jina_tokenizer, DocumentStore
 from hybrid_retriever import HybridRetriever, RetrievedChunk
 from iterative_retriever import IterativeRetriever, RetrievalSession
 
@@ -51,8 +56,11 @@ def _server_instructions(repo_path: str | None = None) -> str:
                 con.close()
             commit = meta.get("last_indexed_commit")
             verified = meta.get("last_verified_at")
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            # The instructions then say "no finished build yet"; say why (#54).
+            import sys
+            print(f"[MCP] could not read index_meta from {db_path}: {exc}",
+                  file=sys.stderr, flush=True)
     built = (f"commit {commit[:10]}, last verified {verified}" if commit
              else "no finished build yet")
     if ref is not None:
@@ -82,13 +90,49 @@ def _server_instructions(repo_path: str | None = None) -> str:
 # Initialize MCP Server
 mcp = FastMCP("Local Codebase RAG", instructions=_server_instructions())
 
-# Lazy index state — loaded on first tool call so the MCP handshake
-# completes instantly even when FAISS indexes / doc_store.json are large.
-index_manager = None
-doc_store = None
-t1_index = None
-t2_index = None
-t3_index = None
+@dataclass(frozen=True, eq=False)
+class IndexState:
+    """One loaded generation of the index: everything a tool call reads.
+
+    The retriever owns the only in-memory copy of the chunks (its DocumentStore)
+    and of the FAISS indexes. The server used to load a second copy of both for
+    its own scans and counts (#63).
+    """
+    retriever: "HybridRetriever"
+    stamp: tuple                 # _faiss_stamp() taken before this state was loaded
+    generation: int
+    _iterative: list = field(default_factory=list, repr=False)
+    _iterative_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    @property
+    def doc_store(self) -> "DocumentStore":
+        return self.retriever._doc_store
+
+    @property
+    def db(self):                # the retriever's CodeDB
+        return self.retriever._db
+
+    @property
+    def tiers(self) -> tuple:
+        r = self.retriever
+        return (r._tier1, r._tier2, r._tier3)
+
+    def iterative(self) -> "IterativeRetriever":
+        """The iterative retriever over this generation, built on first use."""
+        with self._iterative_lock:
+            if not self._iterative:
+                self._iterative.append(IterativeRetriever(self.retriever, self.retriever._db))
+            return self._iterative[0]
+
+
+# Lazy: loaded on the first tool call, so the MCP handshake completes at once
+# even when the FAISS indexes are large.
+_state: IndexState | None = None
+_generation = 0
+_load_lock = threading.Lock()        # one initial load, even if two calls race to it
+# The state a tool call bound at entry (ADR-047). Unset outside a tool call.
+_bound: contextvars.ContextVar["IndexState | None"] = contextvars.ContextVar(
+    "index_state", default=None)
 
 
 def _faiss_stamp(index_dir: str | None = None) -> tuple:
@@ -110,24 +154,92 @@ def _faiss_stamp(index_dir: str | None = None) -> tuple:
     return tuple(stamp)
 
 
-_loaded_stamp: tuple | None = None   # _faiss_stamp() when the in-memory indexes were loaded
+def _load_state() -> IndexState:
+    """Build a new generation from disk (slow: reads FAISS files and SQLite)."""
+    global _generation
+    stamp = _faiss_stamp()      # taken first: a save during the load triggers one more reload
+    retriever = HybridRetriever()
+    with _reload_lock:
+        _generation += 1
+        return IndexState(retriever=retriever, stamp=stamp, generation=_generation)
 
 
-def _ensure_indexes():
-    global index_manager, doc_store, t1_index, t2_index, t3_index, _loaded_stamp
-    if doc_store is not None:
-        # ADR-038 (B-033 fix 3): another process (the watching server, or a terminal
-        # build) saved since this server loaded; serve the new vectors, not the old.
-        if _loaded_stamp is not None and _faiss_stamp() != _loaded_stamp:
-            print("[MCP] The index was saved by another process; reloading.")
-            _reload_indexes()
-        return
-    _loaded_stamp = _faiss_stamp()
-    index_manager = MultiIndexManager()
-    doc_store = DocumentStore()
-    t1_index = index_manager.load_or_create("tier1_surgical")
-    t2_index = index_manager.load_or_create("tier2_component")
-    t3_index = index_manager.load_or_create("tier3_architectural")
+def _ensure_indexes() -> IndexState:
+    """The current state, loading it on first use and reloading it when another
+    process has saved since it was loaded."""
+    global _state
+    st = _state
+    if st is None:
+        with _load_lock:
+            if _state is None:
+                _state = _load_state()
+            return _state
+    # ADR-038 (B-033 fix 3): another process (the watching server, or a terminal
+    # build) saved since this server loaded; serve the new vectors, not the old.
+    if _faiss_stamp() != st.stamp:
+        print("[MCP] The index was saved by another process; reloading.")
+        _reload_indexes()
+    return _state
+
+
+def _index() -> IndexState:
+    """The state this tool call is reading: the one bound at its entry, or, outside
+    a tool call, the current one."""
+    return _bound.get() or _ensure_indexes()
+
+
+def _bind_index(fn):
+    """Run ``fn`` against one IndexState from start to finish (ADR-047, #52).
+
+    Binds the current state at entry unless the caller already bound one, so a
+    tool that calls another tool reads the same generation.
+    """
+    @functools.wraps(fn)
+    def bound(*args, **kwargs):
+        if _bound.get() is not None:
+            return fn(*args, **kwargs)
+        token = _bound.set(_ensure_indexes())
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _bound.reset(token)
+    return bound
+
+
+# Read tools run one at a time, off the event loop (ADR-047, #53). One at a time,
+# as they always have: they share one SQLite connection and a few lazily built
+# caches. `reindex` is outside this limiter, so a long rebuild doesn't hold up
+# searches, which keep reading the state they bound until the swap.
+_read_limiter: "anyio.CapacityLimiter | None" = None
+
+
+def _tool(*, reads_index: bool = True):
+    """Register ``fn`` as an MCP tool that runs in a worker thread.
+
+    FastMCP calls a plain ``def`` tool directly on the event loop, so one slow
+    call stalled every other request on the server (#53). The registered tool is
+    an ``async`` wrapper that runs the function in a thread. A tool that reads the
+    index is bound to one IndexState and takes the read limiter; `reindex`
+    (``reads_index=False``) does neither: it would only load the index it is
+    about to rebuild, and a rebuild must not hold up searches. The module keeps
+    the plain function, so the TUI and the tests still call it directly.
+    """
+    def register(fn):
+        bound = _bind_index(fn) if reads_index else fn
+
+        @functools.wraps(fn)
+        async def run_in_thread(*args, **kwargs):
+            global _read_limiter
+            call = functools.partial(bound, *args, **kwargs)
+            if not reads_index:
+                return await anyio.to_thread.run_sync(call)
+            if _read_limiter is None:
+                _read_limiter = anyio.CapacityLimiter(1)
+            return await anyio.to_thread.run_sync(call, limiter=_read_limiter)
+
+        mcp.tool()(run_in_thread)
+        return bound
+    return register
 
 def get_clean_scope(doc):
     """
@@ -228,7 +340,7 @@ def _focused_snippet(text: str, query: str) -> tuple[str, tuple[int, int] | None
     return "\n".join(out), span
 
 
-@mcp.tool()
+@_tool()
 def semantic_code_search(query: str) -> str:
     """
     Find code by what it does: "where is X handled", "how does Y work", when you do not
@@ -240,7 +352,6 @@ def semantic_code_search(query: str) -> str:
     runs this same retrieval and groups the results by role.
     """
     print(f"\n[MCP] Tool invoked by LLM for query: '{query}'")
-    _ensure_indexes()
 
     # Candidate generation via the shared RTR surface (ADR-023 §1): multi-tier RRF
     # plus resolved call-graph neighbours + import-corroboration, not FAISS-only.
@@ -283,14 +394,13 @@ def _pack_results(header: str, chunks, count_tokens, max_tokens: int) -> str:
         context += "".join(f"  - {s}\n" for s in skipped)
     return context
 
-@mcp.tool()
+@_tool()
 def find_similar_code(code_snippet: str) -> str:
     """
     Use this tool to find duplicate or mathematically similar code across the project.
     Pass in a raw snippet of code. It will stratify results into Origin, Callers, Parallels, and Weak matches.
     """
     print("\n[MCP] Searching for duplicates/callers of provided snippet...")
-    _ensure_indexes()
     # Shared RTR surface (ADR-023 §1) instead of raw tier-1 FAISS; brings in
     # call-graph neighbours (real callers) the pure-similarity search missed.
     chunks = _search(code_snippet, top_n=15)
@@ -427,7 +537,7 @@ def find_similar_code(code_snippet: str) -> str:
 
     return context
 
-@mcp.tool()
+@_tool()
 def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     """
     Use this tool when planning a refactor.
@@ -436,7 +546,6 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
     2. target_symbol (e.g., 'activeView') - The specific concept, state, or interface being changed.
     """
     print(f"\n[MCP] Analyzing blast radius anchored at '{anchor_file}' for '{target_symbol}'")
-    _ensure_indexes()
     anchor_base = _module_stem(anchor_file)
 
     # Who imports the anchor, and what the anchor imports (the "Primitive Directional
@@ -559,7 +668,7 @@ def analyze_blast_radius(anchor_file: str, target_symbol: str) -> str:
 
     return context
 
-@mcp.tool()
+@_tool()
 def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str, ignore_regex: str = "") -> str:
     """
     Finds code that SHOULD follow a pattern but deviates.
@@ -567,7 +676,6 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
     - ignore_regex: Regex to skip files (e.g., '^on[-A-Z]' for triggers).
     """
     print(f"\n[MCP] Scanning for violations missing '{enforced_symbols_csv}'...")
-    _ensure_indexes()
     enforced_symbols = [s.strip() for s in enforced_symbols_csv.split(',') if s.strip()]
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: structural
     # neighbours + import-corroboration enter the pattern-scan pool. Each candidate
@@ -614,7 +722,7 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
     # surfaced by cosine similarity. Floor score keeps them below the 0.65 threshold so
     # they only pass the existing len(shared_strong) >= 2 relevance gate.
     if strong_keywords:
-        for _kw_doc in doc_store.docs.values():
+        for _kw_doc in _index().doc_store.docs.values():
             _kw_key = f"{_kw_doc['file']}::{_kw_doc['scope']}"
             if _kw_key in _pv_items:
                 continue
@@ -712,13 +820,12 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
 
     return context
 
-@mcp.tool()
+@_tool()
 def trace_data_flow(target_symbol: str) -> str:
     """
     Traces data lifecycle. v11.0: Broad definition lookup + Dynamic Producer Tracing.
     """
     print(f"\n[MCP] Running v11.0 trace for '{target_symbol}'...")
-    _ensure_indexes()
     query_text = f"Definition, usage, and fetching of {target_symbol} get{target_symbol} fetch{target_symbol}"
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
     # call-graph neighbours join the trace pool, so producers/consumers reached
@@ -735,7 +842,7 @@ def trace_data_flow(target_symbol: str) -> str:
         r"(\w*(?:transaction|batch|db|firestore|admin|ref|tx))\.(set|add|update)\(", re.IGNORECASE
     )
     _file_texts: dict[str, str] = {}
-    for _d in doc_store.docs.values():
+    for _d in _index().doc_store.docs.values():
         _fp = _d['file'].replace('\\', '/')
         _file_texts[_fp] = _file_texts.get(_fp, '') + _d['text'] + '\n'
 
@@ -832,7 +939,7 @@ def trace_data_flow(target_symbol: str) -> str:
 
     # --- FIX 2: GENERALIZED DEFINITION LOOKUP ---
     if not buckets["DEFINITIONS"]:
-        for _, doc in doc_store.docs.items():
+        for _, doc in _index().doc_store.docs.items():
             norm_path = doc['file'].replace('\\', '/')
             # Scan all lib, types, and models folders; match both camelCase and PascalCase type names
             if any(x in norm_path for x in ["lib/", "types/", "models/"]) and \
@@ -854,17 +961,10 @@ def trace_data_flow(target_symbol: str) -> str:
 # investigate_architecture — Agentic high-level investigation tool
 # ---------------------------------------------------------------------------
 
-# Lazy singleton: built on first invocation. Reranking is off by default
-# (see [reranker].enabled in indexer.toml); HybridRetriever() reads that config.
-_hybrid_retriever: "HybridRetriever | None" = None
-_iterative_retriever: "IterativeRetriever | None" = None
-
-
+# The retriever belongs to the IndexState. Reranking is off by default (see
+# [reranker].enabled in indexer.toml); HybridRetriever() reads that config.
 def _get_hybrid_retriever() -> HybridRetriever:
-    global _hybrid_retriever
-    if _hybrid_retriever is None:
-        _hybrid_retriever = HybridRetriever()
-    return _hybrid_retriever
+    return _index().retriever
 
 
 def _search(query: str, top_n: int = 10) -> list[RetrievedChunk]:
@@ -888,7 +988,7 @@ def _search(query: str, top_n: int = 10) -> list[RetrievedChunk]:
 def _db():
     """The shared ``CodeDB`` behind the RTR pipeline — the verdict tools' direct
     edge-graph read for the candidate/resolved split (ADR-017 §7)."""
-    return _get_hybrid_retriever()._db
+    return _index().db
 
 
 def _resolve_symbol_fqns(symbol: str, anchor_file: str = "") -> list[str]:
@@ -978,7 +1078,7 @@ def _module_stem(spec: str) -> str:
 def _texts_by_file() -> dict[str, str]:
     """Every indexed file's chunk text, joined, in one pass over the doc store."""
     parts: dict[str, list[str]] = {}
-    for d in doc_store.docs.values():
+    for d in _index().doc_store.docs.values():
         parts.setdefault(d['file'], []).append(d['text'])
     return {f: "\n".join(p) for f, p in parts.items()}
 
@@ -1026,11 +1126,7 @@ def _import_relations(anchor_file: str, texts: dict[str, str]) -> tuple[set[str]
 
 
 def _get_iterative_retriever() -> IterativeRetriever:
-    global _iterative_retriever
-    if _iterative_retriever is None:
-        base = _get_hybrid_retriever()
-        _iterative_retriever = IterativeRetriever(base, base._db)
-    return _iterative_retriever
+    return _index().iterative()
 
 
 # --- Layer classification (mirrors trace_data_flow logic) ---
@@ -1168,7 +1264,7 @@ def _analyze_risks(chunks: list[RetrievedChunk], concept: str) -> list[str]:
     return deduped
 
 
-@mcp.tool()
+@_tool()
 def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     """
     PREFERRED ENTRY POINT for all architectural investigations.
@@ -1191,7 +1287,6 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
       - Programmatic Architectural Risk Analysis flagging layer/privilege mismatches.
     """
     print(f"\n[MCP] investigate_architecture: '{target_concept}' deep={deep}")
-    _ensure_indexes()
     session: "RetrievalSession | None" = None
 
     if deep:
@@ -1338,7 +1433,7 @@ def _get_test_patterns(source_file: str) -> tuple[list[str], list[str]]:
     return suffixes, globs
 
 
-@mcp.tool()
+@_tool()
 def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     """
     Finds unit tests that semantically cover a source file or symbol.
@@ -1357,7 +1452,6 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
       None     — explicit signal that no coverage was found
     """
     print(f"\n[MCP] find_test_coverage: '{source_file}' symbol='{target_symbol}'")
-    _ensure_indexes()
     norm_source = source_file.lower().replace('\\', '/').split('/')[-1]
     source_base = re.sub(r'\.[^.]+$', '', norm_source)
 
@@ -1374,7 +1468,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
 
     # Collect one representative doc per test file
     test_doc_by_file: dict[str, dict] = {}
-    for doc in doc_store.docs.values():
+    for doc in _index().doc_store.docs.values():
         fp = doc['file'].replace('\\', '/').lower()
         if is_test_file(fp) and fp not in test_doc_by_file:
             test_doc_by_file[fp] = doc
@@ -1450,7 +1544,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     return context
 
 
-@mcp.tool()
+@_tool(reads_index=False)
 def reindex(changed_files_only: bool = False) -> str:
     """
     Rebuilds the index from its source: this folder's files, or, when indexer.toml sets
@@ -1497,7 +1591,6 @@ def _reindex(changed_files_only: bool) -> str:
     import subprocess
     from incremental_indexer import run_incremental, INDEX_DIR, TIER_CONFIGS
     from db import CodeDB
-    _ensure_indexes()
 
     print(f"\n[MCP] reindex: changed_files_only={changed_files_only}")
 
@@ -1610,8 +1703,10 @@ def _reindex(changed_files_only: bool) -> str:
                             "WHERE path = ? AND content_hash = ?",
                             (_cc, _au, _p, _h),
                         )
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            # Files keep the git-backdated stamps the rebuild wrote; say so (#54).
+            print(f"[MCP] could not restore {len(_preserved)} preserved freshness "
+                  f"stamps after the rebuild: {exc}")
 
     mode = "Incremental" if changed_files_only else "Full"
     output = _captured.getvalue().strip()
@@ -1623,7 +1718,7 @@ def _reindex(changed_files_only: bool) -> str:
     )
 
 
-@mcp.tool()
+@_tool()
 def index_status(since: str = "1d", limit: int = 20) -> str:
     """Report index freshness and which files changed recently (ADR-025 §6).
 
@@ -1769,12 +1864,11 @@ def index_status(since: str = "1d", limit: int = 20) -> str:
     # B-028: each FAISS index must hold exactly one vector per chunk row. Since
     # ADR-037 every reindex repairs a difference (a run killed before its save), so a
     # mismatch that survives a reindex is a bug.
-    _ensure_indexes()
     with CodeDB(db_path) as db:
         row_counts = dict(db._conn.execute(
             "SELECT tier, COUNT(*) FROM chunks GROUP BY tier"
         ).fetchall())
-    for tier_num, idx in ((1, t1_index), (2, t2_index), (3, t3_index)):
+    for tier_num, idx in enumerate(_index().tiers, start=1):
         rows_n = row_counts.get(tier_num, 0)
         if idx.ntotal == rows_n:
             lines.append(f"tier{tier_num}_vectors:       {idx.ntotal} (== chunk rows)")
@@ -1799,7 +1893,7 @@ def index_status(since: str = "1d", limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@_tool()
 def find_dead_code(symbol: str, anchor_file: str) -> str:
     """
     Given a symbol and its defining file, determines whether anything in the codebase
@@ -1817,7 +1911,6 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
     explicit "dead code candidate" verdict with the empty category list as evidence.
     """
     print(f"\n[MCP] find_dead_code: symbol='{symbol}' anchor='{anchor_file}'")
-    _ensure_indexes()
     # Files importing the anchor, computed once (B-037).
     texts = _texts_by_file()
     importers, _ = _import_relations(anchor_file, texts)
@@ -1917,7 +2010,7 @@ def find_dead_code(symbol: str, anchor_file: str) -> str:
     return context
 
 
-@mcp.tool()
+@_tool()
 def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
     """
     The second pass behind an ADVISORY / INSUFFICIENT verdict (ADR-017 §7.1).
@@ -1938,7 +2031,6 @@ def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
     Output: one entry per candidate edge — (caller FQN, file:line) + code snippet.
     """
     print(f"\n[MCP] verify_candidate_edges: symbol='{symbol}' anchor='{anchor_file}'")
-    _ensure_indexes()
     db = _db()
     verified_callers, candidate_callers = _caller_evidence(symbol, anchor_file)
 
@@ -1961,7 +2053,7 @@ def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
     return context
 
 
-@mcp.tool()
+@_tool()
 def what_writes(tag: str, include_readers: bool = False) -> str:
     """
     Given a PLC tag, reports EXACTLY which routines write it and at which rungs.
@@ -1992,7 +2084,6 @@ def what_writes(tag: str, include_readers: bool = False) -> str:
     — which is the half you can do from the phone without going online.
     """
     print(f"\n[MCP] what_writes: tag='{tag}' readers={include_readers}")
-    _ensure_indexes()
     db = _db()
 
     writers = db.get_edges_to(tag, "writes")
@@ -2087,7 +2178,7 @@ def what_writes(tag: str, include_readers: bool = False) -> str:
     return out
 
 
-@mcp.tool()
+@_tool()
 def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_csv: str) -> str:
     """
     Given a Firestore collection name, finds every place it is READ without going through
@@ -2108,7 +2199,6 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
       Ambiguous  — reads through an intermediate variable that can't be statically resolved
     """
     print(f"\n[MCP] find_unabstracted_collection_reads: collection='{collection_name}'")
-    _ensure_indexes()
     canonical_symbols = [s.strip() for s in canonical_symbols_csv.split(',') if s.strip()]
 
     # Warn if caller supplied write-path symbols instead of read-path abstractions.
@@ -2164,7 +2254,7 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
         if file_path in seen_files: continue
         seen_files.add(file_path)
 
-        file_full = "".join(d['text'] + "\n" for d in doc_store.docs.values() if d['file'] == file_path)
+        file_full = "".join(d['text'] + "\n" for d in _index().doc_store.docs.values() if d['file'] == file_path)
         if collection_name not in file_full: continue
 
         layer = _detect_layer(file_path, file_full)
@@ -2224,7 +2314,7 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
     return context
 
 
-@mcp.tool()
+@_tool()
 def map_module_communities(target_path: str = "", min_community_size: int = 3,
                            suggest_splits: bool = False) -> str:
     """Map the codebase into natural module communities and flag god-objects.
@@ -2345,34 +2435,17 @@ def _restore_index(backup_dir: str, index_dir: str, db_path: str) -> None:
 
 
 def _reload_indexes() -> None:
-    """Hot-swap the in-memory FAISS + doc-store state after a reindex run.
+    """Hot-swap the index after a reindex run, or a save by another process.
 
-    Build-then-swap pattern (H4): new objects are constructed outside the lock
-    so the IO-bound work does not block in-flight tool calls.  The lock is
-    acquired only for the brief reference-swap itself.
+    The new IndexState is built outside the lock, so the slow load doesn't block
+    anything, then swapped in as one reference. A call already running keeps the
+    state it bound at entry (ADR-047); the old state is freed when the last such
+    call returns.
     """
-    global index_manager, doc_store, t1_index, t2_index, t3_index
-    global _hybrid_retriever, _iterative_retriever, _index_generation, _loaded_stamp
-
-    # Phase 1: build (slow — reads FAISS files + SQLite)
-    new_stamp = _faiss_stamp()      # taken first: a save during the load triggers one more reload
-    new_im = MultiIndexManager()
-    new_ds = DocumentStore()
-    new_t1 = new_im.load_or_create("tier1_surgical")
-    new_t2 = new_im.load_or_create("tier2_component")
-    new_t3 = new_im.load_or_create("tier3_architectural")
-
-    # Phase 2: atomic swap (fast — just reference assignments)
+    global _state
+    new = _load_state()
     with _reload_lock:
-        index_manager        = new_im
-        doc_store            = new_ds
-        t1_index             = new_t1
-        t2_index             = new_t2
-        t3_index             = new_t3
-        _index_generation   += 1
-        _loaded_stamp        = new_stamp
-        _hybrid_retriever    = None
-        _iterative_retriever = None
+        _state = new
 
 
 class _ReindexDebouncer:
@@ -2673,14 +2746,11 @@ def _utf8_stdio() -> None:
     pipe's text encoding is the ANSI code page (cp1252), not UTF-8. The indexer's
     first line is a "━━" banner, so every watchdog reindex died on its first print
     with UnicodeEncodeError. The protocol is unaffected: it has its own UTF-8
-    writer on a private copy of the pipe (see _claim_stdout).
+    writer on a private copy of the pipe (see _claim_stdout). The body is shared with
+    the code-indexer CLI (ADR-043).
     """
-    import sys
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
-        except (AttributeError, ValueError):
-            pass    # not a TextIOWrapper (already replaced by a harness); leave it
+    from utf8_stdio import utf8_stdio
+    utf8_stdio()
 
 
 def _detach_stdin() -> None:

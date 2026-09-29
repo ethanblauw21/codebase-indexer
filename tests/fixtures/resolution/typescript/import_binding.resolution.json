@@ -1,0 +1,13 @@
+{
+  "feature": "typescript/import_binding",
+  "language": "typescript",
+  "note": "Ground truth authored from source semantics (ADR-044). `format` comes from the date-fns package, so it resolves to nothing even though tb/other.ts defines the repo's only `format`. `make` and `load` are each defined in tb/store.ts and tb/tools.ts, and this file imports both, so only the import each call goes through settles it. `fromBarrel` is imported through the barrel tb/index.ts, which only re-exports; its one definition is in tb/store.ts. `repo.save()` is a method on an `any` parameter: `save` is defined in tb/store.ts (imported) and tb/other.ts (not), and nothing says which, if either, is called.",
+  "support": ["tb/index.ts", "tb/store.ts", "tb/tools.ts", "tb/other.ts"],
+  "calls": [
+    {"source": "stamp",     "target": "format",     "expected": null},
+    {"source": "build",     "target": "make",       "expected": "tb/tools.ts::make"},
+    {"source": "fetch",     "target": "load",       "expected": "tb/store.ts::load"},
+    {"source": "viaBarrel", "target": "fromBarrel", "expected": "tb/store.ts::fromBarrel"},
+    {"source": "keep",      "target": "save",       "expected": null}
+  ]
+}

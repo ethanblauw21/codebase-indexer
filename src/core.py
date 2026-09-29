@@ -3,11 +3,11 @@ import sqlite3
 import faiss
 import numpy as np
 faiss.omp_set_num_threads(1)
-# Silence ML backend noise
+# Silence ML backend noise. No process-wide warnings filter (#54): it hid every
+# warning in each process that imports this module. Loading and running both models
+# with `-W always` emitted none, so nothing needed hiding.
 os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "true"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-import warnings
-warnings.filterwarnings("ignore")
 
 from transformers import AutoTokenizer
 from sentence_transformers import SentenceTransformer
@@ -83,9 +83,40 @@ def embed_dtype(device: str):
 # ProcessPoolExecutor worker processes (which import this module via the
 # spawn import chain on Windows) and keeps import-time side effects minimal.
 _embed_model = None
+_embed_device: str | None = None     # where _embed_model was loaded
 
-def _get_embed_model() -> SentenceTransformer:
-    global _embed_model
+
+def unload_embed_model() -> bool:
+    """Drop the in-process embedder and free its memory. Returns True if one was loaded.
+
+    ADR-048: a model-host client that fell back to in-process embedding releases
+    its copy once the host serves again, so the two never stay resident together.
+    """
+    global _embed_model, _embed_device
+    if _embed_model is None:
+        return False
+    _embed_model = _embed_device = None
+    import gc
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+    return True
+
+
+def _get_embed_model(device: str | None = None) -> SentenceTransformer:
+    """The in-process embedder, loaded on first use.
+
+    ``device`` (ADR-048) pins where it loads; a model loaded elsewhere is released
+    first. The model host's client asks for the CPU when a host that may hold the
+    GPU is still running, so a fallback never puts a second copy on the card.
+    """
+    global _embed_model, _embed_device
+    if _embed_model is not None and device is not None and device != _embed_device:
+        unload_embed_model()
     if _embed_model is None:
         model_id = embed_model_id()
         # ADR-020: the embedder runs on every index, so it must honour the one
@@ -93,7 +124,7 @@ def _get_embed_model() -> SentenceTransformer:
         # default (ADR-024) unless CODE_INDEXER_DEVICE forces a value — so
         # CODE_INDEXER_DEVICE=cpu now actually makes indexing CPU-only, instead
         # of sentence-transformers silently grabbing CUDA behind the override.
-        device = resolve_device()
+        device = device or resolve_device()
         # ADR-035: bf16 on a GPU that supports it, so the model takes ~3 GB, not ~6.2.
         dtype = embed_dtype(device)
         print(f"[core] Loading embedding model: {model_id} (device={device}, "
@@ -106,6 +137,7 @@ def _get_embed_model() -> SentenceTransformer:
         # uncatchable Windows SEH exception. 512 tokens covers most semantic content
         # and keeps peak attention memory well under 1 GB even at batch_size=32.
         _embed_model.max_seq_length = embed_max_seq_length()
+        _embed_device = device
         print("[core] Embedding model ready.", flush=True)
     return _embed_model
 
@@ -136,19 +168,20 @@ class TokenizerManager:
 # Export the singleton under a generic name so ast_chunker doesn't break
 jina_tokenizer = TokenizerManager()
 
-def embed_batch(texts: list[str], batch_size: int = 32) -> np.ndarray:
+def embed_batch(texts: list[str], batch_size: int = 32, device: str | None = None) -> np.ndarray:
     """
     Generates code-native embeddings in optimized batches.
     Provides a 5x-15x speedup during indexing by saturating the GPU/CPU matrix.
+    ``device`` pins where the model loads (ADR-048); by default, resolve_device().
     """
     if not texts:
         return np.zeros((0, embed_dimension()), dtype=np.float32)
     print(f"[core] embed_batch: {len(texts)} texts...", flush=True)
-    vectors = _get_embed_model().encode(texts, convert_to_numpy=True, batch_size=batch_size)
+    vectors = _get_embed_model(device).encode(texts, convert_to_numpy=True, batch_size=batch_size)
     print("[core] embed_batch done.", flush=True)
     return np.ascontiguousarray(vectors, dtype=np.float32)
 
-def embed(text):
+def embed(text, device: str | None = None):
     """Generates a query embedding for the configured code embedder.
 
     This is the QUERY path (hybrid_retriever, MCPServer). Some embedders — e.g.
@@ -163,7 +196,7 @@ def embed(text):
     instruct = _emb_cfg().get("query_instruct", _DEFAULT_QUERY_INSTRUCT)
     if instruct:
         text = f"<instruct>{instruct}\n<query>{text}"
-    vector = _get_embed_model().encode(text, convert_to_numpy=True)
+    vector = _get_embed_model(device).encode(text, convert_to_numpy=True)
     return np.array(vector, dtype="float32")
 
 class MultiIndexManager:

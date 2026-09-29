@@ -1,0 +1,14 @@
+{
+  "feature": "python/import_binding",
+  "language": "python",
+  "note": "Ground truth authored from source semantics (ADR-044). `json.loads` goes to the standard library, so it resolves to nothing even though the repo defines one `loads`. `load` and `make` are each defined in both ib/store.py and ib/tools.py, so only the import each call goes through settles it: `from ib.store import load`, the alias `t` for ib.tools, and the dotted `ib.tools.make`. `d.save()` is a method on a parameter of unknown type; both support files define `save` and this file imports both, so import-scoping would guess. `helper` is a same-file control (ib/tools.py defines another). KNOWN MISS: `t.make()` binds through `from ib import tools as t`, whose import is the package `ib` (ADR-044 §1 binds `k` to `m`). The adapter cannot tell that `tools` is a submodule rather than an attribute, and ib/__init__.py defines no `make`, so the call stays unresolved. Expected stays the true target.",
+  "support": ["ib/__init__.py", "ib/store.py", "ib/tools.py"],
+  "calls": [
+    {"source": "read",        "target": "loads",  "expected": null},
+    {"source": "fetch",       "target": "load",   "expected": "ib/store.py::load"},
+    {"source": "build",       "target": "make",   "expected": "ib/tools.py::make"},
+    {"source": "build_again", "target": "make",   "expected": "ib/tools.py::make"},
+    {"source": "keep",        "target": "save",   "expected": null},
+    {"source": "local_use",   "target": "helper", "expected": "import_binding.py::helper"}
+  ]
+}

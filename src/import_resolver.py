@@ -13,12 +13,16 @@ Handles:
 Non-repo specifiers (node_modules, bare package names without path aliases)
 return None so callers can skip resolved_target storage and fall back to the
 raw target string.
+
+Python imports are resolved separately, by `resolve_python_imports(db)` (ADR-044): a
+pass over the IMPORTS edges against the indexed file list, run on every indexing run.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+import sys
 from typing import Optional
 
 
@@ -34,6 +38,7 @@ class ImportResolver:
     """
 
     _TS_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts")
+    EXTENSIONS = _TS_EXTENSIONS   # the files whose imports this resolves and classifies
 
     def __init__(self, repo_root: str, source=None) -> None:
         self.repo_root = os.path.abspath(repo_root)
@@ -72,9 +77,11 @@ class ImportResolver:
                     if not targets:
                         continue
                     target = targets[0]
-                    # Strip trailing /* from both sides
-                    alias_prefix = alias_pattern.rstrip("/*").rstrip("*")
-                    target_dir   = target.rstrip("/*").rstrip("*")
+                    # Strip the trailing `*` from both sides and keep the `/`: "@/*" is the
+                    # prefix "@/", so "@scope/pkg" is not under it (ADR-044). The old
+                    # rstrip("/*") made it "@", and "@/lib/x" expanded to the absolute "/lib/x".
+                    alias_prefix = alias_pattern.removesuffix("*")
+                    target_dir   = target.removesuffix("*")
                     # Resolve target_dir relative to baseUrl
                     resolved = os.path.normpath(
                         os.path.join(self.repo_root, base_url, target_dir)
@@ -137,6 +144,19 @@ class ImportResolver:
             return None  # outside repo root
 
         return rel.replace("\\", "/")
+
+    def classify(self, specifier: str, resolved: Optional[str] = None) -> Optional[bool]:
+        """ADR-044 §2: True for a package, False for an in-repo module, None if unsure.
+
+        Relative and tsconfig-alias specifiers are in-repo even when no file was found (a
+        missing file is not a package). Any other bare specifier, `node:fs` included, is a
+        package. An absolute path is neither.
+        """
+        if resolved or specifier.startswith(".") or self._expand_alias(specifier) is not None:
+            return False
+        if specifier.startswith("/"):
+            return None
+        return True
 
     def get_barrel_exports(self, barrel_path: str) -> list[str]:
         """
@@ -222,3 +242,119 @@ class ImportResolver:
                 return candidate
 
         return None
+
+
+# ---------------------------------------------------------------------------
+# Python (ADR-044)
+# ---------------------------------------------------------------------------
+
+def _python_candidates(parts: list[str]) -> tuple[str, str]:
+    """The two files a dotted module can be: `a/b.py` and `a/b/__init__.py`."""
+    base = "/".join(parts)
+    return base + ".py", base + "/__init__.py"
+
+
+class PythonModuleIndex:
+    """Resolve Python module specifiers against a set of repo-relative `.py` paths.
+
+    Paths use forward slashes, as the `files` table stores them. Built once per pass.
+    """
+
+    def __init__(self, py_paths) -> None:
+        self.paths = set(py_paths)
+        # Every path suffix that starts at a directory boundary → the full paths ending in
+        # it, so `import config` finds `src/config.py` without knowing any source roots.
+        self._by_suffix: dict[str, list[str]] = {}
+        for p in self.paths:
+            segs = p.split("/")
+            for i in range(len(segs)):
+                self._by_suffix.setdefault("/".join(segs[i:]), []).append(p)
+
+    def resolve(self, spec: str, from_file: str) -> Optional[str]:
+        """The repo file `spec` (as written in `from_file`) refers to, or None."""
+        if spec.startswith("."):
+            return self._resolve_relative(spec, from_file)
+        return self._resolve_absolute(spec.split("."))
+
+    def _resolve_relative(self, spec: str, from_file: str) -> Optional[str]:
+        level = len(spec) - len(spec.lstrip("."))
+        rest = [p for p in spec[level:].split(".") if p]
+        base = from_file.split("/")[:-1]             # the importing file's package
+        if level - 1 > len(base):
+            return None                               # climbs above the repo root
+        base = base[: len(base) - (level - 1)]
+        if rest:
+            for cand in _python_candidates(base + rest):
+                if cand in self.paths:
+                    return cand
+            if len(rest) == 1:
+                # `from . import name` (ADR-044 §1 emits it as `.name`): `name` may be an
+                # attribute of the package rather than a submodule; the package is the edge.
+                pkg = "/".join(base + ["__init__.py"])
+                return pkg if pkg in self.paths else None
+            return None
+        pkg = "/".join(base + ["__init__.py"])        # bare `.` (a wildcard import)
+        return pkg if pkg in self.paths else None
+
+    def _resolve_absolute(self, parts: list[str]) -> Optional[str]:
+        if not all(parts):
+            return None
+        matches: list[str] = []
+        for suffix in _python_candidates(parts):
+            matches += self._by_suffix.get(suffix, [])
+        if not matches:
+            return None
+        if len(matches) == 1:
+            return matches[0]
+        # Several modules share this dotted tail: the shallowest wins, if it is alone at
+        # its depth (`config` → `src/config.py` over `tests/fixtures/x/config.py`).
+        depth = min(m.count("/") for m in matches)
+        shallowest = [m for m in matches if m.count("/") == depth]
+        return shallowest[0] if len(shallowest) == 1 else None
+
+
+def _python_external(spec: str, resolved: Optional[str], repo_names: set[str]) -> Optional[bool]:
+    """ADR-044 §2: in-repo if resolved or relative; a dependency if the standard library or a
+    top-level name found nowhere in the repo; otherwise unknown (None)."""
+    if resolved or spec.startswith("."):
+        return False
+    top = spec.split(".")[0]
+    if top in sys.stdlib_module_names or top not in repo_names:
+        return True
+    return None
+
+
+def resolve_python_imports(db) -> dict:
+    """Recompute `resolved_target` and `external` on every IMPORTS edge from a `.py` file
+    (ADR-044 §2).
+
+    Runs on every indexing run, against the `files` table as it is now, so an import
+    resolves as soon as its target file is indexed and un-resolves when it is deleted.
+    Returns counts: ``resolved`` / ``unresolved``, and ``external`` of the unresolved.
+    """
+    conn = db._conn
+    index = PythonModuleIndex(
+        p for (p,) in conn.execute("SELECT path FROM files WHERE path LIKE '%.py'")
+    )
+    # Every directory and module name in the repo: a top-level import name that is none of
+    # these cannot be an in-repo module under any source root.
+    repo_names = {seg.removesuffix(".py") for p in index.paths for seg in p.split("/")}
+    updates: list[tuple[Optional[str], Optional[int], int]] = []
+    stats = {"resolved": 0, "unresolved": 0, "external": 0}
+    for eid, source, target, current, cur_ext in conn.execute(
+        "SELECT id, source_fqn, target, resolved_target, external FROM edges "
+        "WHERE kind = 'IMPORTS' AND source_fqn LIKE '%.py'"
+    ):
+        resolved = index.resolve(target, source)
+        external = _python_external(target, resolved, repo_names)
+        stats["resolved" if resolved else "unresolved"] += 1
+        stats["external"] += bool(external)
+        ext_int = None if external is None else int(external)
+        if resolved != current or ext_int != cur_ext:
+            updates.append((resolved, ext_int, eid))
+    if updates:
+        with db._tx() as cur:
+            cur.executemany(
+                "UPDATE edges SET resolved_target = ?, external = ? WHERE id = ?", updates)
+        db.invalidate_graph_cache()
+    return stats

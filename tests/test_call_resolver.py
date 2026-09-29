@@ -107,18 +107,19 @@ def test_same_file_tiebreak(db):
 
 
 def test_import_scoped_tiebreak(db):
-    a = _add_file(db, "a.py")
-    b = _add_file(db, "b.py")
-    c = _add_file(db, "c.py")
-    _add_symbol(db, "b.py::baz", "baz", b)
-    _add_symbol(db, "c.py::baz", "baz", c)
-    _add_symbol(db, "a.py::caller", "caller", a)
-    _add_edge(db, "a.py::caller", "baz")
-    # a.py imports b.py only → the b.py candidate wins
-    _add_edge(db, "a.py", "b", kind="IMPORTS", resolved_target="b.py")
+    a = _add_file(db, "a.ts")
+    b = _add_file(db, "b.ts")
+    c = _add_file(db, "c.ts")
+    _add_symbol(db, "b.ts::baz", "baz", b)
+    _add_symbol(db, "c.ts::baz", "baz", c)
+    _add_symbol(db, "a.ts::caller", "caller", a)
+    _add_edge(db, "a.ts::caller", "baz")
+    # a.ts imports b.ts only → the b.ts candidate wins (a .py legacy row no longer
+    # import-scopes: ADR-044 §3, tested in test_call_shape_resolution.py)
+    _add_edge(db, "a.ts", "b", kind="IMPORTS", resolved_target="b.ts")
 
     resolve_call_edges(db)
-    assert _resolved(db, "a.py::caller", "baz") == "b.py::baz"
+    assert _resolved(db, "a.ts::caller", "baz") == "b.ts::baz"
 
 
 def test_demotion_when_name_becomes_ambiguous(db):

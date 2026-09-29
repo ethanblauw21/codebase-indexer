@@ -1,6 +1,6 @@
 # ADR-045: The Summary Cache Is Keyed Without Line Numbers
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-09-29
 **Branch:** `feature/adr-045-summary-cache-key`
 **Reviewer:** @edb

@@ -137,10 +137,10 @@ def stub_tools(wired_db, monkeypatch):
     from types import SimpleNamespace
     files = {"src/scan_policy.py": "def helper():\n    pass",
              "tests/test_scan_policy.py": "import scan_policy\nscan_policy.helper()"}
-    monkeypatch.setattr(M, "doc_store", SimpleNamespace(docs={
+    state = SimpleNamespace(doc_store=SimpleNamespace(docs={
         i: {"file": f, "tier": "tier1_surgical", "scope": "Full File_part_1", "text": t}
         for i, (f, t) in enumerate(files.items())}))
-    monkeypatch.setattr(M, "_ensure_indexes", lambda: None)
+    monkeypatch.setattr(M, "_ensure_indexes", lambda: state)
     monkeypatch.setattr(M, "_caller_evidence", lambda s, a="": ([], []))
     _add_import(wired_db, "tests/test_scan_policy.py", "scan_policy")
     hits = []
