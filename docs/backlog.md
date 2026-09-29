@@ -92,6 +92,9 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-056](#b-056) | Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols | @edb grill, 2026-09-28 | M (Stage 1) + M (Stage 2) | shaped |
 | [B-057](#b-057) | A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild | incident, 2026-09-29 | S | shaped |
 | [B-058](#b-058) | Moving a symbol's line numbers re-summarizes it, because the summary cache is keyed on its `Lines:` header | @edb, 2026-09-29 | S | promoted → ADR-045 |
+| [B-059](#b-059) | A crash mid-migration can empty the edges graph, and three places swallow failures silently (#55, #54) | 2026-09-27 assessment; @edb, 2026-09-29 | S | promoted → ADR-046 |
+| [B-060](#b-060) | Tool calls read loose index globals that a swap can change mid-call, block the event loop, and hold a second copy of the index (#52, #53, #63) | 2026-09-27 assessment; @edb, 2026-09-29 | M | shaped |
+| [B-061](#b-061) | When the model host is unreachable, the fallback may load a second model copy on the 8 GB card (#66, suspected) | 2026-09-27 assessment; @edb, 2026-09-29 | S–M | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -1890,7 +1893,8 @@ error". Point that at a scratch index or a test target, never the live one. Insp
 **What happened.** Repointing GanttWebApp to `integration/staging-2026-10-01` was a 57-file
 change (+5,008 / −486 lines). It took about 14 min against 30–40 min for the whole project,
 because it regenerated about 950 summaries (a full index makes about 3,500). The run was
-healthy: the model host held 5.6 GB of real VRAM with no spill, at about 3 summaries a second.
+healthy: the model host held 5.6 GB of real VRAM with no spill. (A timed replay later put the
+summarizer at about 1.1 summaries a second, so summarizing was nearly the whole 14 minutes.)
 
 **Cause.** `chunk_summaries` is keyed by MD5 of the chunk text, and every tier-1 text carries
 `Lines: a-b` in its header (`ast_chunker._symbol_rich_text`). Lines inserted above a symbol
@@ -1904,3 +1908,56 @@ plus this repo) mentions a line number.
 
 **Depends on:** none. **Related:** ADR-040 (two-pass summarization, whose passes must agree on
 the key), ADR-030 (summary index).
+
+
+### B-059 — A crash mid-migration can empty the edges graph, and three places swallow failures silently
+
+**Source:** GitHub #55 and #54 (2026-09-27 project assessment); @edb asked for the correctness
+bugs first, 2026-09-29 · **Status:** promoted → ADR-046 · **Size:** S
+
+**#55.** `CodeDB` runs in autocommit mode and the edges table swaps ran as one `executescript`,
+which commits per statement: a kill between `DROP TABLE edges` and the rename left no `edges`
+table, the next open made an empty one, and unchanged file hashes meant nothing refilled it.
+Found on the way: every process runs the migrations on open with no lock between the check and
+the run, so two processes can race, and a repeated older swap would drop newer columns.
+
+**#54.** `_treesitter.run_query` returns `[]` on any exception with no log; `core.py` sets a
+process-wide `warnings.filterwarnings("ignore")`; `MCPServer` has two `except sqlite3.Error: pass`.
+
+**Depends on:** none.
+
+### B-060 — Tool calls read loose index globals that a swap can change mid-call
+
+**Source:** GitHub #52, #53 and #63 (2026-09-27 project assessment); @edb, 2026-09-29 ·
+**Status:** shaped · **Size:** M
+
+One shipping unit, because all three come from the index being loose module globals in
+`MCPServer.py`:
+- **#52:** `_reload_lock` is taken only by the writer (`_reload_indexes`). A tool reads
+  `doc_store`, `_hybrid_retriever` and the FAISS globals several times per call, so a watchdog
+  or ref-poller swap mid-call can mix generations. Git mode (ADR-042) made swaps routine on the
+  live servers.
+- **#53:** all tools are plain `def`, and FastMCP runs sync tools on the event loop, so one
+  slow call (a `reindex` waiting on its lock, `investigate_architecture`) stalls every other
+  request on that server.
+- **#63:** the server loads its own `DocumentStore` and three FAISS indexes beside the
+  retriever's, so every chunk and vector is resident twice.
+
+**Shape.** One immutable `IndexState` built by the loader and swapped as a single reference;
+each tool takes it once at entry; tools run off the event loop; the server's second copy goes
+away. This is also the first step of #62 (split `MCPServer.py`).
+
+**Depends on:** none.
+
+### B-061 — The model host fallback may load a second model copy on the 8 GB card
+
+**Source:** GitHub #66 (2026-09-27 project assessment, suspected, not reproduced); @edb,
+2026-09-29 · **Status:** raw · **Size:** S–M
+
+When the host can't be reached, `model_client` falls back to in-process models. If an MCP
+server already holds a warm embedder, that is a second ~3 GB copy on the card ADR-028 exists to
+protect. ADR-041 added a second way in: a CUDA client finding a busy CPU host refuses it and
+falls back in-process. To do first: reproduce by killing the host mid-index with a warm
+embedder in a server, and watch VRAM.
+
+**Depends on:** none.
