@@ -7,7 +7,7 @@
 **Backlog:** [B-001](../backlog.md#b-001) (scan gate) + [B-002](../backlog.md#b-002) (summarizer) — combined here because they are one question asked twice.
 **Depends on:** none. `src/config.py` (`load_indexer_config()`) and the cached-read pattern in `core.py` (`_emb_cfg()`, ADR-009 §P1) already exist; this ADR extends both rather than inventing anything.
 **Depended on by:** none yet.
-**Reviewed:** five-persona jury review, 2026-07-27 — see `ADR-026_REVIEW.md`. This document is the post-review revision; §Revision history records what changed and why.
+**Reviewed:** five-persona jury review, 2026-07-27 — see [`docs/reviews/ADR-026_REVIEW.md`](../reviews/ADR-026_REVIEW.md). This document is the post-review revision; §Revision history records what changed and why.
 
 ## Definitions
 
@@ -520,7 +520,7 @@ module, so the acyclicity §2 depends on holds.
 ## Revision history
 
 **2026-07-27 — post-jury-review revision.** A five-persona adversarial review
-(`ADR-026_REVIEW.md`) returned GO WITH CONDITIONS. Changes made in response:
+([`docs/reviews/ADR-026_REVIEW.md`](../reviews/ADR-026_REVIEW.md)) returned GO WITH CONDITIONS. Changes made in response:
 
 1. **`[scan]` → the existing `[ignore]` block.** The first draft proposed a new block beside
    an inert one it had not noticed. Flagged HIGH independently by two reviewers as the ADR

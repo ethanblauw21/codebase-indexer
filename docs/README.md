@@ -21,6 +21,7 @@ actually built and 9 had never been started.
 | [`roadmap.md`](./roadmap.md) | **order** — sequencing and dependency edges | wants, or build state |
 | [`adr/`](./adr/) | **decisions** — one committed solution per file, plus its Implementation Log | wants you haven't committed to |
 | [`adr-backlog.md`](./adr-backlog.md) | **history** — the 2026-06-18 research planning index, frozen | anything new |
+| [`reviews/`](./reviews/) | **history** — jury reviews of a plan or ADR, cited by the ADR they reviewed | anything new |
 
 The one-line test: **a backlog item asserts a problem, an ADR asserts a solution you are building.**
 An item can sit unresolved forever without lying; an unbuilt ADR is a lie the moment it lands on

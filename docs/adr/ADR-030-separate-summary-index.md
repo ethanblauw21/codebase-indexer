@@ -62,7 +62,7 @@ An index built before this ADR has summaries appended inside its code vectors an
 
 | Value | Why | Source | Result |
 |---|---|---|---|
-| MRR@10 of a real build with this branch, both query sets | that the offline result holds through the real indexer and retriever | retrieval stages, variant `store` | **0.531 / 0.556** against 0.443 / 0.436 without summaries (see Notes) |
+| MRR@10 of a real build with this branch, both query sets | that the offline result holds through the real indexer and retriever | retrieval stages, variant `store` | Superseded. 0.531 / 0.556 against 0.443 / 0.436 was measured on indexes with ghost vectors. On clean indexes (Verification 5): original +0.012 (not significant), intent **+0.052**, whole-file **+0.242** |
 | Pass-2 time with summary embeds, this repository | the cost of §2 | stage 7 on this branch | _gap_ (today: 98 s; on click, 106 s against 77 s without summaries) |
 | Tier-2/3 summaries: do they help find the right file | whether §4's default earns its GPU time | file-level query set, tiers [1] against [1, 2, 3] | _gap_ |
 | `summary_weight` on a third query set | 0.5 won on both sets through the real build, but only narrowly on the original one | later | _gap_ |
@@ -70,7 +70,9 @@ An index built before this ADR has summaries appended inside its code vectors an
 ## Consequences
 
 **Better:**
-- MRR@10 +0.120 on intent queries and +0.088 on the original set, measured through a real build with 95 percent intervals above zero. That is the largest retrieval gain this project has recorded.
+- **Whole-file questions: MRR@10 +0.242** (95 percent interval +0.149 to +0.339, 27 queries up, 3 down), because tier-2/3 summaries carry what a file is for. This is the robust effect.
+- Intent queries +0.052 (+0.009 to +0.095), barely above zero; the original query set +0.012, which is noise. Both from Verification 5, on clean indexes.
+- _Corrected 2026-09-28 (#58):_ this section first claimed +0.120 intent and +0.088 original, "the largest retrieval gain this project has recorded". Those were measured on indexes with ghost vectors (Verification 4) and are superseded.
 - Code vectors stop being pulled toward a summary's purpose, so body-level queries recover.
 - Tier-2 and tier-3 summaries become visible to search at all.
 - A summary can arrive after its chunk is embedded, as one added vector. That is the hard part of ADR-028 §5 done.

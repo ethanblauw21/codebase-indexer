@@ -66,19 +66,35 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-031](#b-031) | The embedder loads in fp32 and fills the 8 GB card on its own | ADR-028 gate, 2026-09-25 | S | promoted → ADR-035 |
 | [B-025](#b-025) | Appended summaries make intent retrieval worse; the same summaries help when kept apart | retrieval check, 2026-09-25 | M | **promoted → ADR-030** |
 | [B-032](#b-032) | A save during a running watchdog reindex starts a second reindex in parallel | daemon queue review, 2026-09-25 | S | promoted → [ADR-036](adr/ADR-036-one-reindex-at-a-time.md) |
-| [B-033](#b-033) | Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place | daemon queue review, 2026-09-25 | M | shaped |
+| [B-033](#b-033) | Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place | daemon queue review, 2026-09-25 | M | **done** (#71, ADR-038) |
 | [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | raw |
-| [B-035](#b-035) | A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever | chunk-shape study, 2026-09-25 | S | shaped |
-| [B-036](#b-036) | A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it | PR test-merge, 2026-09-25 | S | shaped |
-| [B-037](#b-037) | `analyze_blast_radius` and `find_dead_code` take 10–20 minutes per call | dogfood of all 13 tools, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
-| [B-038](#b-038) | `find_test_coverage` never finds a pytest file | same dogfood, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
-| [B-039](#b-039) | The stdio server writes logs and child-process output to the protocol pipe | same dogfood, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
-| [B-040](#b-040) | `index_status` answers a bad `since` with "0 files", and compares timestamps as text | Inspector run 2026-09-25, dogfood 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
-| [B-041](#b-041) | `investigate_architecture` reports a reranking step that did not run | same dogfood, 2026-09-26 | S | fixed on `fix/dogfood-tool-bugs` |
+| [B-035](#b-035) | A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever | chunk-shape study, 2026-09-25 | S | promoted → ADR-037 (#43) |
+| [B-036](#b-036) | A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it | PR test-merge, 2026-09-25 | S | **done** (#44) |
+| [B-037](#b-037) | `analyze_blast_radius` and `find_dead_code` take 10–20 minutes per call | dogfood of all 13 tools, 2026-09-26 | S | **done** (#45) |
+| [B-038](#b-038) | `find_test_coverage` never finds a pytest file | same dogfood, 2026-09-26 | S | **done** (#45) |
+| [B-039](#b-039) | The stdio server writes logs and child-process output to the protocol pipe | same dogfood, 2026-09-26 | S | **done** (#45) |
+| [B-040](#b-040) | `index_status` answers a bad `since` with "0 files", and compares timestamps as text | Inspector run 2026-09-25, dogfood 2026-09-26 | S | **done** (#45) |
+| [B-041](#b-041) | `investigate_architecture` reports a reranking step that did not run | same dogfood, 2026-09-26 | S | **done** (#45) |
 | [B-042](#b-042) | `trace_data_flow` only understands Firestore and Next.js code | same dogfood, 2026-09-26 | M | raw |
 | [B-043](#b-043) | `map_module_communities` fills communities with names from outside the repo | same dogfood, 2026-09-26 | S–M | raw |
 | [B-044](#b-044) | After the first search, every in-process reindex runs out of VRAM and skips summaries | same dogfood, 2026-09-26 | S | **done** |
 | [B-045](#b-045) | No tool declares `readOnlyHint` | Inspector run, 2026-09-25 | S | raw |
+| [B-046](#b-046) | The watchdog fires while the model host is starting, with no file saved | dogfood host run, 2026-09-26 | S | raw |
+| [B-047](#b-047) | Seven tests fail on every CI run because they depend on Windows paths, and the advisory step hides it | signoff CI check, 2026-09-26 | S | **done** (#69) |
+| [B-048](#b-048) | A save re-summarizes a file's tier-2/3 slices whose code did not change | InventoryApp first index, 2026-09-28 | S–M | shaped |
+| [B-049](#b-049) | The model-host log and the summarize progress lines carry no timestamps, so rates can't be tracked | InventoryApp first index, 2026-09-28 | S | **done** (#73, ADR-039) |
+| [B-050](#b-050) | Pass 2 embeds in batches of 1–4 texts (per file per tier), so a full build embeds at about half speed | InventoryApp first index, 2026-09-28 | S | **done** (#74, ADR-040) |
+| [B-052](#b-052) | The index covers one folder, so work in git worktrees (one per branch) is not indexed | InventoryApp go-live, 2026-09-28 | M | **done** (#76, ADR-042) |
+| [B-053](#b-053) | The server gives agents no usage instructions, and every session on one index runs its own watchdog | InventoryApp go-live, 2026-09-28 | S–M | **done** (#71, ADR-038) |
+| [B-054](#b-054) | A line-ending-only difference counts as a changed file (raw-byte MD5) | InventoryApp fork, 2026-09-28 | S | shaped |
+| [B-055](#b-055) | Pass 2 waits for each embed call before preparing the next window | B-050 follow-up, 2026-09-28 | S | **done** (#78, ADR-040 addendum) |
+| [B-051](#b-051) | The shared model host runs on whatever interpreter launched it, so a CPU-only env can put every project's models on the CPU | InventoryApp go-live, 2026-09-28 | S | **done** (#72, ADR-041) |
+| [B-056](#b-056) | Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols | @edb grill, 2026-09-28 | M (Stage 1) + M (Stage 2) | shaped |
+| [B-057](#b-057) | A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild | incident, 2026-09-29 | S | shaped |
+| [B-058](#b-058) | Moving a symbol's line numbers re-summarizes it, because the summary cache is keyed on its `Lines:` header | @edb, 2026-09-29 | S | promoted → ADR-045 |
+| [B-059](#b-059) | A crash mid-migration can empty the edges graph, and three places swallow failures silently (#55, #54) | 2026-09-27 assessment; @edb, 2026-09-29 | S | promoted → ADR-046 |
+| [B-060](#b-060) | Tool calls read loose index globals that a swap can change mid-call, block the event loop, and hold a second copy of the index (#52, #53, #63) | 2026-09-27 assessment; @edb, 2026-09-29 | M | promoted → ADR-047 |
+| [B-061](#b-061) | When the model host is unreachable, the fallback may load a second model copy on the 8 GB card (#66, suspected) | 2026-09-27 assessment; @edb, 2026-09-29 | S–M | promoted → ADR-048 |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -766,7 +782,7 @@ The same summaries embedded on their own and fused by RRF with the code ranking 
 
 ### B-026 — Class members lose their docs, private methods and getters from the index, and a method arrives without its class
 
-**Source:** ADR-030 p-queue diagnosis, a grill with @edb, and a five-reviewer jury, 2026-09-25 (`CHUNK_SHAPE_PLAN_REVIEW.md`) · **Status:** Stage 1 promoted → ADR-034 (`feature/adr-034-class-member-chunks`); Stage 2 shaped · **Size:** L
+**Source:** ADR-030 p-queue diagnosis, a grill with @edb, and a five-reviewer jury, 2026-09-25 ([`docs/reviews/CHUNK_SHAPE_PLAN_REVIEW.md`](./reviews/CHUNK_SHAPE_PLAN_REVIEW.md)) · **Status:** Stage 1 promoted → ADR-034 (`feature/adr-034-class-member-chunks`); Stage 2 shaped · **Size:** L
 
 **Where it came from.** Under ADR-030's summary fusion, p-queue's original query set (24 queries)
 scored 0.511 MRR@10, against 0.537 with no summaries. Three named queries lose: `pq-concurrency`,
@@ -1158,7 +1174,7 @@ path through the host.
 
 ### B-033 — Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place
 
-**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** shaped · **Size:** M
+**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** done (#71, ADR-038) · **Size:** M
 
 Each MCP server process loads its own copy of the FAISS indexes (`MultiIndexManager.load_or_create`,
 `core.py:180`) and starts its own watchdog (`MCPServer.py:1995`).
@@ -1177,6 +1193,20 @@ Each MCP server process loads its own copy of the FAISS indexes (`MultiIndexMana
 
 **ADR-028 does not cover this.** Its host owns the models only, and by design "never opens a
 project's FAISS or SQLite files".
+
+**Update 2026-09-28: it happened on go-live day.** InventoryApp-V2 had two indexer registrations: a
+local-scope `repo-indexer` in `~/.claude.json` and a new `codebase-indexer` in `.mcp.json`. A session
+opened at 09:28 started both servers. With no index yet, a watchdog event in each started
+`run_incremental()`, which on an empty index is a full build. Two full builds then wrote one
+`.code-index/` from 09:31 until they were killed. The index was deleted and rebuilt from a terminal.
+- **Half fixed since filing:** #70 made `save_all` atomic (`.tmp`, fsync, `os.replace`), so a reader
+  no longer sees a truncated `.faiss`. Two writers still overwrite each other.
+- **New gap:** the watchdog has no "no index yet" guard. A first save in a fresh project starts the
+  whole first build inside the MCP server, where nobody watches its progress. With
+  InventoryApp's 2,562 summaries that is about an hour.
+- **Fix, added:** a cross-process lock on the index directory, such as an `O_EXCL` lock file with a
+  PID like `model_host.py:91`, held for the whole run. And the watchdog should skip, with a log line,
+  when the index has no `index_meta` yet.
 
 **Fix:**
 1. **One writer per project.** Take an index lock file (`.code-index/write.lock`, `msvcrt.locking`
@@ -1224,7 +1254,7 @@ again, in every tier.
 <a id="b-035"></a>
 ### B-035 — A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever
 
-**Source:** chunk-shape study, 2026-09-25 (a killed fp32 build) · **Status:** shaped · **Size:** S
+**Source:** chunk-shape study, 2026-09-25 (a killed fp32 build) · **Status:** promoted → ADR-037 (#43) · **Size:** S
 
 `run_incremental` writes each file's chunk rows and its MD5 to SQLite as it goes (`upsert_file`
 commits per file; see the comment at `incremental_indexer.py:1060`). The FAISS indexes are written
@@ -1258,7 +1288,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 <a id="b-036"></a>
 ### B-036 — A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it
 
-**Source:** found while test-merging PRs #40–#43, 2026-09-25 · **Status:** shaped · **Size:** S
+**Source:** found while test-merging PRs #40–#43, 2026-09-25 · **Status:** done (#44) · **Size:** S
 
 - **The break.** `pyproject.toml` and `requirements.txt` ask for `mcp[cli]` with no version. mcp 2.0
   renamed `FastMCP` (`mcp.server.fastmcp` is gone), so on a fresh install `src/MCPServer.py:4` raises
@@ -1293,7 +1323,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 ### B-037 — `analyze_blast_radius` and `find_dead_code` take 10–20 minutes per call
 
-**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+**Source:** dogfood, 2026-09-26 · **Status:** done (#45) · **Size:** S
 
 - Both tools asked "does this file import the anchor?" with `(import|require).*?['"].*?NAME.*?['"]`
   under `DOTALL`, over every indexed file's joined chunk text (3 M chars on this repo). On a file that
@@ -1308,7 +1338,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 ### B-038 — `find_test_coverage` never finds a pytest file
 
-**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+**Source:** dogfood, 2026-09-26 · **Status:** done (#45) · **Size:** S
 
 - The Python adapter listed `"test_.py"` as a file *suffix*, and the tool matches suffixes with
   `endswith`. pytest's convention is the prefix `test_*.py`, so no Python source ever had tests.
@@ -1316,7 +1346,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 ### B-039 — The stdio server writes logs and child-process output to the protocol pipe
 
-**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+**Source:** dogfood, 2026-09-26 · **Status:** done (#45) · **Size:** S
 
 - The MCP spec says a stdio server must not write anything to stdout that is not a protocol message.
   Tool progress prints, a watchdog reindex's whole log, and child processes (the summarizer worker,
@@ -1327,7 +1357,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 ### B-040 — `index_status` answers a bad `since` with "0 files", and compares timestamps as text
 
 **Source:** MCP Inspector run, 2026-09-25 (recorded in ADR-037's notes); dogfood, 2026-09-26 ·
-**Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+**Status:** done (#45) · **Size:** S
 
 - `since="garbage"` passed through as a text cutoff and reported 0 changed files.
 - `content_changed_at` keeps the committer's offset (`…T16:30:47-05:00`) and was compared as a string
@@ -1336,7 +1366,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 ### B-041 — `investigate_architecture` reports a reranking step that did not run
 
-**Source:** dogfood, 2026-09-26 · **Status:** fixed on `fix/dogfood-tool-bugs` · **Size:** S
+**Source:** dogfood, 2026-09-26 · **Status:** done (#45) · **Size:** S
 
 - The report header always said "CrossEncoder Reranking … retrieved and reranked", and the docstring
   named jina-reranker-v2. Reranking has been off by default since ADR-007.
@@ -1397,3 +1427,537 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 - Eleven of the thirteen tools only read. Declaring `readOnlyHint` lets a client auto-approve them.
   `reindex` writes; `index_status` loads the indexes but writes nothing.
+
+<a id="b-046"></a>
+### B-046 — The watchdog fires while the model host is starting, with no file saved
+
+**Source:** dogfood host run, 2026-09-26 (split out of B-044 when it closed) · **Status:** raw · **Size:** S
+
+- In the B-044 host run, the watchdog started two reindexes while the host was starting up. The
+  in-process runs of the same probe started none. The reindex it ran picked up a file that had really
+  changed, so it did no harm.
+- Something the host does, or something started with it, touches a path the watchdog watches. Not
+  investigated. The host's own files live in `%LOCALAPPDATA%`, outside the project, so they are not
+  the obvious suspect.
+- **Why it matters now:** the host is on by default on a GPU since #46, so every live project will
+  see it. A reindex nobody asked for costs a summarizer and embedder swap.
+
+<a id="b-047"></a>
+### B-047 — Seven tests fail on every CI run because they depend on Windows paths, and the advisory step hides it
+
+**Source:** checked the CI log during signoff, 2026-09-26 · **Status:** done (#69) · **Size:** S
+
+- The "Test + Mutate" job's pytest step is `continue-on-error` (ADR-004 keeps test failures
+  advisory), so the check is green while pytest reports `7 failed`. Seen on the last five master runs
+  (392 to 520 passed, 7 failed every time) and on #46.
+- **Six** are `test_adapter_snapshots.py`: the golden files in `tests/fixtures/snapshots/` store
+  the absolute path of the checkout they were captured in (`C:\Users\edb\Documents\indexer\...`)
+  in each chunk's `file` and text. They fail on Linux and in any other Windows checkout, a git
+  worktree included.
+- **One** is `test_conformance.py::test_normalize_fqn_paths_and_bare_identifiers_unchanged`, which
+  expects `C:\repo\pkg\async_gen.py` to normalize to `async_gen.py`. That holds on Windows only.
+- **Fix:** capture the snapshots with a path relative to the fixtures directory (or normalize it in
+  the test), and make the conformance test's path handling OS-independent. Then seven real failures
+  stop hiding among permanent ones.
+
+### B-048 — A save re-summarizes a file's tier-2/3 slices whose code did not change
+
+**Source:** InventoryApp-V2 first index, 2026-09-28 · **Status:** shaped · **Size:** S–M
+
+Summaries are cached by an MD5 of the chunk text (`chunk_text_hash`, `incremental_indexer.py:654`).
+For tier 1 that now holds up: the header is `File:` + `Entity:`, with no line numbers, so an edit
+misses only the symbols it touched. Tier-2/3 slices from `fallback_token_chunker()`
+(`ast_chunker.py:204`) miss on code that did not change, in two ways:
+1. **Repacking.** Windows are packed greedily from the top of the file. An edit that moves one window
+   boundary changes the text of every window after it.
+2. **`(Part i/N)` in the text.** `Scope: Full File (Part {idx + 1}/{total})` is part of each slice's
+   text and so of its key. An edit that adds or drops a window changes `N` in **every** slice of the
+   file.
+
+**Why it costs:** these are the long texts (about 1,500 and 4,000 tokens). On InventoryApp's first
+index the longest-first ordering (`incremental_indexer.py:891`) ran about 32 texts/min on those,
+against about 96/min after them. A large `.tsx` component has roughly 8 tier-2 and 3 tier-3 slices,
+so one save can re-summarize all of them. That's an estimate, not a measurement. ADR-029 (proposed,
+only on the unmerged branch `feature/adr-029-position-independent-summary-key`) measured
+**8 of 8 tier-2 and 3 of 3 tier-3** re-summarized for a two-line insert on this repo. Its tier-1 half
+has since been fixed on master; this item is the rest of it.
+
+**Measure first:** on InventoryApp, save one mid-sized component with a one-line edit and with a
+new function, then count the cache misses per tier and the watchdog's wall time. If a save stays
+under about 20 s of background GPU time, this is noise and can wait.
+
+**Fixes, cheapest first:**
+1. **Normalize the key.** Strip `(Part i/N)` before hashing, as ADR-029 §1 proposed. That ends the
+   case where every slice misses. It's small and already designed.
+2. **Defer slice summaries on save.** The watchdog would summarize tier 1 and embed everything right
+   away, then fill in tier-2/3 summaries in a later idle pass. Whole-file summaries lag briefly; the
+   save gets cheap. Related: [B-013](#b-013) (the daemon's summarizer competes with foreground work).
+3. **Stable slice boundaries,** for example cut at top-level symbol or blank-line boundaries, so an
+   edit changes only its own slice. This changes what's retrieved, so it has to be re-measured
+   against ADR-034's numbers. See also [B-027](#b-027), [B-034](#b-034).
+
+**Direction to test (idea session with @edb, 2026-09-28). Not decided.**
+
+- **Declaration-anchored sections** (a concrete form of fix 3). Cut tier-2/3 slices only *between*
+  top-level declarations from the tree-sitter AST, packed up to the tier's token budget. For `.tsx`
+  that means the import block, types and interfaces, each top-level component or function, and
+  trailing helpers. An edit inside one declaration changes only its section, so the others keep their
+  text, their cached summary and their vector.
+  - **Declarations larger than the budget:** split inside them. For a big React component, split
+    hooks and handlers from the JSX `return (...)`, which is @edb's markup-vs-logic idea. Measure
+    whether that helps or splits answers apart, since "where is the save button" matches markup and
+    "what happens on submit" matches handlers.
+  - **Unparseable files:** content-defined chunking (rolling-hash boundaries, as rsync does), which
+    stays stable under inserts without knowing the language.
+- **Summaries from summaries.** Build a section's summary from its symbols' tier-1 summaries, and
+  a file's from its sections', not from up to 4,000 tokens of raw code. After an edit, only one small
+  symbol is re-summarized from code; the section and file summaries are regenerated from a few hundred
+  tokens of summaries. @edb's framing: a **middle ground between full raw-code summaries and no
+  summaries**. The open question is whether it can **replace** raw-slice summaries or only
+  **supplement** them.
+  - Test it as three arms against the ADR-030 baseline (+0.05 intent, +0.24 whole-file): raw-slice
+    summaries (current), summary-of-summaries only, and both. Also record the summarize time and a
+    per-save cost for each, since the trade is quality against time.
+  - **Risk:** code-only detail, such as a specific API call or a magic string, may never reach a
+    tier-1 summary, so a composed file summary can't carry it.
+  - **Nearest past result:** B-027's outline-per-file arm lost −0.24 on whole-file questions. That
+    replaced code with a skeleton; this keeps raw code in the slices and changes only the summaries,
+    but compare against it first.
+- **Both change what's embedded,** not only what's summarized, so tier-2/3 retrieval needs a full
+  re-measure. Record which stack each number came from (measurement-provenance rule, CONTRIBUTING
+  §4.2).
+
+### B-049 — The model-host log and the summarize progress lines carry no timestamps, so rates can't be tracked
+
+**Source:** InventoryApp-V2 first index, 2026-09-28 · **Status:** done (#73, ADR-039) · **Size:** S
+
+- **`host.log` has no times.** Dating the current host's block meant lining up process start times
+  with `host.json`'s `started_at`. The file's modified time didn't help either: Windows doesn't update
+  it while the host holds the file open, so it read 09:31:55 during a run that started at 09:39.
+- **The build's `[summarize N/M]` lines have no times.** They print every 192 texts
+  (`_SUMMARY_SLICE`), so the rate had to be worked out by hand from readings @edb took. That led to
+  two bad ETAs, because the order is longest first (`incremental_indexer.py:891`) and the rate climbs
+  about 3× during a run.
+- **Fix:**
+  - Prefix every host log line with a local ISO timestamp.
+  - Make each progress line `[summarize 768/2562 · 09:55:12 · 96/min last slice · ETA ~10:14]`,
+    with the ETA taken from the recent rate, not the average since the start.
+  - Print the same timestamp on the phase banners (Pass 1, Pass 2, Saving, Done) and the watchdog's
+    start and complete lines, so per-save costs ([B-048](#b-048)) can be read from the log.
+  - Smaller: a status request the client dropped mid-reply logs a full `ConnectionAbortedError`
+    traceback in `host.log`. It's harmless, since the client retries, so log it as one line.
+
+### B-050 — Pass 2 embeds in batches of 1–4 texts (per file per tier), so a full build embeds at about half speed
+
+**Source:** InventoryApp-V2 first index, 2026-09-28 · **Status:** done (#74, ADR-040) · **Size:** S
+
+- The host log for the 35-minute build has **1,909 `[core] embed_batch` calls, most with 1–4 texts**.
+  `ingest_file` embeds each file's chunks per tier (plus the summary index) as it goes, so batch size
+  is set by one file's chunk count, not by the GPU.
+- **Measured:** 5.4 min to embed and save 2,815 chunks, **115 ms/chunk**, against about 66 ms/chunk
+  on this repo's 2026-09-26 build. InventoryApp's chunks are bigger, which explains part of that; the
+  small batches are the likely rest. Unverified.
+- **Fix:** pass 2 already runs after the summarizer unloads, so it can collect every file's texts,
+  embed them in batches sized for the GPU (for example 32–64, or a token budget like the
+  summarizer's), and then write per file. Keep the per-file SQLite and FAISS order so ADR-037's heal
+  logic still holds.
+- **Check first:** time one build with batched embedding against today's 5.4 min. On a per-save
+  (watchdog) run the gain is small, since there's only one file; it matters for first builds and
+  big diffs.
+
+### B-051 — The shared model host runs on whatever interpreter launched it, so a CPU-only env can put every project's models on the CPU
+
+**Source:** InventoryApp-V2 go-live, 2026-09-28 · **Status:** done (#72, ADR-041) · **Size:** S
+
+- There's **one model host per machine** (ADR-028), and it's shared across projects. It's started by
+  whichever client asks first, with **that client's Python** (`model_client.py:89`).
+- **Happened on 2026-09-28:** InventoryApp's old `repo-indexer` registration runs under VectorEnv
+  (Python 3.12, **CPU-only torch `2.11.0+cpu`**). The host it started at 09:31 (pid 18656) logged
+  `[Summarizer] Loading ... (device=cpu ...)`. It died when the duplicate servers were killed, so
+  the 09:38 build started a fresh host on the GPU. That was luck.
+- **Risk:** SOPCentral and GanttWebApp still register `repo-indexer` under VectorEnv. If either starts
+  the host first, **every** project's summaries and embeddings run on the CPU (far slower; not
+  measured on this machine) until the host idles out after 30 min. The build still prints "Done
+  successfully".
+- **Fix:**
+  1. Record the host's resolved device in `host.json` and in its startup line.
+  2. The client compares that with its own `device.resolve_device()`. A CUDA-capable client that
+     finds a CPU host says so loudly, and either restarts the host from its own interpreter (if the
+     host is idle) or falls back in-process, rather than silently running on the CPU.
+  3. Ops, separately: move SOPCentral's and GanttWebApp's registrations off VectorEnv, to the
+     pythoncore-3.14 interpreter InventoryApp uses.
+
+### B-052 — The index covers one folder, so work in git worktrees (one per branch) is not indexed
+
+**Source:** InventoryApp-V2 go-live, 2026-09-28 · **Status:** done (#76, ADR-042) · **Size:** M
+
+- **The indexer has no branch concept.** `scan_disk` hashes the files in the MCP server's working
+  directory. Git is used only for freshness stamps and `last_indexed_commit` (ADR-025). What is
+  indexed is whatever is checked out in that one folder.
+- **InventoryApp works in worktrees:** 27 of them, sibling folders plus `.claude/worktrees/`. The
+  scan ignores `.claude/`, and `.mcp.json` is untracked, so a session opened in a worktree doesn't
+  load the indexer at all. At go-live the indexed folder itself was on `fix/closed-jobs-sync`, not
+  `main`.
+- **Branch switches in the indexed folder are expensive:** the watchdog reindexes the whole diff,
+  paying [B-048](#b-048)'s slice re-summarization for every changed file.
+
+**Guidance now (no code):** index `main` as the stable base. Keep the indexed folder on `main`, or give
+the index a dedicated clean `main` worktree (this needs a launcher that sets the server's working
+directory; `.mcp.json` has no cwd field). Tell the agent in the project's CLAUDE.md that the index
+reflects `main` and that it should `Read` files its branch changed.
+
+**Options if branch-aware search is wanted, cheapest first:**
+1. **Flag stale hits.** Tools mark any result whose file differs in the caller's worktree (`git diff
+   --name-only main...`). Close to [B-020](#b-020).
+2. **Fork an index.** Copy `main`'s `.code-index` (54 MB on InventoryApp) into a worktree and run
+   an incremental build. The MD5 diff should reprocess only the branch's changed files, since stored
+   paths are repo-relative (to verify). Each worktree session then runs its own MCP server; all share
+   one model host. ADR-028's planned cross-project summary cache (keyed by text hash) would make the
+   summaries nearly free.
+3. **Base index plus per-branch overlay,** merged at query time: no copies, and each branch pays
+   only for its diff. Real design work; only worth it if forks prove useful often.
+4. **Preferred direction (2026-09-28, after the fork below): index a commit, not a folder.** Read
+   the base straight from git objects (`git ls-tree` plus `git cat-file` on `origin/main`), with no
+   checkout. The index records "built from commit X" and lives in the working folder's own
+   `.code-index`. Updating means reindexing `git diff --name-only X Y`, which git lists for free.
+   Working-tree edits go into option 3's overlay. This removes the separate `main` worktree and its
+   upkeep, which @edb flagged as annoying.
+
+**Fork measured, 2026-09-28 (see also [B-053](#b-053)):** `InventoryApp-index` (a detached `origin/main` worktree) was seeded with
+the branch-built index. The incremental build purged 1,339 stale vectors and indexed **239 files**:
+88 new on `main` (479 indexable files against the branch's 398), 124 real content changes, and
+**27 that differed only in line endings** ([B-054](#b-054)). So forking works, and the branch-built
+index was missing about 20% of current `main`.
+
+### B-053 — The server gives agents no usage instructions, and every session on one index runs its own watchdog
+
+**Source:** InventoryApp go-live, 2026-09-28 · **Status:** done (#71, ADR-038) · **Size:** S–M
+
+- **No instructions.** `FastMCP("Local Codebase RAG")` (`MCPServer.py:29`) declares no
+  `instructions`, so a connected agent is never told what the index reflects or how not to misuse it.
+- **One watchdog per session.** With [B-052](#b-052)'s launcher, every InventoryApp session starts a
+  server whose watchdog watches the same `InventoryApp-index` folder. It's quiet until that folder
+  moves to a newer `main`; then every open session starts the same rebuild at once
+  ([B-033](#b-033): no cross-process lock). Parallel Claude sessions in worktrees make N large.
+- **@edb's requirement:** the codebase-indexer must never be driven from Claude-made worktrees doing
+  separate work at the same time, because that queues significant duplicate work. Prose alone is
+  known not to hold (see `~/.claude/CLAUDE.md` on why prose warnings fail), so enforce it in code.
+- **Fix:**
+  1. Server `instructions`: the index reflects one checkout (name it and its commit, from
+     `index_meta`). `Read` files your branch changed. Never call `reindex` from a worktree session.
+  2. **Single watchdog per index directory:** an `O_EXCL` lock file with a PID in `.code-index`. The
+     first server takes it and watches; the others serve read-only tools, with no watchdog and a
+     `reindex` that refuses. Recover stale locks by checking the PID. This is B-033's lock, reused.
+  3. `reindex` refuses, with a clear message, when the server's working directory is a linked git
+     worktree (`git rev-parse --git-dir` ≠ `--git-common-dir`), unless `indexer.toml` opts that
+     folder in (as `InventoryApp-index` would).
+- **Until then:** close InventoryApp sessions before moving `InventoryApp-index` to a newer `main`.
+
+### B-054 — A line-ending-only difference counts as a changed file (raw-byte MD5)
+
+**Source:** InventoryApp fork, 2026-09-28 · **Status:** shaped · **Size:** S
+
+- `md5_file` (`incremental_indexer.py:122`) hashes raw bytes. With `core.autocrlf=true`, the same file can be LF in one
+  checkout and CRLF in another: InventoryApp-V2 had 36 LF files, and the fresh worktree was all CRLF.
+- **Measured:** 27 of the 239 files reprocessed in the fork were identical apart from line endings.
+- If chunk text keeps `\r`, the summary cache key differs too, so those chunks are re-summarized
+  (unverified).
+- **Fix:** normalize `\r\n` to `\n` before the file hash and before chunking, so both keys are
+  EOL-independent. This is a one-time full-hash change: bump the chunker version (ADR-033) so
+  existing indexes re-key cleanly.
+
+<a id="b-055"></a>
+### B-055 — Pass 2 waits for each embed call before preparing the next window
+
+**Source:** B-050 follow-up, 2026-09-28 · **Status:** done (#78, ADR-040 addendum) · **Size:** S
+
+- After B-050, pass 2 alternated: prepare a 256-text window on the CPU, then embed it on the GPU,
+  with each side idle while the other ran.
+- **Fix (#78):** one background thread runs the embed call while the main thread prepares the next
+  window. All writes stay on the main thread, in queue order, so the index is byte-identical with
+  the overlap on or off. `[indexer] embed_overlap` (default true) turns it off.
+- The build prints a `Pass 2 timing` line (embed, waited, prepare, write, wall).
+  `tools/pass2_bench.py` times pass 2 before B-050, with B-050 and with B-055 on an already-built
+  index. Measured on GanttWebApp 2026-09-28: pass 2 334 s before B-050, 266 s with it, 194 s with
+  the overlap (−42%); pass 2 is now GPU-bound (ADR-040, Measurement).
+
+<a id="b-056"></a>
+### B-056 — Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols
+
+**Source:** @edb grill, 2026-09-28 · **Status:** shaped · **Size:** M (Stage 1) + M (Stage 2)
+
+**The want.** When a returned chunk calls into a third-party package, say which package it is and
+what it does, in one short line. Frontier models mostly know `zod` or `json.loads`. A small, locally
+hosted model often doesn't, and concise readable context should help it, as long as it stays to the
+important details and doesn't turn into bloat.
+
+**What the grill found in the code today:**
+- Only TS/JS imports resolve. `ImportResolver` (`src/import_resolver.py:92`) returns `None` for any
+  specifier without `./`, `../` or a tsconfig alias. So no Python, C# or C++ IMPORTS edge gets a
+  `resolved_target`. This repo has 557 IMPORTS edges and none of them resolve (see B-043).
+- **Python relative imports are dropped entirely.** `_IMPORT_QUERY` (`src/adapters/python_adapter.py:20`)
+  matches only `dotted_name`. `from .x import y`, `from . import y` and `from ..a.b import y` produce
+  no edge (checked 2026-09-28 against sample source).
+- **Calls into dependencies can bind to in-repo symbols.** `call_resolver.py` tries "unique
+  repo-wide name" first (line 119), before it looks at imports. The Python call query records
+  `json.loads(...)` as a call to `loads`, with no receiver (`python_adapter.py:26`). So if the repo
+  defines exactly one `loads`, the call resolves to it at full confidence. That breaks the
+  resolver's own prefer-unknown rule. The TS query drops the receiver the same way (`z.object()` →
+  `object`).
+- Nothing reads manifests. Dependencies appear only as the raw strings in unresolved IMPORTS edges.
+  GanttWebApp has two manifests (the root one and `functions/package.json`), so a file's owner is its
+  **nearest** manifest.
+
+**Shaped decisions (grill, 2026-09-28):**
+
+*Stage 1: imports, packages, binding, display*
+- **Ecosystems:** TS/JS and Python. C# (`PackageReference` + NuGet XML docs) and C++ come later.
+- **`file_imports` table:** file, local name → module, normalized package (`numpy.linalg` → `numpy`,
+  `@scope/pkg/sub` → `@scope/pkg`), resolved in-repo path if any. Written in `ingest_file` **in the
+  same transaction as the file's edges**, so the watcher keeps it current and a killed run can't
+  leave it half-written (the B-035 lesson). It is a table of its own, not rows in `symbols`: that
+  table feeds `find_dead_code`, communities and call candidates.
+- **`packages` table:** ecosystem, name, version → one-line description, manifest path. Filled when a
+  manifest is ingested (`package.json`, `pyproject.toml`, `requirements*.txt`). Descriptions are read
+  **locally**: `node_modules/<pkg>/package.json` `description`, and the `Summary:` line in
+  `site-packages` `*.dist-info/METADATA`. No network and no hosted registry. SQLite, not a JSON file:
+  the daemon and the server's reindex both write.
+- **Manifests become scannable** (`scan_policy.is_scannable()`, the way `.csproj` already is), so
+  editing `package.json` triggers an update.
+- **Git mode (ADR-042):** the version comes from the committed manifest or lockfile, to match the
+  indexed code. The description comes from what's installed on disk, because a one-line description
+  almost never changes between versions. If the package isn't installed, show name and version only.
+- **Python import fixes:** capture `relative_import`, and resolve dotted and relative names to repo
+  files against the package layout. That also gives B-043 real import links.
+- **External binding in `call_resolver`:** adapters record the **receiver identifier** on member
+  calls. A call whose bare name or receiver is the local name of an *external* import in that file is
+  `external`, and none of the ADR-021 steps run for it. Other calls run the ADR-021 order unchanged.
+  The rule does **not** require in-repo calls to come through an import, because Apps Script has
+  none. Binding is always on, since it's a correctness fix.
+- **Standard library and platform modules** (`os`, `json`, `fs`, `path`): bound as external, never
+  described.
+- **Display-only.** Nothing is added to embedded chunk text: appended summaries cost intent
+  0.436→0.380, a repeated class header cost −0.10, and the 512-token window would cut code. At
+  result time, match the file's imported local names as whole words in each returned chunk's text.
+  That catches calls, namespace receivers, types and JSX. Emit one line per package the chunk uses:
+
+  ```
+  uses: p-limit@5.0.0 — Run multiple promise-returning & async functions with limited concurrency
+  ```
+
+  Caps: the first sentence, at most ~120 characters; at most 5 packages per chunk (most-used first,
+  then `+N more`); in-repo imports never listed; the lines count against the search budget (ADR-032).
+- **Tools:** `semantic_code_search`, `find_similar_code` and the iterative search. Tools that print
+  file lists stay unchanged. On by default, with `[dependencies] enabled = false` to turn the lines
+  off.
+- **Stage 1 gate:** tests, including a resolution-conformance fixture for external binding (precision
+  stays 1.0). Chunk text and stable_ids must be **byte-identical** before and after, which proves
+  retrieval can't move. Also report how many previously resolved CALLS edges flip to external on
+  this repo and on Gantt, with a reviewed sample.
+
+*Stage 2: member summaries (gated on the A/B below)*
+- **`package_members` table:** package, version, member → signature, one-line summary. Filled
+  lazily, **only for members the repo actually imports or calls**, and cached by version. Sources,
+  all built-in docs read statically:
+  - **TS/JS:** JSDoc in the package's `.d.ts` files. The TS grammar already parses them.
+  - **Python:** the `.pyi` stub first, whether from `types-*` or bundled with `py.typed`. It has
+    cleaner signatures and often the docstring. Otherwise the `.py` source, parsed with `ast`. That
+    reads the same string `__doc__` would return, without importing the module; importing would run
+    third-party code at index time. C extensions have runtime-only docstrings: use the `.pyi` if
+    there is one, otherwise name only.
+  - **Rust (future, no adapter yet):** `///` doc comments in `~/.cargo/registry/src/<registry>/<crate>-<version>/`.
+    The path already carries the version.
+
+  The display becomes `uses: p-limit.pLimit(concurrency) — …`.
+- **Resolve members along the package's export path, never by name search** (prototype finding,
+  2026-09-28, `gpu-crash-repro/dep_ab.py`). A search of the whole package for the first `def`/`class`
+  with a matching name returned the wrong function for 4 of the ~12 members tried: `np.array` →
+  `numpy.char.array`, `nx.betweenness_centrality` → the bipartite variant, and `torch.cuda` and
+  `anyio.run` → unrelated functions. For a small model a wrong line is worse than none. Start at
+  the imported module's `__init__`, follow `from .x import name` and `from x import *` the way the
+  import system does, and emit no line where the trail ends (C extensions, lazy loaders such as
+  `transformers`' `_LazyModule`). Also cap the signature at 4 parameters: `transformers.pipeline`
+  has 17.
+
+**A/B, 2026-09-28: the lines did not help Qwen2.5-Coder-1.5B.** The harness is
+`gpu-crash-repro/dep_ab.py`, with data in `dep_ab/` (gitignored). Setup:
+- 26 questions about this repo that each hinge on library behavior, written by an agent that
+  never saw the lines.
+- Retrieval ran once, on an index refreshed to 5abfa39.
+- Three arms over the **same chunks**: A is today's output, B adds the package lines, C adds
+  package and member lines. The lines cost +129 tokens per question on average for B, +210 for C.
+- Greedy answers, graded blind 0–2 by an agent that saw shuffled X/Y/Z labels.
+
+| | mean | vs A (win / tie / loss) | sign-flip p |
+|---|---|---|---|
+| A (today) | 0.73 | | |
+| B (package lines) | 0.62 | 2 / 19 / 5 | 0.46 |
+| C (package + members) | 0.69 | 4 / 17 / 5 | 1.00 |
+
+- No subset favored B or C. The 13 questions that don't name the library came out at B-A ±0.
+- **Mechanism, from the grade notes:** the model mostly ignored the lines. What changed between
+  arms was which detail greedy decoding happened to mention, and that moved in both directions.
+  An example is q23, where +18 tokens dropped the fixed-seed point.
+- **Floor:** 10 of 26 questions scored 0 in arm A. The 1.5B model's limits and retrieval misses
+  set the ceiling, not missing library knowledge.
+- **The content is too thin for these questions.** The answers needed library behavior (IDs
+  surviving `remove_ids`, `-1` padding when k > ntotal, `frombuffer` being read-only). A one-line
+  package summary never carries that, and a first-sentence docstring rarely does.
+- **Budget interaction (Stage 1 design note):** charging the lines to the 4,000-token budget
+  swapped whole chunks on q10, where a 3,959-token chunk just fit without its line. If the lines
+  ship, render them outside the budget, or reserve room for them.
+
+**Follow-up readers, 2026-09-29:** the same 78 prompts, the same rubric and a fresh blind
+grader for each reader.
+- **Haiku 4.5** ran as three subagents in a Latin square: the arm rotates by question, so no single
+  agent's style lines up with an arm. A first run with one agent per arm was confounded (one agent
+  wrote answers half as long as the others) and has been set aside in `haiku_v1_confounded/`.
+- **Qwen2.5-Coder-7B-Instruct** ran in NF4 4-bit with bitsandbytes, using about 7.9 GB on the 8 GB
+  card at ~10–15 s per answer.
+
+| Reader | A | B | C | B−A (win/tie/loss, p) | C−A (win/tie/loss, p) |
+|---|---|---|---|---|---|
+| Qwen 1.5B | 0.73 | 0.62 | 0.69 | 2/19/5, 0.46 | 4/17/5, 1.00 |
+| Qwen 7B (4-bit) | 1.00 | 1.12 | 1.00 | 4/21/1, 0.37 | 2/22/2, 1.00 |
+| Haiku 4.5 | 1.38 | 1.15 | 1.31 | 4/12/10, 0.18 | 6/13/7, 0.81 |
+| **Pooled (n=78)** | | | | **10/52/16, −0.08, p 0.33** | **12/52/14, −0.04, p 0.71** |
+
+No reader shows a gain that holds up. The one positive number, 7B's B arm, points the opposite way
+from the other two readers, and the pooled result is flat to slightly negative. Haiku, the reader
+that uses its context most (it scores highest), is the one B hurts most. Its grade notes show
+answers drifting toward a generic description of the library ("required transitively … for
+distributed training") and away from how this repo uses it. That's the same purpose-text effect
+that made appended summaries hurt retrieval, but it's suggestive only.
+
+**Consequence for this item:** the display half (the Stage 1 lines and all of Stage 2) is
+**dropped**. That removes the `packages` table, manifest parsing, description reads, manifests as
+scannable files, the git-mode version rule and the export-path resolver. The Stage 1
+*correctness* work stands on its own merits: `file_imports`, the Python import fixes and external
+binding in `call_resolver`. Revisit the display only with a different premise (for example full
+member docs, or a reader that asks for them through a tool), not a bigger model; three sizes
+have been tried. The harness re-runs in one command per step (`gpu-crash-repro/dep_ab.py`).
+- **Promotion gate:** about 20 questions about Gantt/InventoryApp code that hinge on a dependency.
+  @edb's local model answers each from search results with and without the lines, graded blind.
+  Stage 2 promotes only if the Stage 1 lines measurably help.
+
+**Rejected in the grill:** a hosted description registry (ops work that the local-suite direction
+rules out); on-demand npm/PyPI fetches as a default (network dependency, and it sends the
+dependency list to a third party; could come back later as opt-in and cached by version); injecting
+descriptions into embedded text (measured harm, above); a JSON-file store; imports as `symbols` rows;
+a package-level "imports" block per file (lists packages the chunk never touches); describing the
+standard library.
+
+**Depends on:** none. **Related:** B-043, which Python import resolution partly unblocks; ADR-021 and
+ADR-011 (call resolution order and receiver types); ADR-032 (search budget); ADR-042 (git-mode source).
+
+<a id="b-057"></a>
+### B-057 — A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild
+
+**Source:** incident, 2026-09-29 · **Status:** shaped · **Size:** S
+
+**What happened.** While checking ADR-043, an agent called the `reindex` tool through MCP Inspector
+twice (09:07 and 09:09) against this repo's live index, with no arguments, expecting a quick
+check. `changed_files_only` **defaults to `False`**, so each call was a full rebuild. Inspector
+gives up on a request after a fixed 60 s and kills the server, which cut both rebuilds off:
+
+1. Run 1: `_snapshot_index` saved the good index to `.pre-full-reindex/`, wiped it, and was
+   killed partway through the rebuild.
+2. Run 2: `_snapshot_index` runs `shutil.rmtree(backup_dir)` ("left by a killed earlier run"),
+   which **deleted the only good copy**. It then snapshotted run 1's half-built state (7 files)
+   as the new "backup" and was killed too.
+
+Result: 25 of 158 files, no tier vector files, and a backup that couldn't restore anything.
+Recovered with a full rebuild (`MCPServer.reindex(False)` in-process). It took about 3 min
+because all 3,114 summaries were still cached in `graph.db`, and the result matched the prior
+index exactly (158 files, 2,476 chunks, vectors = rows).
+
+**Two defects, independent:**
+- **The backup is deleted on the assumption that it's stale** (`MCPServer._snapshot_index`).
+  A backup left by a killed run is the *good* copy, the one that run was protecting. Fix: if
+  `.pre-full-reindex/` exists at the start of a full rebuild, restore it first (the previous run
+  never finished), or refuse and say so. Never delete it.
+- **A destructive default.** `reindex()` with no arguments wipes the index. Any client that
+  calls it bare (an agent, a checklist, Inspector) gets a full rebuild. Consider defaulting to
+  incremental, or requiring the full rebuild to be requested explicitly.
+
+**Also worth a line in CONTRIBUTING §5.** Its checklist says to verify "`reindex` runs without
+error". Point that at a scratch index or a test target, never the live one. Inspector's fixed
+60 s timeout kills any full rebuild.
+
+**Depends on:** none. **Related:** B-035 / ADR-037 (killed-run holes), ADR-038 (locks).
+
+### B-058 — Moving a symbol's line numbers re-summarizes it, because the summary cache is keyed on its `Lines:` header
+
+**Source:** @edb, 2026-09-29, after a slow GanttWebApp update · **Status:** promoted → ADR-045 · **Size:** S
+
+**What happened.** Repointing GanttWebApp to `integration/staging-2026-10-01` was a 57-file
+change (+5,008 / −486 lines). It took about 14 min against 30–40 min for the whole project,
+because it regenerated about 950 summaries (a full index makes about 3,500). The run was
+healthy: the model host held 5.6 GB of real VRAM with no spill. (A timed replay later put the
+summarizer at about 1.1 summaries a second, so summarizing was nearly the whole 14 minutes.)
+
+**Cause.** `chunk_summaries` is keyed by MD5 of the chunk text, and every tier-1 text carries
+`Lines: a-b` in its header (`ast_chunker._symbol_rich_text`). Lines inserted above a symbol
+change that header without changing the code, and the key changes with it. Of the 681 tier-1
+misses in the 42 code files, **370 differed only in their line numbers.** The 270 tier-2/3
+misses are sliding windows that really shift, which is inherent to fixed-size slices.
+
+**Want.** Key the summary on the text without the line numbers. Keep the header in the stored
+text, because `MCPServer` reads line ranges from it. None of the 7,258 cached summaries (Gantt
+plus this repo) mentions a line number.
+
+**Depends on:** none. **Related:** ADR-040 (two-pass summarization, whose passes must agree on
+the key), ADR-030 (summary index).
+
+
+### B-059 — A crash mid-migration can empty the edges graph, and three places swallow failures silently
+
+**Source:** GitHub #55 and #54 (2026-09-27 project assessment); @edb asked for the correctness
+bugs first, 2026-09-29 · **Status:** promoted → ADR-046 · **Size:** S
+
+**#55.** `CodeDB` runs in autocommit mode and the edges table swaps ran as one `executescript`,
+which commits per statement: a kill between `DROP TABLE edges` and the rename left no `edges`
+table, the next open made an empty one, and unchanged file hashes meant nothing refilled it.
+Found on the way: every process runs the migrations on open with no lock between the check and
+the run, so two processes can race, and a repeated older swap would drop newer columns.
+
+**#54.** `_treesitter.run_query` returns `[]` on any exception with no log; `core.py` sets a
+process-wide `warnings.filterwarnings("ignore")`; `MCPServer` has two `except sqlite3.Error: pass`.
+
+**Depends on:** none.
+
+### B-060 — Tool calls read loose index globals that a swap can change mid-call
+
+**Source:** GitHub #52, #53 and #63 (2026-09-27 project assessment); @edb, 2026-09-29 ·
+**Status:** promoted → ADR-047 · **Size:** M
+
+One shipping unit, because all three come from the index being loose module globals in
+`MCPServer.py`:
+- **#52:** `_reload_lock` is taken only by the writer (`_reload_indexes`). A tool reads
+  `doc_store`, `_hybrid_retriever` and the FAISS globals several times per call, so a watchdog
+  or ref-poller swap mid-call can mix generations. Git mode (ADR-042) made swaps routine on the
+  live servers.
+- **#53:** all tools are plain `def`, and FastMCP runs sync tools on the event loop, so one
+  slow call (a `reindex` waiting on its lock, `investigate_architecture`) stalls every other
+  request on that server.
+- **#63:** the server loads its own `DocumentStore` and three FAISS indexes beside the
+  retriever's, so every chunk and vector is resident twice.
+
+**Shape.** One immutable `IndexState` built by the loader and swapped as a single reference;
+each tool takes it once at entry; tools run off the event loop; the server's second copy goes
+away. This is also the first step of #62 (split `MCPServer.py`).
+
+**Depends on:** none.
+
+### B-061 — The model host fallback may load a second model copy on the 8 GB card
+
+**Source:** GitHub #66 (2026-09-27 project assessment, suspected, not reproduced); @edb,
+2026-09-29 · **Status:** promoted → ADR-048 · **Size:** S–M
+
+When the host can't be reached, `model_client` falls back to in-process models. If an MCP
+server already holds a warm embedder, that is a second ~3 GB copy on the card ADR-028 exists to
+protect. ADR-041 added a second way in: a CUDA client finding a busy CPU host refuses it and
+falls back in-process. To do first: reproduce by killing the host mid-index with a warm
+embedder in a server, and watch VRAM.
+
+**Depends on:** none.

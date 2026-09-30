@@ -5,7 +5,7 @@
 in each ADR's Implementation Log.
 
 This file holds none of those. If you find a build log or a fix list here, it has drifted — move it
-back to the ADR that owns it. That drift is what this file was split out of: for a year the ADR set
+back to the ADR that owns it. That drift is what this file was split out of: for the project's first months the ADR set
 *was* the backlog, and [`adr-backlog.md`](./adr-backlog.md) carried intake, sequencing and per-ADR
 build kits in one document. It is now frozen; this file and `backlog.md` replace it.
 
@@ -19,7 +19,7 @@ today and what would carry it further.
 1. **Language expansion stays gated by conformance.**
    - A new language ships only once it scores against hand-authored extraction fixtures in
      `tests/fixtures/conformance/` (ADR-008).
-   - Python, TypeScript, C# and C++ are covered today, and the four together cover a large share of
+   - Python, TypeScript, C# and C++ are covered today (plus Rockwell L5X, ADR-013), and the four together cover a large share of
      professional codebases.
    - Depth before breadth: a language whose symbols and edges can't be shown correct doesn't get
      indexed.
@@ -39,32 +39,22 @@ today and what would carry it further.
 
 ---
 
-## Where the work actually is (2026-07-27)
+## Where the work is
 
-**25 ADRs. 15 built, 10 never started.** The retrieval stack, the resolver and the measurement
-harnesses are all shipped and merged; everything unbuilt is either research-grade or waiting on a
-trigger that hasn't fired.
+This section doesn't track status; dated snapshots here went stale within weeks (#61). For what's
+open, read the index table at the top of [`backlog.md`](./backlog.md), and GitHub issues for defects
+found in review. For what's in flight, read the open PRs. For the state at the end of the last
+session, read `HANDOFF.md` in the repository root.
 
-The last four merges (2026-07-17) closed out the current line of work:
+What does hold:
 
-```
-done ─► ADR-008  graded edge confidence + tunable verdict floor   (#26)
-done ─► ADR-011  Stage 1 C# · Stage 2 C++ · Stage 3 conformance   (#27 #28 #29)
-          │      resolution rate 0.40 → 1.00, precision held at 1.0
-done ─► ADR-025  per-file freshness metadata + index_status tool   (#24)
-done ─► ADR-020  CODE_INDEXER_DEVICE authoritative over the stack  (#25 #30)
-
-master is clean. Nothing is in flight.
-```
-
-**Two branches are unmerged:**
-
-| Branch | Holds | Waiting on |
-|---|---|---|
-| `feature/adr-026-configuration-authority` | ADR-026 — all three commits built, 306 tests green | review + merge; nothing technical |
-| `feature/adr-009-p2-contextual-chunks` | ADR-009 P2 contextual chunk augmentation — implemented, flag off | a validation run, which is a GPU workload |
-
-*(`chore/repo-cleanup` was merged 2026-07-27 — repo layout, ignore rules, and the README model drift.)*
+- **The indexer is in daily use** on real projects since 2026-09-28 (InventoryApp-V2 and GanttWebApp,
+  both in git mode, ADR-042). Problems found in use go to the backlog first.
+- **The local GPU works again** (repaired; 6 h of staged load on 2026-09-24 with no errors). Local
+  builds and measurements run on it. `CODE_INDEXER_DEVICE=cpu` (ADR-020) remains the whole-stack
+  switch for CPU-only machines.
+- **First-run experience is the priority** for sharing the repository: [B-008](./backlog.md#b-008)
+  (Windows `cp1252`), the README (#60) and packaging.
 
 ### The reranker thread is closed (2026-07-27)
 
@@ -74,47 +64,6 @@ is planned. The decisive finding: every reranker number was measured on the *pre
 reranking attached, at 0.3–2 s/query instead of ~90 s on CPU. Backlog **B-003 and B-004 are dropped**;
 the reasoning is recorded there and in ADR-009 §P4 / ADR-019 §6. The feature survives as a documented
 opt-in; the research thread does not.
-
-### The constraint that shapes everything
-
-**The local GPU is off limits.** Pinning it kernel-crashes the machine; the root cause is a fatal
-PCIe link fault (WHEA), diagnosed 2026-07-23 and open with Dell. Until that is answered, no local
-indexing, embedding or reranking runs — CPU-only paths and the cloud T4 harness (`cloud/`) are the
-only options.
-
-This is not a footnote. It is the single reason the three most valuable open items below are parked,
-and it is why `CODE_INDEXER_DEVICE=cpu` (ADR-020) exists as a real whole-stack kill switch rather
-than a suggestion. **Nothing on this roadmap is sequenced behind the local GPU coming back** — assume
-it does not.
-
-### What is actually next
-
-Nothing is committed to yet, but the shape is clear. In the order they'd be picked up — and note the
-first three are all **first-run experience**, which is what "shared on GitHub for others to run
-locally" actually demands:
-
-1. **[B-008](./backlog.md#b-008) — the Windows `cp1252` crash.** The indexer dies on a
-   `UnicodeEncodeError` before indexing a single file on a stock Windows console. It is the first
-   thing a new user hits, and it looks like the tool is broken. Smallest item here, highest blast
-   radius. **Now the only unfixed first-run blocker** — ADR-026 took the other two.
-2. **[B-010](./backlog.md#b-010) — read-time dedup.** ~5 lines over candidates already in memory,
-   fixes existing indexes with no rebuild, needs no eval to justify. The cheap half of what the
-   2026-07-27 live search surfaced.
-3. **[B-011](./backlog.md#b-011) as an ADR** — multi-tier RRF cannot reinforce, because the tier
-   name is the first component of the FAISS id. Upstream of every future ranking change, and the
-   containment-key fix has a real hazard (large-file bias), which is what earns it an ADR.
-4. **The graph decision as an ADR** — the RTR contract change recorded below, which also closes
-   ADR-022. Note B-011 may subsume part of it: the graph layer's inertness under RRF and B-011 now
-   have the same explanation.
-5. **ADR-009 P2**, only if a cloud T4 slot is worth spending on a validation run.
-
-**Done since this list was written:** [B-001](./backlog.md#b-001) and
-[B-002](./backlog.md#b-002) were promoted together into
-[ADR-026](./adr/ADR-026-configuration-authority.md) — one constant-vs-config question, not three —
-and built on `feature/adr-026-configuration-authority`. A scan of this repo now yields 103 files
-instead of 613.
-
-None of 1–4 is GPU-gated. Beyond that, the unbuilt ADRs are trigger-gated, not scheduled — see below.
 
 ---
 
@@ -153,7 +102,7 @@ recorded here so the shape of the finished work stays legible. Per-item detail i
 | **0 · Foundation** | ADR-007 | **built** — CoIR harness + committed Wave-0 baseline. Its C#/C++ and structural-graph gap became ADR-019. |
 | **1 · ROI + moat** | ADR-009, ADR-008, ADR-011 | **built, and the gates answered "no" twice.** P1 embedder swap → bge-code-v1 promoted to default. P3 convex fusion **rejected** (negative in all 5 languages). P4 reranker **settled off** (public passed, private clause-3 failed). ADR-008's conformance scorecard drove two Python adapter fixes; ADR-011 lifted resolution 0.40 → 1.00 with precision held. |
 | **2 · Robustness** | ADR-010 drift detection | **not started.** |
-| **3 · Reach / research / UX** | ADR-013, 012, 014, 015 | **not started.** |
+| **3 · Reach / research / UX** | ADR-013, 012, 014, 015 | ADR-013 **built** (the L5X adapter, #32, 2026-09-26); the rest **not started.** |
 
 The two "no" verdicts in Wave 1 are the wave's most valuable output — the harness was built precisely
 so a component could be rejected on a number, and it rejected two. Work that arrived after the
@@ -183,7 +132,7 @@ Log, which remains the truth for it** — this table is a summary and owns nothi
 
 ## The legacy unbuilt set
 
-**ADR-005 · 010 · 012 · 013 · 014 · 015 · 016 · 018 · 022**, plus **ADR-017** (whose Phase-1
+**ADR-005 · 010 · 012 · 014 · 015 · 016 · 018 · 022**, plus **ADR-017** (whose Phase-1
 `Edge.candidate` slice shipped while the tier model did not).
 
 These are plans, not commitments — the pile that motivated splitting this document set. They stay on
@@ -194,7 +143,6 @@ schedule them:
 | ADR | Promote when |
 |---|---|
 | **010** drift detection | incremental reindex cost or human↔AI drift actually bites |
-| **013** DSL adapters | a real L5X/IEC-61131-3 corpus needs indexing — the best near-term differentiation, and the L5X adapter is still a `NotImplementedError` stub |
 | **012** cross-repo | a second repo must be queryable in one index |
 | **014** adaptive ranking | research appetite; needs 009's fusion parameterized first |
 | **015** explorer UI | the graph output needs to be human-legible to someone other than an agent |
