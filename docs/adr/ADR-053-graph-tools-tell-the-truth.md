@@ -228,6 +228,13 @@ branch's output is byte-identical on both.
   exit 5, `isError: true`, argument validation errors.
 - The success paths are covered in pytest (`test_graph_tools_*.py`), since there is no index here.
 
+**2026-10-20, gates** (Python 3.12.3, CPU, no network, so `HF_HUB_OFFLINE=1`): flake8 on `src/`
+clean; collection 704 → 724 tests. Full suite: `871b55c` 654 passed, 48 failed, 2 skipped; this
+branch 673 passed (before the empty-name test), the **same 48 failed**, 2 skipped. All 48 also fail
+on `871b55c`: 31 need the tokenizer from huggingface.co, the rest fail the same way on both
+commits in this sandbox. `conformance_eval --check-baseline`, `resolution_eval --check-baseline`
+and `l5x_fixture_teeth --check` exit 0.
+
 ## Open questions for @edb
 
 1. **Per-language layers.** Python and C# entries are labelled `UTILITY` or `CORE LOGIC / LIB` by
