@@ -23,9 +23,21 @@ from adapters.csharp_adapter import CSharpAdapter
 from adapters.cpp_adapter import CppAdapter
 from adapters.l5x_adapter import L5xAdapter
 
+
+class AppsScriptAdapter(JavaScriptAdapter):
+    """Apps Script `.gs` (ADR-052 §1): plain JavaScript under the JS grammar.
+
+    Not a bare REGISTRY line because `_WebAdapter.parse` looks the grammar up by
+    extension, so `.gs` -> `JavaScriptAdapter` raises KeyError on the first parse.
+    """
+    extensions = frozenset({".gs"})
+    _grammars  = {".gs": JavaScriptAdapter._grammars[".js"]}
+
+
 _python = PythonAdapter()
 _ts     = TypeScriptAdapter()
 _js     = JavaScriptAdapter()
+_gs     = AppsScriptAdapter()
 _cs     = CSharpAdapter()
 _cpp    = CppAdapter()
 _l5x    = L5xAdapter()
@@ -36,6 +48,7 @@ REGISTRY: dict[str, LanguageAdapter] = {
     ".tsx":    _ts,
     ".js":     _js,
     ".jsx":    _js,
+    ".gs":     _gs,
     ".cs":     _cs,
     ".csproj": _cs,
     ".sln":    _cs,

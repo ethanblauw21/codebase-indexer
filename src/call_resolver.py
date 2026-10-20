@@ -40,6 +40,12 @@ import-scoped step: nothing says the method lives in an imported file. Edges fro
 ADR-044 (``member_call`` NULL, and every edge of an adapter that does not compute it) resolve
 as before, except that a ``.py`` source skips import-scoping, which it never reached before.
 
+**Apps Script** (ADR-052) — every ``.gs`` file shares one global scope and has no imports, and
+when two files define the same top-level function, whichever loads last wins everywhere. So a
+bare call from a ``.gs`` file with several candidates skips the positional steps (same-file and
+import-scoped) and stays unresolved: binding the caller to its own file's copy would be a guess.
+A member call (``this.x()``) still gets the same-file step.
+
 The pass recomputes **all** CALLS edges each run, so a resolution is demoted back to NULL if
 a later-added symbol makes its name ambiguous — a stale resolution never outlives the
 uniqueness that justified it (ADR-021 §3).
@@ -151,6 +157,8 @@ def resolve_call_edges(db) -> dict:
         elif len(cands) == 1:
             resolved = cands[0][0]
             stats["resolved"] += 1
+        elif len(cands) > 1 and src_file.endswith(".gs") and member != 1:
+            stats["ambiguous"] += 1           # one global scope: no file is nearer (ADR-052)
         elif len(cands) > 1:
             src_id = path_to_id.get(src_file)
             same = [fqn for fqn, fid in cands if fid == src_id]
