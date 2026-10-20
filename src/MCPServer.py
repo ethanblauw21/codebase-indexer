@@ -1562,8 +1562,8 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     return context
 
 
-@_tool(reads_index=False)
-def reindex(changed_files_only: bool = False) -> str:
+@_tool(reads_index=False, destructiveHint=True, idempotentHint=False)
+def reindex(changed_files_only: bool = True) -> str:
     """
     Rebuilds the index from its source: this folder's files, or, when indexer.toml sets
     `[indexer] source = "git:<ref>"`, that ref's commit, never your branch or your edits.
@@ -1571,11 +1571,11 @@ def reindex(changed_files_only: bool = False) -> str:
     Rarely needed: the server's watchdog keeps the index current on its own
     (index_status shows whether it is). Never call it to pick up branch work.
 
-    changed_files_only=True  — incremental: only processes files added, modified, or
-                               deleted since the last run. Fast for frequent refreshes.
-    changed_files_only=False — full (default): clears all index state first, then
-                               re-indexes every file from scratch. Use after major
-                               refactors or when the incremental index appears corrupted.
+    changed_files_only=True  — incremental (default): only files added, modified, or
+                               deleted since the last run. Fast.
+    changed_files_only=False — full: WIPES the index, then re-embeds every file. Slow
+                               (tens of minutes) and destructive; only when the index is
+                               corrupted, and never from a client with a request timeout.
 
     Returns a summary of chunks added/updated/removed, then reloads the in-memory indexes.
     """
@@ -1657,6 +1657,7 @@ def _reindex(changed_files_only: bool) -> str:
     if not changed_files_only:
         # #50: keep a copy of the index to restore if the rebuild raises (embedder OOM,
         # a failed model download), rather than leaving it empty until the next rerun.
+        # ADR-049: a backup a killed run left behind is restored here, never deleted.
         _backup_dir = _snapshot_index(INDEX_DIR, db_path)
         # Wipe all index state so run_incremental treats everything as new
         if os.path.exists(db_path):
@@ -1694,12 +1695,16 @@ def _reindex(changed_files_only: bool) -> str:
         if _backup_dir is not None:
             sys.stdout = _old_stdout
             _restore_index(_backup_dir, INDEX_DIR, db_path)
+            # ADR-049: removed only once the restore has finished; a kill before
+            # this line leaves the backup for the next full rebuild to restore.
+            shutil.rmtree(_backup_dir, ignore_errors=True)
             _reload_indexes()
             print("[MCP] reindex: full rebuild failed; the previous index was restored")
         raise
     finally:
         sys.stdout = _old_stdout
     if _backup_dir is not None:
+        # run_incremental returned, so the new index is saved: the backup is done.
         shutil.rmtree(_backup_dir, ignore_errors=True)
 
     # Reload in-memory state so subsequent MCP tool calls see the updated index. The
@@ -2414,13 +2419,25 @@ def _snapshot_index(index_dir: str, db_path: str) -> str:
 
     The database is copied with SQLite's backup API, which reads a consistent
     snapshot through the WAL. Returns the backup directory.
+
+    ADR-049 (B-057): a backup that already exists was left by a full rebuild that
+    never finished, so it is the good copy and the live index is suspect. It is
+    restored and reused, never deleted. A new snapshot is copied into a
+    ``.partial`` directory and renamed into place only once complete, so a
+    ``.partial`` left behind was killed before the wipe and is safe to discard.
     """
     backup_dir = os.path.join(index_dir, ".pre-full-reindex")
-    shutil.rmtree(backup_dir, ignore_errors=True)   # left by a killed earlier run
-    os.makedirs(backup_dir)
+    if os.path.isdir(backup_dir):
+        print("[MCP] reindex: an earlier full rebuild never finished; restoring the "
+              "index it backed up before starting this one")
+        _restore_index(backup_dir, index_dir, db_path)
+        return backup_dir
+    partial = backup_dir + ".partial"
+    shutil.rmtree(partial, ignore_errors=True)
+    os.makedirs(partial)
     if os.path.exists(db_path):
         src = sqlite3.connect(db_path)
-        dst = sqlite3.connect(os.path.join(backup_dir, "graph.db"))
+        dst = sqlite3.connect(os.path.join(partial, "graph.db"))
         try:
             src.backup(dst)
         finally:
@@ -2428,12 +2445,14 @@ def _snapshot_index(index_dir: str, db_path: str) -> str:
             src.close()
     for name in os.listdir(index_dir):
         if name.endswith(".faiss"):
-            shutil.copy2(os.path.join(index_dir, name), os.path.join(backup_dir, name))
+            shutil.copy2(os.path.join(index_dir, name), os.path.join(partial, name))
+    os.replace(partial, backup_dir)
     return backup_dir
 
 
 def _restore_index(backup_dir: str, index_dir: str, db_path: str) -> None:
-    """Put back what `_snapshot_index` saved, then delete the backup."""
+    """Put back what `_snapshot_index` saved. The backup is kept: it is copied,
+    never moved, so a restore killed partway can simply be run again (ADR-049)."""
     saved_db = os.path.join(backup_dir, "graph.db")
     if os.path.exists(saved_db):
         src = sqlite3.connect(saved_db)
@@ -2448,8 +2467,9 @@ def _restore_index(backup_dir: str, index_dir: str, db_path: str) -> None:
         if name.endswith(".faiss") and name not in saved_faiss:
             os.remove(os.path.join(index_dir, name))
     for name in saved_faiss:
-        os.replace(os.path.join(backup_dir, name), os.path.join(index_dir, name))
-    shutil.rmtree(backup_dir, ignore_errors=True)
+        tmp = os.path.join(index_dir, name + ".restoring")
+        shutil.copy2(os.path.join(backup_dir, name), tmp)
+        os.replace(tmp, os.path.join(index_dir, name))
 
 
 def _reload_indexes() -> None:
