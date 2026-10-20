@@ -157,10 +157,56 @@ Rules kept narrow on purpose:
 
 ## Implementation Log
 
-- [ ] `scan_policy.py`: `.gs`, `.cshtml`, `.razor`; `obj`, `bin/Debug`, `bin/Release`, `bin/x64`, `bin/x86`; multi-segment `ignore_dirs`; `files`/`extra_files` with `!` exceptions
-- [ ] `adapters/__init__.py`: `AppsScriptAdapter` and the `.gs` REGISTRY entry
-- [ ] Conformance fixture for `.gs`, scored 1.0/1.0, baseline row
-- [ ] Tests: `.gs` scannable + cross-file resolution; `obj`/`bin` incl. Python `bin/*.py`; Razor end to end; credential files and their must-still-index cases; `extra_*`/bare-key behavior for the new knob
-- [ ] `src/CLAUDE.md` "The Scan Gate"
+- [x] `scan_policy.py`: `.gs`, `.cshtml`, `.razor`; `obj`, `bin/Debug`, `bin/Release`, `bin/x64`, `bin/x86`; multi-segment `ignore_dirs`; `files`/`extra_files` with `!` exceptions. Still a leaf module: the one new import is stdlib `fnmatch`.
+- [x] `adapters/__init__.py`: `AppsScriptAdapter` and the `.gs` REGISTRY entry
+- [x] Conformance fixture `tests/fixtures/conformance/apps_script/{menu,helpers}.gs`: 1.0/1.0 on symbols (6), all edges (16) and call edges (16); new `apps_script` row in `benchmarks/conformance/baseline.json`
+- [x] Tests: `tests/test_scan_defaults_adr052.py` (67 cases, 1 of them a strict xfail) — `.gs` scannable, parsed, and resolved across files; `obj`/`bin` including Python `bin/*.py` and npm `bin/*.js`, through `scan_disk` too; Razor end to end through `run_incremental` with a fake tokenizer and embedder; credential files and the look-alikes that must still be indexed; `extra_files`/`files`/`!`/both-keys/bad-value behavior
+- [x] `src/CLAUDE.md` "The Scan Gate"
 
 **Notes:**
+
+- 2026-10-20 — **`.gs` needed an adapter subclass, not a REGISTRY line.** Found before writing
+  it: `_WebAdapter.parse` and `analyze_tags` index `self._grammars[ext]`. The subclass lives in
+  `adapters/__init__.py`, so `ts_adapter.py` (graph session) is untouched.
+- 2026-10-20 — **Apps Script resolution, measured** (fixture: `menu.gs` + `helpers.gs`, real
+  `parse_file` → `CodeDB.upsert_file` → `resolve_call_edges`, CPU, no model): 16 call edges,
+  **4 resolved, all correct** — `recalculate → getEstimateSheet / sumColumn / formatCurrency`
+  (menu → helpers) and `formatCurrency → currencySymbol` (helpers → menu), each by the
+  unique-repo-wide rule; the 12 service and built-in calls (`getUi`, `getActive`, `getRange`,
+  `toFixed`, …) stay unresolved; **0 wrong**. The resolved edges carry no producer confidence
+  (`confidence` NULL, `candidate` 0), so they read as verified (effective ≥ the 0.5 floor), the same
+  grade as any unique-name resolution in JS. A name defined in two files with the caller in a third
+  stays unresolved; with the caller in one of the two, the same-file step binds it to its own copy,
+  which Apps Script would not do — pinned as `xfail(strict=True)`.
+- 2026-10-20 — **Resolution harness not used for `.gs`.** `tools/resolution_eval.py` gates each
+  language on the typed regime *beating* the hint-stripped baseline. Apps Script has no imports or
+  receiver types, so the two regimes are identical by construction and a `.gs` row would fail that
+  gate for a reason that says nothing about correctness. The cross-file measurement is a pytest
+  instead.
+- 2026-10-20 — **Razor end to end.** `.cshtml` and `.razor` through `scan_disk` → `run_incremental`
+  with a fake tokenizer (words and whitespace) and a fake embedder: both files get chunks in all
+  three tiers, zero symbols, zero edges, no crash; `.xaml` in the same tree is skipped by default.
+  `parse_file` returns an empty result for an extension with no adapter, and `chunk_file_ast`
+  falls straight to `fallback_token_chunker`.
+- 2026-10-20 — **Outside this ADR's file list:** `tools/conformance_eval.py`, one line (`".gs":
+  "apps_script"` in `_LANG_BY_EXT`). Fixture discovery matches `stem + ext` against that table,
+  so without it the `.gs` fixture is an orphan `expected.json` and the eval raises.
+- 2026-10-20 — **Not regenerated:** the README conformance table (`--write-readme`) now lacks the
+  `apps_script` row. `README.md` belongs to the symbols session (ADR-050) on this round; run
+  `python tools/conformance_eval.py --write-readme` after both merge. The "Defaults as of this
+  writing" comment in `indexer.toml`'s `[ignore]` block was already stale (it lists `indexer`,
+  `public`, `mocks`, which are not defaults) and now also misses this ADR's additions; that file
+  is not edited this round.
+
+**Open questions for @edb:**
+
+1. **Removing one default.** `files` has `!` exceptions, but `dirs` and `extensions` still need a
+   full replacement to drop a single default (e.g. a repo that wants `obj/` indexed). Worth a
+   `!` form for those knobs too?
+2. **`.xaml`.** Left opt-in (§3). If the B-063 build on AcadeDesignTools shows XAML answers
+   questions the code-behind can't, flip it.
+3. **Apps Script duplicates.** Is the duplicate-definition wrong binding worth a language-aware
+   rule in `call_resolver.py` (no same-file step for `.gs`), or is it fine as a known gap?
+4. **gcloud key-name pattern.** `*-<12 hex>.json` also matches any hyphenated name ending in 12 hex
+   digits (a content-hashed build manifest). Acceptable loss, or drop it and rely on the other
+   service-account patterns?
