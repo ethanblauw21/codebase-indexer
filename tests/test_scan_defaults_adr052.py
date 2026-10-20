@@ -150,15 +150,34 @@ def test_gs_a_name_defined_in_two_files_is_ambiguous_without_a_same_file_copy(tm
     assert got[("c.gs::run", "log")] is None
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "ADR-052 §1 known gap: Apps Script runs whichever duplicate loads last, everywhere; "
-    "the resolver's same-file step binds a.gs's caller to a.gs's copy"))
 def test_gs_a_duplicate_definition_is_not_bound_to_the_callers_own_file(tmp_path):
+    # Apps Script runs whichever duplicate loads last, everywhere, so neither copy is
+    # provably the callee (ADR-052 §1, call_resolver's Apps Script rule).
     got = _resolve({
         "a.gs": "function log(x) { return x; }\nfunction run() { return log(1); }\n",
         "b.gs": "function log(x) { return x + 1; }\n",
     }, tmp_path)
     assert got[("a.gs::run", "log")] is None
+
+
+def test_js_keeps_the_same_file_step_for_a_duplicate(tmp_path):
+    # The rule is Apps Script's: a module-scoped .js caller still binds to its own copy.
+    got = _resolve({
+        "a.js": "function log(x) { return x; }\nfunction run() { return log(1); }\n",
+        "b.js": "function log(x) { return x + 1; }\n",
+    }, tmp_path)
+    assert got[("a.js::run", "log")] == "a.js::log"
+
+
+def test_gs_member_call_keeps_the_same_file_step(tmp_path):
+    # this.total() names a method of the caller's own class, which the shared global
+    # scope does not change.
+    got = _resolve({
+        "a.gs": ("class Sheet {\n  total() { return 1; }\n"
+                 "  show() { return this.total(); }\n}\n"),
+        "b.gs": "class Other {\n  total() { return 2; }\n}\n",
+    }, tmp_path)
+    assert got[("a.gs::Sheet.show", "total")] == "a.gs::Sheet.total"
 
 
 # ---------------------------------------------------------------------------
@@ -453,3 +472,42 @@ def test_no_config_yields_the_file_defaults(tmp_path):
     policy = sp.scan_policy(_repo(tmp_path))
     assert policy.ignore_files == sp.DEFAULT_IGNORE_FILES
     assert "ignore_files=" in policy.describe()
+
+
+# ---------------------------------------------------------------------------
+# `!` drops one default from dirs, root_dirs and extensions (ADR-052 §5)
+# ---------------------------------------------------------------------------
+
+def test_a_bang_dir_drops_one_default_and_keeps_the_rest(tmp_path):
+    policy = sp.scan_policy(_repo(tmp_path, '[ignore]\nextra_dirs = ["!obj", "Migrations"]\n'))
+    assert policy.is_indexable("App/obj/Generated.cs")              # obj dropped
+    assert not policy.is_indexable("App/bin/Debug/App.cs")          # other defaults stay
+    assert not policy.is_indexable("node_modules/x/index.js")
+    assert not policy.is_indexable("App/Migrations/0001_Init.cs")   # and the addition holds
+
+
+def test_a_bang_drops_a_multi_segment_dir_folded(tmp_path):
+    policy = sp.scan_policy(_repo(tmp_path, '[ignore]\nextra_dirs = ["!BIN/debug"]\n'))
+    assert policy.is_indexable("App/bin/Debug/App.cs")
+    assert not policy.is_indexable("App/bin/Release/App.cs")
+
+
+def test_a_bang_root_dir_drops_one_default(tmp_path):
+    policy = sp.scan_policy(_repo(tmp_path, '[ignore]\nextra_root_dirs = ["!functions"]\n'))
+    assert policy.is_indexable("functions/src/index.ts")
+
+
+def test_a_bang_extension_drops_one_default(tmp_path):
+    policy = sp.scan_policy(_repo(tmp_path, '[ignore]\nextra_extensions = ["!.cshtml"]\n'))
+    assert not policy.is_indexable("Views/Home/Index.cshtml")
+    assert policy.is_indexable("Pages/Counter.razor")
+
+
+def test_a_bang_that_names_no_default_raises(tmp_path):
+    with pytest.raises(ValueError, match="names no built-in default"):
+        sp.scan_policy(_repo(tmp_path, '[ignore]\nextra_dirs = ["!objj"]\n'))
+
+
+def test_a_bang_in_the_bare_key_raises(tmp_path):
+    with pytest.raises(ValueError, match="nothing to remove"):
+        sp.scan_policy(_repo(tmp_path, '[ignore]\ndirs = ["!obj"]\n'))
