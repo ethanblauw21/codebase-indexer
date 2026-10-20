@@ -41,27 +41,40 @@ def git_sha(cwd=None):
 
 
 def stack_provenance(config=None):
-    """The models a run used, for stamping every baseline row (ADR-055, B-009).
+    """The stack a run used, for stamping every baseline row (ADR-055, B-009): its
+    models, whether summaries were on, and the fusion settings.
 
     Read from ``load_indexer_config()``, the call ``core.py`` and ``HybridRetriever``
     make during the run, so the stamp cannot drift from what ran. A key the config
     leaves out reports the code default the run fell back to. ``reranker_enabled`` is
-    the config's switch; a harness that turns the reranker on per arm records its own.
+    the config's switch; a harness that turns the reranker on per arm records its own,
+    and the same goes for ``fusion_mode``.
     """
-    from config import DEFAULT_SUMMARIZER_MODEL_ID, load_indexer_config
+    from config import (DEFAULT_SUMMARIZATION_ENABLED, DEFAULT_SUMMARIZER_MODEL_ID,
+                        load_indexer_config)
     from core import _DEFAULT_DIMENSION, _DEFAULT_MODEL_ID
-    from hybrid_retriever import _DEFAULT_RERANKER_ENABLED, _DEFAULT_RERANKER_MODEL_ID
+    from hybrid_retriever import (_DEFAULT_DENSE_WEIGHT, _DEFAULT_FILE_CHUNK_WEIGHT,
+                                  _DEFAULT_FUSION_MODE, _DEFAULT_RERANKER_ENABLED,
+                                  _DEFAULT_RERANKER_MODEL_ID, _DEFAULT_SPARSE_WEIGHT,
+                                  _DEFAULT_SUMMARY_WEIGHT)
 
     cfg = load_indexer_config() if config is None else config
     emb = cfg.get("embeddings", {})
     rer = cfg.get("reranker", {})
     summ = cfg.get("summarization", {})
+    ret = cfg.get("retrieval", {})
     return {
         "embedder_model_id": emb.get("model_id", _DEFAULT_MODEL_ID),
         "embedder_dim": int(emb.get("dimension", _DEFAULT_DIMENSION)),
         "reranker_model_id": rer.get("model_id", _DEFAULT_RERANKER_MODEL_ID),
         "reranker_enabled": bool(rer.get("enabled", _DEFAULT_RERANKER_ENABLED)),
         "summarizer_model_id": str(summ.get("model_id", DEFAULT_SUMMARIZER_MODEL_ID)),
+        "summarization_enabled": bool(summ.get("enabled", DEFAULT_SUMMARIZATION_ENABLED)),
+        "fusion_mode": str(ret.get("fusion_mode", _DEFAULT_FUSION_MODE)),
+        "dense_weight": float(ret.get("dense_weight", _DEFAULT_DENSE_WEIGHT)),
+        "sparse_weight": float(ret.get("sparse_weight", _DEFAULT_SPARSE_WEIGHT)),
+        "summary_weight": float(ret.get("summary_weight", _DEFAULT_SUMMARY_WEIGHT)),
+        "file_chunk_weight": float(ret.get("file_chunk_weight", _DEFAULT_FILE_CHUNK_WEIGHT)),
     }
 
 

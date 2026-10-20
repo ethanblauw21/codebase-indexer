@@ -97,6 +97,14 @@ enabled = true
 
 [summarization]
 model_id = "example/fake-summarizer"
+enabled = false
+
+[retrieval]
+fusion_mode = "convex"
+dense_weight = 0.6
+sparse_weight = 0.4
+summary_weight = 0.25
+file_chunk_weight = 0.75
 """
 
 
@@ -113,6 +121,12 @@ def test_append_baseline_stamps_the_stack_the_run_loaded(tmp_path, monkeypatch):
     assert row["reranker_model_id"] == "example/fake-reranker"
     assert row["reranker_enabled"] is True
     assert row["summarizer_model_id"] == "example/fake-summarizer"
+    assert row["summarization_enabled"] is False
+    assert row["fusion_mode"] == "convex"
+    assert row["dense_weight"] == 0.6
+    assert row["sparse_weight"] == 0.4
+    assert row["summary_weight"] == 0.25
+    assert row["file_chunk_weight"] == 0.75
 
 
 def test_a_field_the_record_sets_wins_over_the_config(tmp_path, monkeypatch):
@@ -138,4 +152,10 @@ def test_a_key_the_config_leaves_out_reports_the_code_default(tmp_path):
         "reranker_model_id": hr._DEFAULT_RERANKER_MODEL_ID,
         "reranker_enabled": hr._DEFAULT_RERANKER_ENABLED,
         "summarizer_model_id": config.DEFAULT_SUMMARIZER_MODEL_ID,
+        "summarization_enabled": config.DEFAULT_SUMMARIZATION_ENABLED,
+        "fusion_mode": hr._DEFAULT_FUSION_MODE,
+        "dense_weight": hr._DEFAULT_DENSE_WEIGHT,
+        "sparse_weight": hr._DEFAULT_SPARSE_WEIGHT,
+        "summary_weight": hr._DEFAULT_SUMMARY_WEIGHT,
+        "file_chunk_weight": hr._DEFAULT_FILE_CHUNK_WEIGHT,
     }

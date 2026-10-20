@@ -251,7 +251,8 @@ def evaluate(repo, arms, limit=0, verbose=False):
     for arm in arms:
         rows = arm_rows[arm]
         rec = {"repo": name, "language": lang, "arm": arm, "n": len(rows),
-               "git_sha": _git_sha(_ROOT), "reranker_enabled": ARMS[arm]["reranker_enabled"]}
+               "git_sha": _git_sha(_ROOT), "reranker_enabled": ARMS[arm]["reranker_enabled"],
+               "fusion_mode": ARMS[arm]["fusion_mode"]}
         for metric in ("mrr@10", "ndcg@10", "map", "recall@1", "recall@5",
                        "recall@10", "success@1", "success@5", "success@10"):
             mean, ci = _mean_ci(rows, metric)
@@ -271,7 +272,9 @@ def evaluate(repo, arms, limit=0, verbose=False):
                "pair": f"{x}-{y}", "git_sha": _git_sha(_ROOT),
                # ADR-055: None when the pair differs (the reranker lift is on − off)
                "reranker_enabled": (ARMS[x]["reranker_enabled"]
-                                    if ARMS[x]["reranker_enabled"] == ARMS[y]["reranker_enabled"] else None)}
+                                    if ARMS[x]["reranker_enabled"] == ARMS[y]["reranker_enabled"] else None),
+               "fusion_mode": (ARMS[x]["fusion_mode"]
+                               if ARMS[x]["fusion_mode"] == ARMS[y]["fusion_mode"] else None)}
         for metric in LIFT_METRICS:
             mean, ci, n = paired_lift(per_query[x], per_query[y], metric)
             rec[metric] = round(mean, 4)
