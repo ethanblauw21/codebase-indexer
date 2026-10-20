@@ -327,6 +327,10 @@ def run_subtask(task, model, reranker, cfg, limit_queries, seed, config_name="de
         "tier_projection": cfg["tier_projection"],
         "model_id": cfg["model_id"],
         "reranker_id": cfg["reranker_id"] if reranker is not None else None,
+        # ADR-055: this harness loads its own models; append_baseline stamps the rest
+        "embedder_model_id": cfg["model_id"],
+        "reranker_model_id": cfg["reranker_id"],
+        "reranker_enabled": reranker is not None,
         "fusion_weights": ({"dense": dense_w, "sparse": sparse_w} if use_sparse else None),
         "rerank_depth": rerank_depth if paired else None,
         "git_sha": _git_sha(_ROOT),

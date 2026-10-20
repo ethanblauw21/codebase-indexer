@@ -79,6 +79,8 @@ _RRF_K = 60             # RRF smoothing constant (standard value)
 _TIER1_NAME = "tier1_surgical"
 _TIER2_NAME = "tier2_component"
 _TIER3_NAME = "tier3_architectural"
+# ADR-055: when two hits in one file have the same text, the more specific tier stands.
+_TIER_ORDER = {_TIER1_NAME: 1, _TIER2_NAME: 2, _TIER3_NAME: 3}
 
 # ---------------------------------------------------------------------------
 # Config defaults (ADR-026 §8) — these MUST equal the values shipped in
@@ -127,6 +129,35 @@ class RetrievedChunk:
 def _is_fqn(scope: str) -> bool:
     """True when a scope string looks like a Fully Qualified Name ("file::symbol")."""
     return "::" in scope
+
+
+def _dedupe_same_text(ranked: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """One hit per text in a file, best first (ADR-055, B-010). Run before a top-k cut.
+
+    A file smaller than the tier-2 window has identical tier-2 and tier-3 chunks, and
+    both were returned: about a fifth of the slots on 2026-07-27. The hit from the most
+    specific tier stands, at its group's best position and score, so the text is never
+    demoted and the cut refills from the next distinct hit. The file is part of the key:
+    find_similar_code and the per-file scan tools need every copy. Empty text says
+    nothing about content, so it never matches.
+    """
+    out: list[RetrievedChunk] = []
+    slot: dict[tuple[str, str], int] = {}   # (file, text) → index in out
+    for chunk in ranked:
+        if not chunk.text:
+            out.append(chunk)
+            continue
+        key = (chunk.file, chunk.text)
+        i = slot.get(key)
+        if i is None:
+            slot[key] = len(out)
+            out.append(chunk)
+            continue
+        kept = out[i]
+        if _TIER_ORDER.get(chunk.tier, 9) < _TIER_ORDER.get(kept.tier, 9):
+            chunk.score = kept.score
+            out[i] = chunk
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +381,7 @@ class HybridRetriever:
             score[fid] = score.get(fid, 0.0) + self._summary_weight / (_RRF_K + rank + 1)
 
         by_id = {c.faiss_id: c for c in ranked}
-        out: list[RetrievedChunk] = []
-        seen: set[tuple[str, str]] = set()
+        fused: list[RetrievedChunk] = []
         for fid in sorted(score, key=score.get, reverse=True):
             chunk = by_id.get(fid)
             if chunk is None:
@@ -364,6 +394,14 @@ class HybridRetriever:
                     text=meta.get("text", ""), source="summary",
                     tags=meta.get("tags") or [], corroborated=True,
                 )
+            chunk.score = score[fid]
+            fused.append(chunk)
+
+        out: list[RetrievedChunk] = []
+        seen: set[tuple[str, str]] = set()
+        # ADR-055: a chunk found only through its summary can be the twin of one
+        # already ranked, so identical text collapses again before the cut.
+        for chunk in _dedupe_same_text(fused):
             # One chunk per split parent. The parts of a big class or file sit in
             # both lists, so without this they filled the top N as near-duplicates:
             # p-queue's pq-concurrency returned 10 chunks covering 2 scopes, and lost
@@ -374,7 +412,6 @@ class HybridRetriever:
             if key in seen:
                 continue
             seen.add(key)
-            chunk.score = score[fid]
             out.append(chunk)
             if len(out) == top_n:
                 break
@@ -615,7 +652,8 @@ class HybridRetriever:
         """Score every candidate in `pool` against `query` via the cross-encoder.
 
         Falls back to RRF score ordering if the cross-encoder is unavailable.
-        Returns at most ``top_n`` chunks, highest score first.
+        Returns at most ``top_n`` chunks, highest score first, one per text in a
+        file (ADR-055).
         """
         if not pool:
             return []
@@ -630,7 +668,7 @@ class HybridRetriever:
                     if query_categories & set(chunk.tags):
                         chunk.score += _CATEGORY_BOOST
             pool.sort(key=lambda c: c.score, reverse=True)
-            return pool[:top_n]
+            return _dedupe_same_text(pool)[:top_n]
 
         pairs = [(query, c.text) for c in pool]
 
@@ -649,7 +687,7 @@ class HybridRetriever:
                 exc,
             )
             pool.sort(key=lambda c: c.score, reverse=True)
-            return pool[:top_n]
+            return _dedupe_same_text(pool)[:top_n]
 
         # Composite scoring
         name_mentions: dict[str, int] = {}
@@ -678,4 +716,4 @@ class HybridRetriever:
             chunk.score     = ce_score + density_bonus + locality_bonus + category_bonus
 
         pool.sort(key=lambda c: c.score, reverse=True)
-        return pool[:top_n]
+        return _dedupe_same_text(pool)[:top_n]
