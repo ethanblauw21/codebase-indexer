@@ -9,11 +9,12 @@ files, making repeated runs over a stable codebase close to instant.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CHANGE DETECTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-For each file on disk we compute an MD5 digest of its raw bytes and compare it
-against the `content_hash` column in the SQLite `files` table.  MD5 is chosen
-over SHA-256 because it is ~3× faster and collision resistance is irrelevant
-for change detection (we are not using it for security).  Reading the file in
-64 KiB blocks keeps memory usage constant regardless of file size.
+For each file on disk we compute an MD5 digest of its bytes, with line endings
+normalized (ADR-051), and compare it against the `content_hash` column in the
+SQLite `files` table.  MD5 is chosen over SHA-256 because it is ~3× faster and
+collision resistance is irrelevant for change detection (we are not using it for
+security).  Reading the file in 64 KiB blocks keeps memory usage constant
+regardless of file size.
 
 Three categories result from the comparison:
 
@@ -355,6 +356,44 @@ def chunker_version_warning(db: CodeDB) -> Optional[str]:
             "(reindex(changed_files_only=False) or a fresh code-indexer build).")
 
 
+# ADR-051 (B-054): the folder's file key is an MD5 with line endings normalized. An
+# index without this marker holds raw-byte MD5s, which differ for every file with a \r.
+FILE_KEY_VERSION = "md5-lf"
+FILE_KEY_KEY = "file_key"
+
+
+def rekey_unchanged_files(db: CodeDB, diff: DiffResult, disk: dict[str, str],
+                          source) -> DiffResult:
+    """Drop from `diff.modified` the files an older index only hashed differently.
+
+    ADR-051 §2: a file whose stored hash is the raw-byte MD5 of its bytes as they are
+    now has not changed, so its stored hash is rewritten to the new key in place and
+    nothing is re-indexed. Runs until a completed run records `FILE_KEY_VERSION`; a
+    git source keys on blob ids, which this does not touch.
+    """
+    if (not diff.modified or getattr(source, "commit", None) is not None
+            or db.meta_get(FILE_KEY_KEY) == FILE_KEY_VERSION):
+        return diff
+    from source import md5_file_raw
+    stored = dict(db._conn.execute("SELECT path, content_hash FROM files"))
+    same: list[str] = []
+    for path in diff.modified:
+        try:
+            if stored.get(path) == md5_file_raw(os.path.join(source.repo_path, path)):
+                same.append(path)
+        except OSError:
+            pass                    # gone since the scan: left modified, as before
+    if not same:
+        return diff
+    with db._tx() as cur:
+        cur.executemany("UPDATE files SET content_hash = ? WHERE path = ?",
+                        [(disk[p], p) for p in same])
+    print(f"  [index] {len(same)} file(s) differed only in how line endings were hashed "
+          f"(ADR-051); re-keyed in place, not re-indexed.")
+    kept = set(same)
+    return diff._replace(modified=[p for p in diff.modified if p not in kept])
+
+
 def _write_index_meta(db: CodeDB, repo_path: str, source=None) -> None:
     """ADR-025 §4/§5: record run-level freshness facts from the shared chokepoint
     so CLI and MCP agree about what is indexed. Written on EVERY completed run,
@@ -366,6 +405,8 @@ def _write_index_meta(db: CodeDB, repo_path: str, source=None) -> None:
         db.meta_set("last_indexed_commit", head)
     db.meta_set("source", getattr(source, "label", "worktree"))
     db.meta_set("last_verified_at", _now_iso())
+    # ADR-051 §2: every file a completed run leaves indexed is keyed the new way.
+    db.meta_set(FILE_KEY_KEY, FILE_KEY_VERSION)
     try:
         db.meta_set("files_total", str(db.stats().get("files", 0)))
     except Exception:
@@ -1170,6 +1211,7 @@ def _run_incremental(
     print("Scanning files...")
     disk_hashes = source.list()
     diff        = compute_diff(db, disk_hashes)
+    diff        = rekey_unchanged_files(db, diff, disk_hashes, source)
 
     # ADR-026 §5: an ordinary run can irreversibly purge most of an index — that is
     # the same mechanism that makes the ignore-set migration free. Checked before any
