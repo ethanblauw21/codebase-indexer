@@ -1478,3 +1478,73 @@ class CodeDB:
             t: self._conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             for t in tables
         }
+
+    # ------------------------------------------------------------------
+    # Symbol-table reads for the outline / source / changed-symbol tools (ADR-050)
+    # ------------------------------------------------------------------
+
+    def has_files(self) -> bool:
+        """Whether anything has been indexed into this database."""
+        return self._conn.execute("SELECT 1 FROM files LIMIT 1").fetchone() is not None
+
+    def get_file_record(self, path: str) -> Optional[dict]:
+        """The `files` row for an exact repo-relative path, or None."""
+        row = self._conn.execute(
+            "SELECT path, content_hash, indexed_at, content_changed_at FROM files WHERE path = ?",
+            (path,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def find_file_paths(self, tail: str, limit: int = 20) -> list[str]:
+        """Indexed paths equal to ``tail`` or ending in ``/tail``, compared case-insensitively.
+
+        ``tail`` is a repo-relative POSIX path or a trailing part of one (``db.py``,
+        ``src/db.py``). Matched in Python rather than with LIKE, whose ``_`` wildcard
+        would match half the file names in a Python repo.
+        """
+        want = tail.lower()
+        rows = self._conn.execute("SELECT path FROM files").fetchall()
+        hits = sorted(p for (p,) in rows if p.lower() == want or p.lower().endswith("/" + want))
+        return hits[:limit]
+
+    def get_file_symbol_locations(self, path: str) -> list[dict]:
+        """Every symbol located in ``path``, ordered by start line, outer before inner.
+
+        Read through ``symbol_locations``, so a C# partial class lists the part declared in
+        this file, with this file's span, rather than only under the file that claimed its
+        ``symbols`` row. Dicts: fqn, kind, name, class_context, start_line, end_line, text.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT s.fqn, s.kind, s.name, s.class_context,
+                   l.start_line, l.end_line, l.text
+            FROM   symbol_locations l
+            JOIN   symbols s ON s.id = l.symbol_id
+            JOIN   files   f ON f.id = l.file_id
+            WHERE  f.path = ?
+            ORDER  BY l.start_line, l.end_line DESC, s.fqn
+            """,
+            (path,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def find_symbol_locations(self, name: str, limit: int = 200) -> list[dict]:
+        """Every location of a symbol whose ``name`` column equals ``name`` exactly.
+
+        Dicts as get_file_symbol_locations', plus ``path``. Callers narrow by a qualified
+        tail or FQN themselves; ``name`` is indexed, so this is a point lookup.
+        """
+        rows = self._conn.execute(
+            """
+            SELECT s.fqn, s.kind, s.name, s.class_context,
+                   l.start_line, l.end_line, l.text, f.path
+            FROM   symbols s
+            JOIN   symbol_locations l ON l.symbol_id = s.id
+            JOIN   files            f ON f.id = l.file_id
+            WHERE  s.name = ?
+            ORDER  BY f.path, l.start_line
+            LIMIT  ?
+            """,
+            (name, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
