@@ -57,6 +57,8 @@ from __future__ import annotations
 
 import atexit
 import logging
+import os
+import sys
 import time
 from dataclasses import asdict, dataclass, fields
 from typing import Callable, Sequence
@@ -290,6 +292,40 @@ def _worker_init(model_id: str, device: str, dtype_str: str) -> None:
     _w_model.eval()
     _w_device = device
     print("  [Summarizer] Ready.", flush=True)
+
+
+# ADR-054 (B-013): how far the isolated worker drops its CPU priority. Nothing waits
+# on it interactively, so it should yield to the developer's foreground work rather
+# than finish first. Below-normal on Windows; nice 10 (what `nice` uses) on POSIX.
+_WORKER_NICE = 10
+_BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+
+
+def _lower_priority() -> None:
+    """Drop this process to below-normal CPU priority. Never raises.
+
+    Runs in the worker before torch loads, so the threads torch starts inherit it:
+    on Linux a nice value belongs to the thread that set it and the threads it
+    starts afterwards. The model host never calls this. Its one scheduler thread
+    also embeds search queries, which someone is waiting on (ADR-054 §3).
+    """
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            if not kernel32.SetPriorityClass(kernel32.GetCurrentProcess(),
+                                             _BELOW_NORMAL_PRIORITY_CLASS):
+                raise OSError(f"SetPriorityClass failed (error {kernel32.GetLastError()})")
+        else:
+            os.nice(_WORKER_NICE)
+    except Exception as exc:  # noqa: BLE001 — a worker at normal priority still works
+        logger.warning("summarizer worker could not lower its priority: %s", exc)
+
+
+def _isolated_worker_init(model_id: str, device: str, dtype_str: str) -> None:
+    """IsolatedChunkSummarizer's initializer: lower the worker's priority, then load."""
+    _lower_priority()
+    _worker_init(model_id, device, dtype_str)
 
 
 def _messages(code: str) -> list[dict]:
@@ -592,6 +628,8 @@ class IsolatedChunkSummarizer:
       • An OOM or segfault in the worker raises BrokenProcessPool (a Python
         exception) in the caller — caught here, summarization is disabled
         gracefully, and indexing continues for all remaining files.
+      • The worker runs at below-normal CPU priority (ADR-054), so a reindex's
+        summaries yield to the developer's foreground work.
 
     dtype defaults to "float16" to halve model RAM on CPU (~3 GB vs ~6 GB
     for 1.5B float32).  transformers supports float16 inference on CPU.
@@ -640,7 +678,7 @@ class IsolatedChunkSummarizer:
         from concurrent.futures import ProcessPoolExecutor
         self._executor = ProcessPoolExecutor(
             max_workers=1,
-            initializer=_worker_init,
+            initializer=_isolated_worker_init,
             initargs=(self._model_id, self._device, self._dtype),
         )
 

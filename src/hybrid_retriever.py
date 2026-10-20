@@ -38,6 +38,7 @@ See stable_id.py for the formula and its constraints.
 """
 from __future__ import annotations
 
+import blas_threads  # noqa: F401 — B-062: before anything imports numpy or faiss
 import logging
 import os
 import re
