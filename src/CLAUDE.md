@@ -144,9 +144,10 @@ Source files
 
 ### MCP Tools (MCPServer.py)
 
-Fourteen AI-facing tools grouped by intent:
+Seventeen AI-facing tools grouped by intent:
 
 - **Search**: `semantic_code_search`, `find_similar_code`
+- **Lookup**: `get_file_outline`, `get_symbol_source`, `changed_symbols`
 - **Impact**: `analyze_blast_radius`, `detect_pattern_violations`
 - **Tracing**: `trace_data_flow`, `investigate_architecture`, `what_writes`
 - **Discovery**: `find_test_coverage`, `find_dead_code`, `find_unabstracted_collection_reads`, `map_module_communities`, `verify_candidate_edges`
@@ -164,6 +165,14 @@ through the ranked surface can only lose writers (ADR-019's hop-decay finding).
 candidate (name-based / unresolved) call edges. `index_status` (ADR-025) reports
 index freshness — `last_verified_at`, `last_indexed_commit` vs HEAD, and files whose
 content changed within a window — for agents and downstream context hubs.
+
+The three **Lookup** tools (ADR-050) answer straight from the symbol table, like
+`what_writes`: no retrieval and no model. `get_symbol_source` never serves the stored
+copy of a symbol. It reads the file through `source.py` from what the index was built
+from (the indexed commit in git mode) and checks it against the stored text: it serves
+the symbol in place, serves it from its new lines when it moved, or refuses when it
+changed. `changed_symbols` diffs with git from the ref's merge base; the ref is
+validated before git sees it, and every git call has a timeout.
 
 `map_module_communities` (ADR-006) is the whole-graph structural view: it reads the
 SQLite edge graph, runs Louvain community detection + betweenness centrality over it

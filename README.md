@@ -214,6 +214,9 @@ first `python` on PATH): a CPU-only interpreter puts the models on the CPU.
 |------|----------|-------------|
 | `semantic_code_search` | Search | FAISS + RRF search across all three tiers |
 | `find_similar_code` | Search | Find duplicates and callers of a code snippet |
+| `get_file_outline` | Lookup | A file's symbols: kind, signature and line range, no bodies |
+| `get_symbol_source` | Lookup | One symbol's source, checked against what was indexed; lists candidates when the name is ambiguous |
+| `changed_symbols` | Lookup | The symbols a branch changed since a git ref, optionally with their callers and importers |
 | `analyze_blast_radius` | Impact | Map callers, dependents, and parallel implementations of a symbol |
 | `detect_pattern_violations` | Impact | Find files that should follow a pattern but don't |
 | `trace_data_flow` | Tracing | Full lifecycle of a data symbol (definitions → producers → consumers) |
@@ -278,7 +281,7 @@ codebase-indexer/
 ├── tests/
 ├── tools/                     # Eval + CI harnesses (coir_eval, conformance_eval, …)
 └── src/
-    ├── MCPServer.py            # MCP server entry point — all 14 tools, and the watchdog
+    ├── MCPServer.py            # MCP server entry point — all 17 tools, and the watchdog
     ├── config.py               # Locates and parses the per-repo indexer.toml
     ├── index_location.py       # Where the index lives: .code-index or <git dir>/code-index (ADR-042)
     ├── index_lock.py           # One writer and one watchdog per index (ADR-038)

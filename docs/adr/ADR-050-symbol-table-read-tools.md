@@ -69,22 +69,24 @@ over new read-only `CodeDB` methods. They do no retrieval and load no model.
     (`index_meta.last_indexed_commit`). That is the exact text the symbol table describes. The answer
     names the commit and says it is not the caller's working tree, the same caveat the server
     instructions give.
-- **Staleness: re-read and verify, refuse when it can't be verified.** The stored `text` is the
-  witness. The span read from the source is compared with it (both stripped, which absorbs the
-  first-line indentation):
-  1. It matches → served with exact line numbers. If the file's hash differs from the indexed one, the
-     answer says the file changed elsewhere but this symbol's span did not.
-  2. It doesn't, but the stored text occurs exactly once elsewhere in the current file → served from
-     its new position, and the answer says it moved from the indexed lines.
-  3. Neither → **refused with an error**: the symbol changed since indexing, here are the indexed
-     lines, Read the file. Serving the re-read span here would show whatever now sits on those lines,
-     which may be a different function. That is the backlog's trap in a new form.
-  The hash is the cheap "file changed" signal; the text comparison decides what is served. So a change
-  to how `content_hash` is computed (ADR-051 is touching keys on a sibling branch) can at worst add a
-  spurious "file changed" note, never serve wrong text.
-- **Skeleton texts.** A class whose stored `text` is an ADR-034 skeleton (stubbed bodies) can't be
-  matched line for line. A class span is verified by its declaration line alone, and its hash. See the
-  Implementation Log for what the adapters actually store.
+- **Staleness: re-read and verify, refuse when it can't be verified.**
+  - If the file still has its indexed hash, the indexed span is exact and is served.
+  - Otherwise the stored `text` is the witness. It is split into blocks, at ADR-034 skeleton stubs
+    (` ...`, which replace a class's member bodies) and at blank lines (a merged overload set is its
+    parts reordered). Each block is stripped, which absorbs the first line's missing indentation and an
+    `export` the node doesn't include. Then:
+    1. Every block is still inside the indexed span → served with its line numbers, and a note that the
+       file changed elsewhere but this symbol's lines did not.
+    2. Exactly one same-length span starting where the first block now occurs holds every block →
+       served from there, with a note that it moved from the indexed lines and that other line numbers
+       in the file may have shifted.
+    3. Neither → **refused with an error**: the symbol changed since indexing; here are the indexed
+       lines; Read the file. Serving the re-read span here would show whatever now sits on those lines,
+       which may be a different function. That is the backlog's trap in a new form.
+  - The hash is the cheap "file changed" signal; the text comparison decides what is served. So a change
+    to how `content_hash` is computed (ADR-051 is touching keys on a sibling branch) can at worst add a
+    spurious "file changed" note, never serve wrong text.
+  - Served text is always the real source. A class comes back with its member bodies, not its skeleton.
 - Spans longer than 400 lines are cut, with a note pointing at `get_file_outline`.
 
 ### 3. `changed_symbols(ref, blast_radius=False, limit=100)` (B-020)
@@ -103,9 +105,10 @@ over new read-only `CodeDB` methods. They do no retrieval and load no model.
   `<ref>` is an ancestor (`HEAD~3`) the merge base is `<ref>`, so nothing changes for that case.
   - Git mode: the indexed side is `index_meta.last_indexed_commit`. The diff is commit to commit, and its
     new-side line numbers are exactly the index's.
-  - Folder mode: the indexed side is the working tree (`git diff <base>`, plus untracked indexed files,
-    whose symbols are all new), and the merge base is taken against `HEAD`. A file whose disk hash no
-    longer matches the index is flagged: its ranges may be off until the watchdog catches up.
+  - Folder mode: the indexed side is the working tree (`git diff <base>`), and the merge base is taken
+    against `HEAD`. Untracked files are added only when the index holds them; their symbols are all new.
+    A file whose disk hash no longer matches the index is flagged: its ranges may be off until the
+    watchdog catches up.
 - **Intersection.** `git diff -U0` gives the new-side lines each hunk added or changed. A pure deletion is
   a point between two lines. A symbol is reported when a changed line falls in its *own* lines: its span
   minus its nested symbols' spans. A one-line edit inside a method reports the method, not the method
@@ -120,8 +123,8 @@ over new read-only `CodeDB` methods. They do no retrieval and load no model.
 
 ### Shared
 
-- New `CodeDB` methods, appended at the end of the class and read-only: `get_file_record`,
-  `find_file_paths`, `get_file_symbol_locations`, `find_symbol_locations`.
+- New `CodeDB` methods, appended at the end of the class and read-only: `has_files`,
+  `get_file_record`, `find_file_paths`, `get_file_symbol_locations`, `find_symbol_locations`.
 - An index with no files at all (a server started where nothing was built) fails each tool with
   "no index here", not "file not indexed".
 - Every failure is raised, so the MCP client sees `isError: true`, as `reindex` already does.
@@ -163,14 +166,66 @@ over new read-only `CodeDB` methods. They do no retrieval and load no model.
 
 > Updated during development. Record deviations from the design, surprises, and decisions made in the moment.
 
-- [ ] `CodeDB` read methods
-- [ ] `get_file_outline` + tests
-- [ ] `get_symbol_source` + tests (unique, ambiguous, changed on disk, git mode)
-- [ ] `changed_symbols` + tests (temp git repo: changed vs untouched function, bad ref, option-like ref)
-- [ ] Each tool's failure path is `isError` through the MCP layer (pytest, FastMCP client session)
-- [ ] MCP Inspector `tools/list` and one good and one bad call per tool
-- [ ] Tool lists in `src/CLAUDE.md` and `README.md`
+- [x] `CodeDB` read methods (`src/db.py`, appended to the class)
+- [x] `get_file_outline` + tests
+- [x] `get_symbol_source` + tests (unique, ambiguous, edited elsewhere, moved, changed, deleted, git mode)
+- [x] `changed_symbols` + tests (temp git repo: changed vs untouched function, merge base, uncommitted and
+  untracked work, index behind disk, blast radius, bad ref, option-like refs, outside a repo, git mode)
+- [x] Each tool's failure path is `isError` through the MCP layer (pytest, in-memory FastMCP client session)
+- [x] MCP Inspector `tools/list` and one good and one bad call per tool
+- [x] Tool lists in `src/CLAUDE.md` and `README.md`
+- [ ] Once ADR-049 merges: confirm the three tools list `readOnlyHint` and their output goes through its
+  redaction. They are registered with the plain `@_tool()`, so both should arrive with no change here.
 
 **Open questions for @edb:**
 
+1. **A class whose method body changed is refused.** Its span grew or shrank, so no same-length span
+   holds its skeleton. The answer is honest, but for a class it is coarse. Accept it, or verify a class
+   by its skeleton blocks in order and extend its end to the next sibling?
+2. **Server instructions.** Suggested sentence for ADR-049's `_server_instructions` (not edited here):
+   "For what a file contains, call `get_file_outline` before Reading it; for one function, call
+   `get_symbol_source`."
+3. **Gitignored but indexed files** are invisible to `changed_symbols` in folder mode: the indexer
+   follows `scan_policy`, not `.gitignore`, and `git diff` follows git. Rare in practice; worth a note?
+4. **No raw-diff mode.** `changed_symbols` always diffs from the merge base. A `--no-merge-base` switch
+   is easy if review against a moving tip is ever wanted.
+
 **Notes:**
+
+<!-- 2026-10-20 --> **What the adapters store, checked before building §2.** Python, TS, C# and C++ symbols
+store the node's text, which starts at the node's column and leaves out a TS `export` and a Python
+decorator (`start_line` is the `def` line). Class symbols store an ADR-034 skeleton, and merged
+overload sets join their parts in implementation-first order. So "the stored text occurs in the span"
+is false for every class. The verification is block-wise (§2) rather than whole-text.
+
+<!-- 2026-10-20 --> **C++ declaration and definition share an FQN** (`ns::W::f(int)` at line 4 in the class
+and line 6 out of line). `symbols` keeps one row per FQN, and `symbol_locations` keeps one location per
+(symbol, file). The outline shows one of the two, the declaration. That is the existing schema, not
+something this ADR changes.
+
+<!-- 2026-10-20 --> **Inspector caught noise pytest didn't.** Against a scratch repo whose `.code-index/` was
+not gitignored, `changed_symbols` listed `graph.db`, `-shm` and `-wal` as "changed but not indexed".
+Untracked files now count only when the index holds them (test added). It also showed that the ref was
+checked after the index, so an option-like ref against an empty directory said "No index here". The
+shape check now runs first.
+
+<!-- 2026-10-20 --> **Tests.** Stack: Linux container, Python 3.12.3, git 2.43.0, mcp 1.30.0, no GPU and no
+model (HuggingFace offline). The suite on `871b55c` was 654 passed, 48 failed, 2 skipped; on this branch
+it is 702 passed, 48 failed, 2 skipped. The 48 are the same tests on both: each loads `BAAI/bge-code-v1`
+or its tokenizer, which can't be downloaded here. `tests/test_symbol_tools.py` adds 48 tests.
+`tests/test_index_state.py`'s registered-tool count moves from 14 to 17, the one line changed outside
+this ADR's files. flake8, `pytest --co`, `conformance_eval --check-baseline`, `resolution_eval
+--check-baseline` and `l5x_fixture_teeth --check` all pass.
+
+<!-- 2026-10-20 --> **MCP Inspector 2.8.0** (`--cli`, same stack):
+- `tools/list --strict`: exit 0, 17 tools. Description lengths: `get_file_outline` 587,
+  `get_symbol_source` 598, `changed_symbols` 637 characters. No tool on this branch declares
+  `readOnlyHint`: ADR-049 adds it inside `_tool`.
+- From an empty directory, each tool fails with `isError: true` and "No index here". A missing required
+  argument and an option-like ref (`--output=x`) also fail with `isError: true`, the ref before any
+  index or git work.
+- Against a scratch git repo with a SQLite-only index (parse and upsert, no embedder, no FAISS vectors):
+  `get_file_outline pkg/mod.py`, `get_symbol_source K.m` and `changed_symbols HEAD~1` succeed. An
+  unknown file, an unknown symbol, a missing `symbol`, `ref=no-such-branch` and `ref=--output=x` each
+  return `isError: true` with a message naming the case. The Inspector CLI won't send an empty-string
+  argument, so `symbol=""` is covered in pytest instead.
