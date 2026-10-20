@@ -1,6 +1,6 @@
 # ADR-049: A Safe Reindex, Read-Only Hints, Redacted Output and a Cheaper Tool Surface
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20
 **Branch:** `feature/adr-049-safe-reindex-and-tool-output`
 **Reviewer:** @edb
@@ -104,9 +104,20 @@ faithful. `src/redact.py` holds the patterns and replaces each match with `[REDA
 | `google-api-key` | `AIza` + 35 |
 | `anthropic-key` | `sk-ant-` + 20 or more |
 | `openai-key` | `sk-proj-` / `sk-svcacct-` / `sk-admin-` + 20 or more, or `sk-` + 20 or more letters and digits with no hyphen |
+| `stripe-key` | `sk_live_` / `sk_test_` / `rk_live_` / `rk_test_` + 24 or more, `whsec_` + 32 or more |
+| `aws-secret-key` | 40 characters of base64 after a `secret_access_key` / `SecretAccessKey` name (value only) |
+| `url-credential` | the password in `scheme://user:password@` (value only) |
+| `connection-string-password` | `Password=…;` / `Pwd=…;` in a connection string (value only) |
+| `secret-assignment` | a quoted literal of 8 or more non-space characters assigned to, or keyed by, a name containing `password`, `passwd`, `secret`, `api_key`, `apikey`, `access_token` or `auth_token` (value only) |
 
 False positives are kept low by requiring each prefix's real length and alphabet and a word boundary
 in front: `sk_` names, `sk-` kebab-case class names, short hex, and `AKIA` in prose pass through.
+The last four kinds have no prefix of their own, so they key on the name and replace only the value,
+leaving the name readable. They accept false positives by decision (@edb, 2026-10-20): a long literal
+assigned to `secret_name` is redacted too. A value with a space (a label or prompt), a call, an empty
+or short string, a bare 40-hex SHA, and a value an earlier pattern already replaced pass through. Over
+this repo's own `src/`, `tools/`, `docs/` and toml, the only line they change is the comment in
+`redact.py` that describes `Password=…;`.
 Not matching every token format is accepted: this catches the families that leak in practice, and
 the scan-policy half of B-018 (not indexing `.env*` and key files at all) is another branch's.
 
@@ -163,12 +174,13 @@ risk first:
 
 ## Open Questions for @edb
 
-1. **`structured_output=False`.** It is a one-argument revert in `_tool` if any client turns out to
-   read `structuredContent`. Keep it?
-2. **Other secret families.** AWS *secret* keys (40 characters of base64 with no prefix), Stripe
+1. ~~**`structured_output=False`.** It is a one-argument revert in `_tool` if any client turns out to
+   read `structuredContent`. Keep it?~~ **Answered 2026-10-20 (@edb): keep it false.**
+2. ~~**Other secret families.** AWS *secret* keys (40 characters of base64 with no prefix), Stripe
    `sk_live_`, and generic `password = "…"` assignments are not matched: each has no prefix that
    separates it from ordinary code, or (for Stripe) collides with the `sk_` names this ADR keeps
-   untouched. Add any of them, accepting the false positives?
+   untouched. Add any of them, accepting the false positives?~~ **Answered 2026-10-20 (@edb): add
+   them.** Built as the last five rows of §5's table.
 3. **An incremental run that completes a half-built index** leaves the old backup in place (only a
    full rebuild removes it). Should a finished incremental run, which means the watchdog's, also
    remove it? That code is in `_ReindexDebouncer`, outside this ADR's functions.
@@ -197,6 +209,7 @@ risk first:
 - [x] B-021: routing line in both instruction branches; length before and after
 - [x] B-019: `tools/list` measured; table; trims; totals before and after
 - [x] Tests, gates, Inspector
+- [x] Open question 2: Stripe, AWS secret key, URL, connection-string and assignment patterns
 - [ ] ADR-050's tool names in the routing line, after both merge (@edb)
 
 **Stack for every measurement below:** Linux cloud container, Python 3.12.3, `mcp` 1.30.0, MCP

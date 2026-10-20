@@ -87,3 +87,58 @@ def test_a_secret_inside_a_longer_token_is_not_split():
     """A prefix in the middle of a longer identifier is not the start of a token."""
     text = "my_ghp_" + X * 36 + " xAKIA" + "X" * 16
     assert redact(text) == text
+
+
+# The families with no prefix of their own (@edb, 2026-10-20: add them and accept the false
+# positives). Only the value is replaced; the name it is assigned to stays readable.
+NAMED_SECRETS = [
+    ("stripe-key", 'STRIPE = "sk_live_' + X * 24 + '"', 'STRIPE = "[REDACTED:stripe-key]"'),
+    ("stripe-key", 'k = "rk_test_' + X * 30 + '"', 'k = "[REDACTED:stripe-key]"'),
+    ("stripe-key", 'hook = "whsec_' + X * 32 + '"', 'hook = "[REDACTED:stripe-key]"'),
+    ("aws-secret-key", "aws_secret_access_key = " + X * 40,
+     "aws_secret_access_key = [REDACTED:aws-secret-key]"),
+    ("aws-secret-key", '"SecretAccessKey": "' + X * 38 + '/+"',
+     '"SecretAccessKey": "[REDACTED:aws-secret-key]"'),
+    ("url-credential", 'DB = "postgres://app:' + X * 12 + '@db.example.invalid/prod"',
+     'DB = "postgres://app:[REDACTED:url-credential]@db.example.invalid/prod"'),
+    ("connection-string-password",
+     '"Server=db;Database=erp;User Id=sa;Password=' + X * 10 + ';"',
+     '"Server=db;Database=erp;User Id=sa;Password=[REDACTED:connection-string-password];"'),
+    ("secret-assignment", 'password = "' + X * 12 + '"', 'password = "[REDACTED:secret-assignment]"'),
+    ("secret-assignment", "DB_PASSWD: '" + X * 8 + "'", "DB_PASSWD: '[REDACTED:secret-assignment]'"),
+    ("secret-assignment", '{"client_secret": "' + X * 20 + '"}',
+     '{"client_secret": "[REDACTED:secret-assignment]"}'),
+    ("secret-assignment", "const apiKey = `" + X * 16 + "`;", "const apiKey = `[REDACTED:secret-assignment]`;"),
+    ("secret-assignment", 'AuthToken := "' + X * 16 + '"', 'AuthToken := "[REDACTED:secret-assignment]"'),
+]
+
+
+@pytest.mark.parametrize("kind,text,expected", NAMED_SECRETS,
+                         ids=[f"{k}-{i}" for i, (k, _, _) in enumerate(NAMED_SECRETS)])
+def test_a_named_secret_has_only_its_value_replaced(kind, text, expected):
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize("text", [
+    'password = get_password()',
+    'password = os.environ["DB_PASSWORD"]',
+    'label = "Enter your password"',
+    'PASSWORD_PROMPT = "Your password:"',
+    'password = ""',
+    'pwd = "short"',
+    'pwd = os.getcwd()',
+    'commit = "' + "a" * 40 + '"',
+    'sk_live = load_key()\nsk_test_mode = True',
+    'pk_live_' + X * 24,
+    'url = "https://example.invalid/path:8080@v2"',
+    'url = "https://example.invalid:8443/api"',
+])
+def test_code_near_the_named_families_passes_through(text):
+    assert redact(text) == text
+
+
+def test_a_token_marker_is_not_redacted_again_by_a_named_pattern():
+    """The token pattern names the kind; the assignment around it must not rename it."""
+    assert redact('API_KEY = "sk-ant-api03-' + X * 40 + '"') == 'API_KEY = "[REDACTED:anthropic-key]"'
+    assert (redact("https://user:ghp_" + X * 36 + "@github.com/o/r.git")
+            == "https://user:[REDACTED:github-token]@github.com/o/r.git")
