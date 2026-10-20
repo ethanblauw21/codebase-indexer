@@ -37,9 +37,9 @@ def test_other_header_lines_still_count():
 
 
 def test_text_without_the_header_keys_as_before():
-    """Tier 2/3 slices have no `Lines:` header: their existing cache rows stay valid,
-    even when the code itself contains a line that looks like one."""
-    assert summary_cache_key(_T2) == _md5(_T2)
+    """Tier 2/3 slices have no `Lines:` header, even when the code itself contains a
+    line that looks like one. Their part number is left out since ADR-051."""
+    assert summary_cache_key(_T2) == _md5(_T2.replace("(Part 1/1)", "(Part)"))
     assert summary_cache_key("no header at all") == _md5("no header at all")
 
 
