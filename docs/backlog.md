@@ -95,6 +95,10 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-059](#b-059) | A crash mid-migration can empty the edges graph, and three places swallow failures silently (#55, #54) | 2026-09-27 assessment; @edb, 2026-09-29 | S | promoted → ADR-046 |
 | [B-060](#b-060) | Tool calls read loose index globals that a swap can change mid-call, block the event loop, and hold a second copy of the index (#52, #53, #63) | 2026-09-27 assessment; @edb, 2026-09-29 | M | promoted → ADR-047 |
 | [B-061](#b-061) | When the model host is unreachable, the fallback may load a second model copy on the 8 GB card (#66, suspected) | 2026-09-27 assessment; @edb, 2026-09-29 | S–M | promoted → ADR-048 |
+| [B-062](#b-062) | Importing `core` commits 3.6 GB per process, 2.1 GB of it OpenBLAS thread buffers | @edb, 2026-10-06 | S | shaped |
+| [B-063](#b-063) | Run a full build on a real ASP.NET project (EganEstimator) and check search quality; `obj/`, `bin/` and EF `Migrations/` get indexed by default | @edb, 2026-10-15 | S | raw |
+| [B-064](#b-064) | Razor views (`.cshtml`) and Blazor components (`.razor`) are not indexed at all | @edb, 2026-10-15 | M–L | raw |
+| [B-065](#b-065) | Benchmark the tier groupings {1,2,3}, {1,2} and {1} on build time AND retrieval accuracy, to find the best speed-to-accuracy trade | @edb, 2026-10-15 | M | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -741,6 +745,33 @@ B-017 could outline. **Caveat that may kill it:** a PreToolUse hook on every Rea
 process spawn and injected text to every call. @edb's tool rule caps background Claude usage, and
 planning-with-files was rejected for exactly this. Prefer a CLAUDE.md line in each repo ("for a
 large file, call `get_file_outline` first") and only build a hook if that measurably fails.
+
+**Update 2026-10-16 (from a Trying Out Tools session, while vetting obra/superpowers):** @edb
+reports agents keep using Grep instead of the index. Three causes found, and only the last is the
+agent's choice:
+
+1. **The server is registered in only two projects, under two names.** In `~/.claude.json` it's a
+   local-scope server: `repo-indexer` in SOPCentral and `codebase-indexer` in GanttWebApp. No other
+   repo has it, so Grep is the only search available there. Two names also mean two sets of tool
+   names (`mcp__repo-indexer__…` vs `mcp__codebase-indexer__…`), so a hint can't name one.
+2. **Its tools are deferred.** Claude Code lists only their names until the agent loads them with
+   ToolSearch, while Grep is always loaded. Without a reason to search for them, the agent never
+   sees the descriptions.
+3. **The server instructions say when the index is stale, never when to prefer it.**
+   `_server_instructions` (`MCPServer.py:33`) covers freshness and branch caveats (B-053) but has
+   no routing line. That's the cheapest fix and needs no hook, since every connected session
+   already receives it. Something like: *"For how code works, where a symbol is used, what writes
+   a field, or blast radius, call `semantic_code_search` / `trace_data_flow` / `what_writes` /
+   `analyze_blast_radius` before Grep. Use Grep for exact strings and for files your branch
+   changed."*
+
+Order to try: (3) first, then settle on one server name in every repo that has an index (1). Build
+a hook only if those measurably fail. If a hook is needed, keep this item's no-deny rule: a
+PreToolUse hook that *allows* Grep but adds a one-line hint the first time per session, and only
+when the project has a `.code-index/`. That costs nothing in repos without an index and never
+blocks the fallback. A companion idea, a UserPromptSubmit keyword → skill/tool hint hook, is
+general Claude setup, not indexer work; it's tracked in Trying Out Tools
+(`tools/superpowers/EVALUATION.md`).
 
 ---
 
@@ -1961,3 +1992,170 @@ falls back in-process. To do first: reproduce by killing the host mid-index with
 embedder in a server, and watch VRAM.
 
 **Depends on:** none.
+
+### B-062 — Importing `core` commits 3.6 GB per process, 2.1 GB of it OpenBLAS thread buffers
+
+**Source:** @edb, 2026-10-06 (disk cleanup: `pagefile.sys` had grown to 58 GB) · **Status:** shaped
+· **Size:** S
+
+Every indexer process commits about 3.6 GB of private memory before it loads a model. Three
+`MCPServer.py` processes (one per open Claude session) held 3.6–3.8 GB each, and `model_host.py`
+5.8 GB. Windows sizes a system-managed page file to back committed memory, so this grows
+`pagefile.sys` on disk even though little is actually paged (peak paging use was 3.5 GB). The
+machine was at 103 of 108 GB committed.
+
+Measured with `GetProcessMemoryInfo().PrivateUsage`, importing in the order `MCPServer.py` does,
+on the system Python 3.14 the MCP servers run under:
+
+| Step | Commit |
+|---|---|
+| bare python | 0.02 GB |
+| `import faiss` | **2.10 GB** |
+| `import torch` | 2.97 GB |
+| `import transformers, sentence_transformers` | 3.58 GB |
+| `import core` | 3.58 GB |
+
+The faiss wheel is faiss-cpu 1.14.3 with a bundled `libopenblas.dll`. OpenBLAS allocates a buffer
+for each thread it might use, 14 here. `core.py` already calls `faiss.omp_set_num_threads(1)`,
+but that runs after the import, so it doesn't stop OpenBLAS from allocating its buffers:
+
+| `OPENBLAS_NUM_THREADS` | `import faiss` | `import core` |
+|---|---|---|
+| unset | 2.10 GB | 3.58 GB |
+| 4 | 0.54 GB | 1.69 GB |
+| 1 | **0.07 GB** | **1.12 GB** |
+
+**Fix:** `os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")` in `src/core.py` above `import
+faiss`. It has to come before the first numpy or faiss import anywhere in the process, so check
+the entry points too (`MCPServer.py`, `model_host.py`, `code-indexer`), since they might import
+numpy before `core`. `setdefault` keeps an explicit override working. Before shipping, check that
+large FAISS searches don't slow down, since flat search uses BLAS. That's unlikely, because faiss
+OMP is already pinned to 1.
+
+**Follow-up (separate item if wanted):** the MCP server never needs torch while `model_host` is
+up (ADR-028), but `core.py` imports `sentence_transformers` and `transformers` at module level.
+Importing them lazily would save the remaining ~1 GB per MCP server.
+
+**Depends on:** none. **Related:** ADR-028 (model host), B-061.
+
+### B-063 — No full build has been run on a real ASP.NET project, and `obj/` gets indexed by default
+
+**Source:** @edb, 2026-10-15 (writing an overview for the IT programmers, who work in ASP.NET) ·
+**Status:** raw · **Size:** S
+
+Before the indexer goes to IT, a real full build should show how search does on ASP.NET code. The
+candidate is EganEstimator (`G:\Blauw, Ethan\Project Examples\Estimator_2.0\EganEstimator`), an
+ASP.NET Core MVC app on .NET 8 (`Microsoft.NET.Sdk.Web`).
+
+A scan-and-parse pass on 2026-10-15 (CPU, no models, no index written) found:
+
+| | EganEstimator | AcadeDesignTools (.NET Framework 4.8, WPF) |
+|---|---|---|
+| Real `.cs` files parsed | 35, plus `Program.cs` (0 symbols: top-level statements) | 91 (2 are almost entirely commented out) |
+| Symbols / edges | 362 / 4,197 | 2,284 / 11,782 |
+| Parse errors | 0 | 0 |
+| Generated `obj/` files that would be indexed | 8 | **56 of 147 `.cs` (38%)**: `*.g.cs`, `*.g.i.cs`, `AssemblyAttributes.cs` |
+| Markup skipped | 17 `.cshtml` (B-064) | 11 `.xaml` |
+
+`DEFAULT_IGNORE_DIRS` (`src/scan_policy.py`) has no `obj` or `bin`, so every .NET project indexes
+its generated code unless the user adds `extra_dirs`. EF Core `Migrations/` (11 files in
+EganEstimator) is real source but mostly noise for search.
+
+**To do:**
+1. Decide whether `obj` and `bin` become defaults. Two real projects say yes. `bin` is a common
+   name outside .NET too (shell scripts), so check that before adding it. This is a `src/` change,
+   so it needs an ADR or a waiver.
+2. Copy EganEstimator to a local folder (nothing should be written to G:) with
+   `extra_dirs = ["obj", "bin", "Migrations"]`, then run `code-indexer`. About 55 files, so
+   roughly 10 minutes on the 8 GB GPU.
+3. Ask a handful of questions an IT programmer would ask ("where is an estimate's total
+   calculated", "what calls the cost import") and check the results by hand.
+4. Update the IT overview doc's ASP.NET section with what it found.
+
+**Depends on:** none. **Related:** B-064, ADR-026 (scan policy).
+
+### B-064 — Razor views (`.cshtml`) and Blazor components (`.razor`) are not indexed at all
+
+**Source:** @edb, 2026-10-15 · **Status:** raw · **Size:** M–L
+
+ASP.NET MVC and Razor Pages put much of an app's behavior in `.cshtml` files, and Blazor puts it in
+`.razor` files. Neither extension is in `DEFAULT_INDEXABLE_EXTS` and there is no adapter for
+them, so a question like "which view shows the estimate total" cannot be answered. EganEstimator
+has 17 `.cshtml` views the indexer skips.
+
+Two levels, cheapest first:
+
+1. **Text search.** Add `.cshtml` and `.razor` to the default extensions. With no adapter they go
+   through `fallback_token_chunker`, so they are searchable but have no symbols or edges. This is
+   possible today with `extra_extensions`, but that path has not been tested end to end.
+2. **Real parsing.** A Razor adapter that:
+   - runs `@code { }` and `@functions { }` blocks through the C# adapter, so their methods are
+     symbols;
+   - turns `@model T` and `@inject T Name` into edges to `T`;
+   - links views to controllers: `asp-controller`/`asp-action` tag helpers, `Html.ActionLink`,
+     and the `Views/<Controller>/<Action>.cshtml` naming convention;
+   - records `<partial name>`, `Html.Partial`, `Layout = ...` and Blazor component tags
+     (`<OrderGrid />`) as edges between views.
+
+To do first: check whether a maintained tree-sitter Razor grammar exists, or whether splitting
+`@`-blocks out by hand is good enough. Measure level 1 on EganEstimator (B-063) before building
+level 2. WPF `.xaml` (11 files in AcadeDesignTools) has the same gap and could share the
+markup-to-code-behind linking.
+
+**Depends on:** B-063 (the test project and a baseline). **Related:** ADR-003 (adapters),
+ADR-008 (conformance fixtures, needed for any new adapter).
+
+### B-065 — Benchmark the tier groupings on build time and accuracy together
+
+**Source:** @edb, 2026-10-15 (after asking whether a Rust rewrite would speed the tool up; the
+answer was that model work, not Python, is the cost) · **Status:** raw · **Size:** M
+
+Benchmark what each tier level actually costs and earns, then build stubbed variants of the
+indexer that keep only some levels, and compare. The arms:
+
+| Arm | Chunk tiers indexed | Summarized tiers |
+|---|---|---|
+| full (today's default) | 1, 2, 3 | 1, 2, 3 |
+| levels 1+2 | 1, 2 | 1, 2 |
+| level 1 only | 1 | 1 |
+
+For each arm, record both sides on the same repos and the same stack:
+
+- **Time:** full build wall-clock, split into summarize, embed and everything else, plus one
+  replayed incremental update (the ADR-045 Gantt replay is the existing yardstick). Count chunks
+  and summaries per tier too.
+- **Accuracy:** MRR@10 on the three real-repo query sets (original, intent, file-level), with the
+  same significance test the chunk-shape study used.
+
+The answer is a speed-to-accuracy frontier: what each arm saves in minutes against what it loses
+per query type, so the default can be picked on evidence.
+
+**Already measured, so start from it, don't redo it blind** (all on the 2026-09-25 stack, before
+ADR-043..048; see CONTRIBUTING §4.2 on measurement provenance):
+
+- Chunk-shape study (PR #42, `docs/study-chunk-shape-and-embedder.md`): dropping tier 3 cost
+  whole-file −0.065*/−0.088* (dev/held-out), and dropping tier 2 cost −0.115*/−0.088*. Accuracy
+  only; no timing was recorded, and a tier-1-only arm was not run.
+- ADR-030 Verification 3 and 5: with tier-1 summaries only, whole-file questions fell from 0.500
+  to below 0.10, while symbol questions rose a little (original 0.674, intent 0.693 on
+  `store031`). Summary tiers {1, 2} were never tried on their own.
+- #82: tier-2/3 sliding windows are 77% of the remaining summarize time on the Gantt replay.
+
+So the new parts are the timings, the tier-1-only and {1, 2} arms, and putting both sides in one
+table on today's stack.
+
+**What exists and what has to be built:**
+- `[summarization].tiers` already turns summaries off per tier.
+- No knob drops a chunk tier from the index. The "stubbed version" needs one, probably an
+  `[indexer] chunk_tiers` list, kept off by default, or an eval-only switch in the harness. That is
+  a `src/` change, so it needs an ADR or a waiver.
+- Harness: `tools/real_repo_eval.py` for accuracy, `tools/pass2_bench.py` for embed timing; the
+  shape-study harness (`gpu-crash-repro/shape_study.py`) already runs arms and shares a summary
+  cache across them.
+
+**Watch for:** check vectors == chunk rows before trusting any arm (B-035's trap faked a −0.21
+regression). The file-level query set is n = 15, where one query moves the mean by up to 0.067, so
+it may need more queries before small differences mean anything. Runs need the GPU and take hours,
+so schedule them as background jobs.
+
+**Depends on:** none. **Related:** #82, B-048, B-058, ADR-030, the chunk-shape study (PR #42).
