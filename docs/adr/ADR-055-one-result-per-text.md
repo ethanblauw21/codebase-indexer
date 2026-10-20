@@ -1,6 +1,6 @@
 # ADR-055: One Result per Text, and Eval Rows That Name Their Stack
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20
 **Branch:** `feature/adr-055-dedupe-results`
 **Reviewer:** @edb
