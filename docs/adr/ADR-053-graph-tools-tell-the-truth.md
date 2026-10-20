@@ -161,10 +161,13 @@ empty index.
 
 - [x] Measure the base graph and the alternatives on this repo (below)
 - [x] `get_graph_edges()` keeps only edges to repo nodes and binds heritage edges
-- [ ] `data_flow_rules()` on the Python, TS/JS (Apps Script) and C# adapters
-- [ ] `trace_data_flow` reads the rules, sweeps for definitions and producers
-- [ ] Both tools raise when there is no index
-- [ ] Tests, `src/CLAUDE.md` paragraphs, Inspector run
+- [x] `data_flow_rules()` on the Python, TS/JS (Apps Script) and C# adapters; the shared SQL
+  rules in `adapters/base.py`
+- [x] `trace_data_flow` reads the rules, sweeps for definitions and producers
+- [x] Both tools raise when there is no index (`_require_built_index`)
+- [x] Tests: `tests/test_graph_tools_communities.py` (7), `tests/test_graph_tools_data_flow.py`
+  (12), one existing test updated
+- [x] `src/CLAUDE.md` paragraphs, MCP Inspector run
 
 **Notes:**
 
@@ -185,6 +188,45 @@ Kept edges under ADR-053: CALLS 2,664, OWNS 480, IMPORTS 297, EXTENDS 9, IMPLEME
 object before: `HybridRetriever` (score 0.429, span 3); after: `CodeDB` (score 0.770, fan-in 51,
 fan-out 51, span 10). Base examples of non-repo members: `ArgumentParser`, `AssertionError`, `App`,
 `<string>`, `<vector>`, `.store`, `..shared.config`.
+
+**2026-10-20, B-042 on this repo's code.** No index can be built here (no model), so the trace ran
+over a doc store made from this repo's symbols (each symbol's text as a tier-1 chunk, each file's
+whole text as a tier-2 window), with the 80 first chunks naming the target standing in for the
+search. Same stack as above. `trace_data_flow("chunk_summaries")`:
+- before (`871b55c`): no definition, no producer; `cache_summaries` a consumer (the backlog's
+  report, reproduced);
+- after: definition `CREATE TABLE IF NOT EXISTS chunk_summaries` in `src/db.py`; producers
+  `CodeDB.cache_summaries`, `CodeDB._migrate_summary_keys`, and two test/tool seeders; consumers
+  `get_cached_summaries`, `summary_cache_key`, `run_summarization_pass` and others.
+
+**2026-10-20, Firestore/Next.js regression guard.** The golden in
+`test_firestore_and_nextjs_output_is_unchanged` was captured by running `871b55c`'s
+`MCPServer.trace_data_flow` on the test's fixture (and on a ranked-to-one-chunk variant). The
+branch's output is byte-identical on both.
+
+**2026-10-20, deviations and surprises.**
+- **Outside the ownership list:** `src/adapters/base.py` gains `SQL_DEFINITION_RULES` and
+  `SQL_PRODUCER_RULES` (15 lines, additive), so the Python and C# adapters share one SQL rule set
+  instead of two copies. `tests/test_graph_analytics.py`'s `get_graph_edges` test now inserts the
+  symbols its edges point at, since an edge to a non-node is dropped by design. In `src/CLAUDE.md`
+  the `what_writes` paragraph's clause about `trace_data_flow` ("hardcoded to Firebase/TypeScript
+  idioms") was no longer true and is shortened.
+- The inline layer code of `trace_data_flow` moved into `_trace_layer()`, unchanged, so the sweeps
+  label their entries the same way.
+- **The old no-index check never fired** (Decision §4): the base server, run from an empty
+  directory, returned an empty community map as a success.
+- Heritage binding was not in the prompt's three options; it was added after the measurement showed
+  13 in-repo heritage edges the plain filter would lose.
+
+**2026-10-20, MCP Inspector 2.8.0**, server run from an empty `/tmp/insp`, CPU:
+- `tools/list --strict`: exit 0, 14 tools. `trace_data_flow`'s description is 721 characters,
+  `map_module_communities`' 1,267. No tool declares `readOnlyHint` (B-045, `_tool()`, not this
+  ADR's).
+- `trace_data_flow target_symbol=chunk_summaries` and `map_module_communities target_path=src/`:
+  exit 5, `isError: true`, "no index has been built in .code-index. Run `reindex` first".
+- `trace_data_flow` with no argument and `map_module_communities min_community_size=notanint`:
+  exit 5, `isError: true`, argument validation errors.
+- The success paths are covered in pytest (`test_graph_tools_*.py`), since there is no index here.
 
 ## Open questions for @edb
 
