@@ -7,17 +7,18 @@ diminishing returns.
 
 Each round:
   1. Enriches the query with top-3 FQNs from prior evidence (context injection)
-  2. Excludes already-explored FQNs so each round finds new code
+  2. Excludes chunks already explored, by (file, text), so each round finds new code
   3. Accumulates the new chunks into the evidence pool
   4. Checks for a score plateau (confidence stopping condition)
 
 After all rounds, the full accumulated pool is deduplicated and sorted by score.
+A chunk's identity is its (file, text), the key HybridRetriever dedups on (ADR-055).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from hybrid_retriever import HybridRetriever, RetrievedChunk
+from hybrid_retriever import HybridRetriever, RetrievedChunk, _dedupe_same_text
 from db import CodeDB
 
 
@@ -25,10 +26,21 @@ from db import CodeDB
 class RetrievalSession:
     """State accumulated across iteration rounds."""
     query: str
-    explored_fqns: set[str] = field(default_factory=set)
+    explored: set = field(default_factory=set)     # _identity() of every chunk seen
     evidence_pool: list[RetrievedChunk] = field(default_factory=list)
     iteration: int = 0
     confidence: float = 0.0   # 0.0–1.0; ratio of 5th-best to top score
+
+
+def _identity(chunk: RetrievedChunk):
+    """Which chunks count as the same evidence: (file, text), as in ADR-055.
+
+    Not the scope: a tier-2/3 scope is a positional label (`Full File_part_1`) that
+    every file shares, so keying on it excluded every other file's whole-file chunks
+    once one had been seen, and could end the loop as "no new chunks". Empty text
+    says nothing about content, so it falls back to the chunk's own id.
+    """
+    return (chunk.file, chunk.text) if chunk.text else chunk.faiss_id
 
 
 class IterativeRetriever:
@@ -84,13 +96,13 @@ class IterativeRetriever:
             new_chunks = self._retriever.retrieve(enriched_query)
             new_chunks = [
                 c for c in new_chunks
-                if c.scope not in session.explored_fqns
+                if _identity(c) not in session.explored
             ]
 
             if not new_chunks:
                 break
 
-            session.explored_fqns.update(c.scope for c in new_chunks)
+            session.explored.update(_identity(c) for c in new_chunks)
             session.evidence_pool.extend(new_chunks)
 
             # Confidence = ratio of 5th-best score to top score (plateau detection).
@@ -109,13 +121,10 @@ class IterativeRetriever:
             if session.confidence >= confidence_threshold:
                 break
 
-        # Final deduplicated, sorted pool
-        seen: set[int] = set()
-        deduped: list[RetrievedChunk] = []
-        for c in sorted(session.evidence_pool, key=lambda c: c.score, reverse=True):
-            if c.faiss_id not in seen:
-                seen.add(c.faiss_id)
-                deduped.append(c)
+        # Final pool, best first. The explored check already keeps a text from coming
+        # back in a later round; this applies the retriever's own rule to the whole pool.
+        deduped = _dedupe_same_text(
+            sorted(session.evidence_pool, key=lambda c: c.score, reverse=True))
 
         return deduped[:top_n], session
 
