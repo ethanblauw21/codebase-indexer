@@ -636,8 +636,17 @@ def chunk_all_tiers(rel_path: str, content: str) -> dict[str, list]:
 
 def chunk_text_hash(text: str) -> str:
     """Cache key for one chunk's summary. Must agree across both passes. Line numbers
-    are not part of it (ADR-045): see db.summary_cache_key."""
+    are not part of it (ADR-045), nor a slice's position (ADR-051): see
+    db.summary_cache_key."""
     return summary_cache_key(text)
+
+
+def summary_text(text: str) -> str:
+    """What the summarizer is sent for one chunk: its text with a slice's `(Part i/N)`
+    as `(Part)` (ADR-051 §3), so the summary agrees with its key. Both passes call it;
+    the embedded and stored text keep the position."""
+    from db import summary_input
+    return summary_input(text)
 
 
 def dedupe_chunks_by_scope(chunks: list) -> list:
@@ -833,7 +842,7 @@ def _prepare_file(
             print(f"  [ingest:{rel_path}] {tier_name}: {len(uncached_idx)} cache misses → LLM", flush=True)
             if uncached_idx:
                 new_summaries = summarizer.summarize_batch(
-                    [texts[i] for i in uncached_idx]
+                    [summary_text(texts[i]) for i in uncached_idx]
                 )
                 new_pairs = [
                     (text_hashes[i], s)
@@ -1084,7 +1093,7 @@ def run_summarization_pass(
             cached = db.get_cached_summaries(hashes)
             for h, t in zip(hashes, texts):
                 if h not in cached:
-                    pending.setdefault(h, t)
+                    pending.setdefault(h, summary_text(t))
     print(f"  [summarize] {total_chunks} chunks in {len(to_index)} files, "
           f"{len(pending)} distinct texts to summarize", flush=True)
 
