@@ -148,8 +148,8 @@ retrieval playground. Honor the "no web server / no build pipeline" constraint (
   community recompute (or house in ADR-010). Sources: modernization P5; design-doc A1/A2.
 - **Amend ADR-005 (Versioning/Self-Healing):** ADR-010's content-hash drift layer is the natural companion;
   standardize the MD5/SHA-256 split onto one hash (XXH3) while there.
-- **Amend ADR-004 (Tiers):** fix the "150+" → "66 (claimed)" competitor figure; A3 graded confidence is the
-  evolution of the `candidate` boolean.
+- **Amend ADR-017 (Tiers, formerly draft ADR-004):** A3 graded confidence is the evolution of the `candidate`
+  boolean. The "150+" → "66 (claimed)" competitor-figure fix is done: ADR-017 says 66, and ADR-008 states it.
 
 ---
 
@@ -175,7 +175,7 @@ MRR@10/NDCG@10/Recall@k + tokens/tool-calls; baseline checked in.
 
 **Wave 1 — ROI + moat (parallelizable).** `ADR-009` (modernization) and `ADR-008`+`ADR-011` (conformance + the
 resolver that earns the precision). *Why here:* 009 is the cheapest quality win; 008/011 build the differentiation.
-Also fold in **amend-ADR-004** (the "150+"→"66" fix + graded confidence) since 008/011 touch `Edge`. **Gate:**
+Also fold in **amend-ADR-017** (graded confidence; the "150+"→"66" fix is done) since 008/011 touch `Edge`. **Gate:**
 CoIR shows measurable lift over the Wave-0 baseline **and** a per-language precision/recall table is published.
 
 **Wave 2 — Robustness.** `ADR-010` (drift). Fold in **amend-ADR-005** (hash standardization). **Gate:** cold-start
