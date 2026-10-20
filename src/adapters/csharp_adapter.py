@@ -41,7 +41,9 @@ from typing import Optional
 from tree_sitter import Language, Parser, Node
 import tree_sitter_c_sharp as tscs
 
-from adapters.base import Edge, ParseResult, Reference, Symbol, TestConventions
+from adapters.base import (
+    SQL_DEFINITION_RULES, SQL_PRODUCER_RULES, Edge, ParseResult, Reference, Symbol, TestConventions,
+)
 from adapters._treesitter import node_text, run_query
 from category_tagger import tag_symbol
 from type_resolver import infer_csharp_call_targets, csharp_field_types
@@ -321,6 +323,23 @@ class CSharpAdapter:
 
     def project_resolver(self) -> CsprojResolver:
         return _CSPROJ_RESOLVER
+
+    def data_flow_rules(self) -> dict[str, list[str]]:
+        """ADR-053: what defines and what writes a traced name, for trace_data_flow.
+
+        Producers are SQL (Dapper, ADO.NET) and EF Core's DbSet writes. `{name}`
+        stands for the name.
+        """
+        return {
+            "definition": SQL_DEFINITION_RULES + [
+                r"\b(?:class|record|struct|interface|enum)\s+{name}\b",
+            ],
+            "producer": SQL_PRODUCER_RULES + [
+                r"\.{name}\s*\.\s*(?:Add|AddRange|Update|UpdateRange|Remove|RemoveRange|Attach)(?:Async)?\s*\(",
+                r"\bSet<{name}>\(\)\s*\.\s*(?:Add|AddRange|Update|UpdateRange|Remove|RemoveRange|Attach)"
+                r"(?:Async)?\s*\(",
+            ],
+        }
 
     # ------------------------------------------------------------------
     # Internal — AST walk

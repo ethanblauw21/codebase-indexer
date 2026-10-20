@@ -820,11 +820,88 @@ def detect_pattern_violations(canonical_snippet: str, enforced_symbols_csv: str,
 
     return context
 
+# ADR-053: trace_data_flow's per-language rules come from the adapters. Firestore and
+# Next.js stay inline in the tool, as they were.
+def _trace_layer(file_path: str, doc_text: str) -> str:
+    """trace_data_flow's layer label (path tests; unchanged by ADR-053)."""
+    is_client = "'use client'" in doc_text or ".tsx" in file_path.lower()
+    if any(x in file_path.lower() for x in ["firebase/admin", "lib/admin"]):
+        layer = "DATABASE (Admin SDK)"
+    elif "firebase/functions" in file_path.lower() or "functions/src" in file_path.lower():
+        layer = "CLOUD FUNCTION"
+    elif is_client:
+        layer = "CLIENT COMPONENT (UI)"
+        if "app/" in file_path.lower() and "page.tsx" in file_path.lower() and "'use client'" not in doc_text:
+            layer = "SERVER COMPONENT"
+    elif any(x in file_path.lower() for x in ["lib/", "types/", "models/"]):
+        layer = "CORE LOGIC / LIB"
+    else:
+        layer = "UTILITY"
+    return layer
+
+
+def _data_flow_rules(names: list[str], file_texts: dict[str, str]) -> dict[str, tuple[list, list]]:
+    """``{file: (definition_patterns, producer_patterns)}`` for every file whose adapter
+    has ``data_flow_rules()`` and whose text passes the rules' ``file_marker`` gate.
+
+    ``{name}`` in a rule stands for any of ``names``.
+    """
+    from adapters import get_adapter
+    alt = "(?:" + "|".join(re.escape(n) for n in dict.fromkeys(names)) + ")"
+    compiled: dict[int, tuple[list, list, list]] = {}
+    out: dict[str, tuple[list, list]] = {}
+    for fp, text in file_texts.items():
+        adapter = get_adapter(os.path.splitext(fp)[1].lower())
+        if not hasattr(adapter, "data_flow_rules"):
+            continue
+        if id(adapter) not in compiled:
+            r = adapter.data_flow_rules()
+            compiled[id(adapter)] = (
+                [re.compile(m) for m in r.get("file_marker", [])],
+                [re.compile(p.replace("{name}", alt)) for p in r.get("definition", [])],
+                [re.compile(p.replace("{name}", alt)) for p in r.get("producer", [])],
+            )
+        markers, defs, prods = compiled[id(adapter)]
+        if markers and not any(m.search(text) for m in markers):
+            continue
+        out[fp] = (defs, prods)
+    return out
+
+
+def _rule_match(patterns: list, text: str):
+    """The first match of any pattern in ``text``, or None."""
+    for p in patterns:
+        m = p.search(text)
+        if m:
+            return m
+    return None
+
+
+def _rule_entry(layer: str, file_path: str, doc: dict, match) -> str:
+    """A trace entry whose snippet is centred on the rule's match, not the chunk's start."""
+    text = doc['text']
+    start = max(0, match.start() - 40)
+    snippet = text[start:start + 140].replace('\n', ' ').strip() + "..."
+    return f"- [{layer}] {file_path}\n  [Scope]: {get_clean_scope(doc)}\n  [Snippet]: {snippet}\n\n"
+
+
 @_tool()
 def trace_data_flow(target_symbol: str) -> str:
+    """Trace one piece of data through the code: where it is defined, who writes it,
+    who transforms it and who reads it.
+
+    WHEN TO CALL: before changing a table, collection, type, sheet or stored property,
+    to find its schema and its writers. For a PLC tag call what_writes instead: it is
+    exact, this is not.
+
+    target_symbol — the data's name as the code spells it (`chunk_summaries`, `orders`).
+
+    Definitions and writers come from per-language rules: SQL CREATE/INSERT/UPDATE/DELETE,
+    Python classes and attribute/collection writes, Firestore writes, Apps Script
+    setValue(s)/appendRow/setProperty, EF Core. Rule hits are searched across the whole
+    index; the other buckets come from ranked search. Exploratory: verify before acting.
     """
-    Traces data lifecycle. v11.0: Broad definition lookup + Dynamic Producer Tracing.
-    """
+    _require_built_index("trace_data_flow")
     print(f"\n[MCP] Running v11.0 trace for '{target_symbol}'...")
     query_text = f"Definition, usage, and fetching of {target_symbol} get{target_symbol} fetch{target_symbol}"
     # Shared RTR surface (ADR-023 §1) instead of raw t1+t2 FAISS: resolved
@@ -861,6 +938,11 @@ def trace_data_flow(target_symbol: str) -> str:
         elif "firebase/functions" in _fp_lower or "functions/src" in _fp_lower:
             producer_files.add(_fp)
 
+    # ADR-053: the per-language rules of every file that mentions the name.
+    _names = [target_symbol, pascal_symbol]
+    _rules = _data_flow_rules(
+        _names, {fp: t for fp, t in _file_texts.items() if any(n in t for n in _names)})
+
     seen_scopes = set()
     # Tracks files that received any bucket entry from a tier-1 chunk.
     # Tier-2/3 chunks are skipped for files already covered, preventing duplicate
@@ -887,19 +969,7 @@ def trace_data_flow(target_symbol: str) -> str:
         doc_text = c.text
 
         # --- LAYER DETECTION ---
-        is_client = "'use client'" in doc_text or ".tsx" in file_path.lower()
-        if any(x in file_path.lower() for x in ["firebase/admin", "lib/admin"]):
-            layer = "DATABASE (Admin SDK)"
-        elif "firebase/functions" in file_path.lower() or "functions/src" in file_path.lower():
-            layer = "CLOUD FUNCTION"
-        elif is_client:
-            layer = "CLIENT COMPONENT (UI)"
-            if "app/" in file_path.lower() and "page.tsx" in file_path.lower() and "'use client'" not in doc_text:
-                layer = "SERVER COMPONENT"
-        elif any(x in file_path.lower() for x in ["lib/", "types/", "models/"]):
-            layer = "CORE LOGIC / LIB"
-        else:
-            layer = "UTILITY"
+        layer = _trace_layer(file_path, doc_text)
 
         # --- FIX 3: DYNAMIC PRODUCER DETECTION ---
         # We broaden the anchors to catch 'aggRef.set' or 'customBatch.update'
@@ -911,6 +981,16 @@ def trace_data_flow(target_symbol: str) -> str:
 
         is_def = bool(re.search(rf"export\s+(interface|type|class)\s+({re.escape(target_symbol)}|{re.escape(pascal_symbol)})", doc_text))
         is_producer = file_path in producer_files
+        # ADR-053: the file's language rules, matched in this chunk.
+        rule_hit = None
+        if file_path in _rules:
+            _defs, _prods = _rules[file_path]
+            if not is_def:
+                rule_hit = _rule_match(_defs, doc_text)
+                is_def = rule_hit is not None
+            if not is_def and not is_producer:
+                rule_hit = _rule_match(_prods, doc_text)
+                is_producer = rule_hit is not None
         is_transformer = any(op in doc_text for op in [".filter(", ".map(", ".sort(", "useMemo("])
 
         violation_tag = ""
@@ -921,6 +1001,8 @@ def trace_data_flow(target_symbol: str) -> str:
         clean_scope = get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})
         snippet = doc_text[:140].replace('\n', ' ').strip() + "..."
         entry = f"- [{layer}] {file_path}\n  [Scope]: {clean_scope}\n{violation_tag}  [Snippet]: {snippet}\n\n"
+        if rule_hit is not None:
+            entry = _rule_entry(layer, file_path, {'scope': c.scope, 'text': c.text, 'file': c.file}, rule_hit)
 
         seen_files_any_bucket.add(file_path)
 
@@ -948,6 +1030,42 @@ def trace_data_flow(target_symbol: str) -> str:
                 entry = f"- [CORE LOGIC / LIB] {doc['file']}\n  [Scope]: {clean_scope}\n  [Snippet]: {doc['text'][:140].strip()}...\n\n"
                 buckets["DEFINITIONS"].append(entry)
                 break
+
+    # --- ADR-053: RULE SWEEPS over the whole index ---
+    # Ranking decides only the order of the loop above. A rule hit the search missed
+    # (a CREATE TABLE in a tier-2 window of a file whose tier-1 chunk was already seen,
+    # a writer ranked below 80) is still a definition or a producer.
+    if _rules:
+        _docs = sorted(_index().doc_store.docs.values(), key=lambda d: d['tier'])
+        if not buckets["DEFINITIONS"]:
+            for doc in _docs:
+                fp = doc['file'].replace('\\', '/')
+                if fp not in _rules or not any(n in doc['text'] for n in _names):
+                    continue
+                key = f"{fp}::{doc['scope']}"
+                m = _rule_match(_rules[fp][0], doc['text'])
+                if m is None or key in seen_scopes:
+                    continue
+                seen_scopes.add(key)
+                buckets["DEFINITIONS"].append(_rule_entry(_trace_layer(fp, doc['text']), fp, doc, m))
+                if len(buckets["DEFINITIONS"]) >= 3:
+                    break
+        swept = 0
+        for doc in _docs:
+            if doc['tier'] != 'tier1_surgical' or swept >= 15:
+                continue
+            fp = doc['file'].replace('\\', '/')
+            if fp not in _rules or target_symbol not in doc['text']:
+                continue
+            key = f"{fp}::{doc['scope']}"
+            if key in seen_scopes or _rule_match(_rules[fp][0], doc['text']):
+                continue
+            m = _rule_match(_rules[fp][1], doc['text'])
+            if m is None:
+                continue
+            seen_scopes.add(key)
+            buckets["PRODUCERS"].append(_rule_entry(_trace_layer(fp, doc['text']), fp, doc, m))
+            swept += 1
 
     context = f"--- DATA FLOW TRACE: {target_symbol} ---\n\n"
     for cat, items in buckets.items():
@@ -2314,6 +2432,20 @@ def find_unabstracted_collection_reads(collection_name: str, canonical_symbols_c
     return context
 
 
+def _require_built_index(tool: str) -> str:
+    """The index directory, or raise so the client sees ``isError`` (ADR-053 §4).
+
+    A built index has ``last_verified_at`` (ADR-025 §4). The empty ``graph.db`` that
+    binding the index at a tool's entry creates (ADR-047) does not count.
+    """
+    from incremental_indexer import INDEX_DIR
+    if not _index_built(INDEX_DIR):
+        raise RuntimeError(
+            f"{tool}: no index has been built in {INDEX_DIR}. Run `reindex` first, then "
+            f"call this tool again.")
+    return INDEX_DIR
+
+
 @_tool()
 def map_module_communities(target_path: str = "", min_community_size: int = 3,
                            suggest_splits: bool = False) -> str:
@@ -2330,6 +2462,9 @@ def map_module_communities(target_path: str = "", min_community_size: int = 3,
     '[HEURISTIC — unverified]'. Also writes the DSM view to
     .code-index/architecture_matrix.html when the visualization layer is available.
 
+    Nodes are this repo's symbols and files only; calls and imports that resolve
+    outside the repo are left out.
+
     Inputs:
       target_path        — optional subtree to scope analysis to (e.g. 'src/'); empty = whole graph.
       min_community_size — communities smaller than this are omitted from the body (still counted).
@@ -2341,18 +2476,12 @@ def map_module_communities(target_path: str = "", min_community_size: int = 3,
     print(f"\n[MCP] map_module_communities: path='{target_path}' "
           f"min_size={min_community_size} splits={suggest_splits}")
     import os
-    from incremental_indexer import INDEX_DIR
     from db import CodeDB
     import graph_analytics
     from graph_report import render_report
 
+    INDEX_DIR = _require_built_index("map_module_communities")
     db_path = os.path.join(INDEX_DIR, "graph.db")
-    if not os.path.exists(db_path):
-        return (
-            "--- MODULE COMMUNITY MAP ---\n\n"
-            "No index found — `graph.db` does not exist. Run `reindex` first, then "
-            "call this tool again.\n"
-        )
 
     with CodeDB(db_path) as db:
         analysis = graph_analytics.analyze(

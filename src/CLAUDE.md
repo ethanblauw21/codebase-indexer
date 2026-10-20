@@ -156,9 +156,17 @@ Fourteen AI-facing tools grouped by intent:
 PLC tag it returns every routine that writes it, with rung numbers, straight out of the
 resolved `writes` edges — no embedder, no RRF, no reranker, and the answer is *complete*
 rather than top-k. It is grouped under Tracing but it is not `trace_data_flow`'s sibling:
-that tool detects producers by regex over ranked search results and is hardcoded to
-Firebase/TypeScript idioms. Do not "unify" them — routing an exactly-resolved relation
-through the ranked surface can only lose writers (ADR-019's hop-decay finding).
+that tool detects producers by regex over chunk text. Do not "unify" them — routing an
+exactly-resolved relation through the ranked surface can only lose writers (ADR-019's
+hop-decay finding).
+
+`trace_data_flow` buckets a data name's chunks into definitions, producers, transformers
+and consumers. Its Firestore/Next.js rules are inline in the tool and unchanged; every other
+language's rules come from its adapter's `data_flow_rules()` (ADR-053): `{name}`-templated
+regexes for `definition` and `producer`, gated by an optional `file_marker` (Apps Script's
+rules apply only to files that use `SpreadsheetApp`/`PropertiesService`). Rule hits are swept
+across the whole doc store, not just the ranked top-80. Add a language's idioms to its adapter,
+not to the tool. The shared SQL rules are in `adapters/base.py`.
 
 `verify_candidate_edges` (ADR-023) reports edge-aware three-state verdicts over
 candidate (name-based / unresolved) call edges. `index_status` (ADR-025) reports
@@ -169,7 +177,11 @@ content changed within a window — for agents and downstream context hubs.
 SQLite edge graph, runs Louvain community detection + betweenness centrality over it
 (`src/graph_analytics.py`, pure NetworkX), and renders a community map + god-object
 report (`src/graph_report.py`). Inspired by Graphify (MIT); reimplemented natively
-over our EXTRACTED edges. Output is explicitly exploratory — its quality bar is
+over our EXTRACTED edges. **Its nodes are the repo's own symbols and files** (ADR-053):
+`get_graph_edges()` drops every edge whose target is neither, so an unresolved `append` or an
+external `import os` is not a community member, and it binds a bare EXTENDS/IMPLEMENTS base
+name to the in-repo type of that name. Both it and `trace_data_flow` raise, so the client sees
+`isError`, when no index has been built. Output is explicitly exploratory — its quality bar is
 deferred to ADR-008.
 
 Tool docstrings are intentionally written for AI consumption — they describe *when* to call the tool, not just what it does.
