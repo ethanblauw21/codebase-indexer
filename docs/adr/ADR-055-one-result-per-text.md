@@ -60,16 +60,22 @@ So the dedup key includes the file. Cross-file collapse is an open question for 
 ### 3. Every eval row names its stack (B-009)
 
 `tools/eval_common.append_baseline` stamps each row with `embedder_model_id`, `embedder_dim`,
-`reranker_model_id`, `reranker_enabled` and `summarizer_model_id` (`stack_provenance()`).
+`reranker_model_id`, `reranker_enabled` and `summarizer_model_id` (`stack_provenance()`), and, at
+@edb's request (open question 3), `summarization_enabled` and the `[retrieval]` fusion settings:
+`fusion_mode`, `dense_weight`, `sparse_weight`, `summary_weight` and `file_chunk_weight`. They
+change results as much as a model id does.
 - The values come from `load_indexer_config()`, the same call (from the same working directory)
   that `core.py` and `HybridRetriever` make during the run. A caller may pass `config=` instead.
 - A missing key falls back to the code default the run itself would use (`core._DEFAULT_*`,
-  `hybrid_retriever._DEFAULT_RERANKER_*`, `config.DEFAULT_SUMMARIZER_MODEL_ID`), not to a third
+  `hybrid_retriever._DEFAULT_RERANKER_*` and `_DEFAULT_*` fusion constants,
+  `config.DEFAULT_SUMMARIZER_MODEL_ID`, `config.DEFAULT_SUMMARIZATION_ENABLED`), not to a third
   copy of the defaults.
 - **A field the record already has wins.** The reranker is switched per arm, not by config: the
   real-repo arm C turns it on whatever `[reranker].enabled` says. So the two harnesses set
   `reranker_enabled` themselves (one line each, see the log), and the config value is only the
-  fallback.
+  fallback. The real-repo harness does the same for `fusion_mode`, which arm D sets to `convex`.
+  It records the mode the arm asked for: if `rank_bm25` is missing, `HybridRetriever` falls back
+  to `rrf` and prints so, and the row does not see that.
 - Existing `benchmarks/` files are not rewritten: an old row cannot be stamped honestly after the
   fact. New rows carry the fields from the next run on.
 
@@ -78,6 +84,23 @@ So the dedup key includes the file. Cross-file collapse is an open question for 
 - `study-codebase-memory-mcp.md`: the ⚠️ fact-check flag becomes a note that it is discharged.
 - `adr-backlog.md`: the amendment is against ADR-017, the tier model's home, and the "150+" fix is
   marked done. ADR-017 already says 66, and ADR-008 states the correction.
+
+### 5. The iterative retriever uses the same identity (added at @edb's request, open question 2)
+
+`iterative_retriever.py` drops chunks it has already seen from later rounds. It keyed that on
+`scope` alone. A tier-2/3 scope is a positional label (`Full File_part_1`) that **every file
+shares**, so once one file's whole-file chunk had been seen, every other file's matching part was
+dropped from rounds 2 and 3. A round made only of such chunks came back empty after the filter,
+and the loop stopped as "no new chunks", as if the relevant code were exhausted. Only
+`investigate_architecture(deep=True)` uses this retriever.
+- **Key:** `(file, text)`, the identity §1 dedups on, so a search and its rounds agree. Empty text
+  falls back to `faiss_id`, as §1 never matches empty text.
+- **Final pool:** `_dedupe_same_text()` over the score-sorted pool, replacing the `faiss_id`
+  dedup, so the one rule runs through the whole retriever.
+- `RetrievalSession.explored_fqns` is renamed `explored`. It hasn't held only FQNs since tier 2/3
+  existed, and nothing outside the module reads it.
+- **Cost:** a deep investigation may now run a round it used to skip. It is a correctness fix,
+  not a measured gain: there is no eval for the iterative path.
 
 ## Consequences
 
@@ -101,9 +124,7 @@ So the dedup key includes the file. Cross-file collapse is an open question for 
 - **`iterative_retriever.py`.** Each round gets `top_n` distinct texts. Twins had equal scores, so
   they could make the 5th-best-to-top ratio look like a plateau and stop the loop early;
   confidence is now a little lower when a round had twins, which can mean an extra round. Its own
-  final dedup is by `faiss_id` and is unchanged. *Pre-existing, not fixed here:* its
-  `explored_fqns` keys on `scope` alone, and tier-2/3 scopes like `Full File_part_1` aren't
-  file-qualified, so one file's whole-file chunk excludes every other file's from later rounds.
+  final dedup and its explored-chunk key now use the same `(file, text)` identity (Decision §5).
 - **Graph expansion** runs on the semantic hits before the dedup, so its seeds and budget are
   unchanged. Seeds are tier-1 FQNs, and same-file tier-1 twins are practically nonexistent.
 - **`tier_projection`** is a CoIR harness setting (`tools/coir_eval.py`). CoIR runs its own FAISS
@@ -135,11 +156,10 @@ So the dedup key includes the file. Cross-file collapse is an open question for 
    byte-identical text across files, and show "also in: a.py, b.py" on the survivor? It would need a
    `retrieve(..., collapse_copies=True)` opt-in, an `also_in` field on `RetrievedChunk`, and a line
    in `_pack_results`. It must stay off for `find_similar_code` and the per-file scan tools.
-2. **`iterative_retriever`'s scope-only `explored_fqns` key** (noted above). Small fix, separate
-   item?
-3. **B-009: should the row also carry `summarization_enabled`** and the fusion knobs
-   (`fusion_mode`, `summary_weight`, `file_chunk_weight`)? They change results as much as a model
-   id does. Not added, because the backlog names the four model fields.
+2. ~~**`iterative_retriever`'s scope-only `explored_fqns` key.**~~ Answered 2026-10-20: fix it
+   here. Decision §5.
+3. ~~**B-009: should the row also carry `summarization_enabled`** and the fusion knobs?~~ Answered
+   2026-10-20: yes. Decision §3.
 
 ## Implementation Log
 
@@ -183,6 +203,20 @@ So the dedup key includes the file. Cross-file collapse is an open question for 
   of twin files was possible. The 2026-07-27 figure (about a fifth of the slots; `BAAI/bge-code-v1`,
   dim 1536, reranker off, `fusion_mode = "rrf"`, 98-file index of this repo) is the only number.
   Worth re-running those four queries on the next GPU session.
+
+- [x] Follow-up after @edb answered open questions 2 and 3 (2026-10-20, local, not the cloud
+  session):
+  - `stack_provenance()` adds `summarization_enabled`, `fusion_mode`, `dense_weight`,
+    `sparse_weight`, `summary_weight` and `file_chunk_weight`; `tools/real_repo_eval.py` records
+    each arm's `fusion_mode` (a lift row gets `None` when the pair differs). Tests extended in
+    `tests/test_eval_common.py`.
+  - `iterative_retriever.py` keyed on `(file, text)` (Decision §5).
+    `tests/test_iterative_explored.py` (5): 4 fail on `10e89fd` and pass with the fix; the fifth
+    (symbol scopes unaffected) passes on both.
+  - Gates on Windows, Python 3.14.4, CPU, tokenizer cached (`HF_HUB_OFFLINE=1`): `pytest` 720
+    passed, 1 skipped, **0 failed**, so the 48 cloud failures above were the missing tokenizer
+    only; flake8 on `src/` clean; `conformance_eval.py` and `resolution_eval.py`
+    `--check-baseline` exit 0.
 
 **Notes:**
 - 2026-10-20: chose `(file, text)` over `text` as the key once it was clear `find_similar_code`
