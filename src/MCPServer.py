@@ -64,6 +64,11 @@ def _server_instructions(repo_path: str | None = None) -> str:
                   file=sys.stderr, flush=True)
     built = (f"commit {commit[:10]}, last verified {verified}" if commit
              else "no finished build yet")
+    # ADR-049 (B-021 point 3): when to reach for the index instead of Grep.
+    routing = ("For how the rest of the codebase works, where a symbol is used, what writes a "
+               "field, or blast radius, call `semantic_code_search`, `trace_data_flow`, "
+               "`what_writes` or `analyze_blast_radius` before Grep; use Grep for exact "
+               "strings and for the files your branch changed. ")
     if ref is not None:
         # ADR-042 §5: the index is a commit, read from git, not any folder.
         from index_location import ref_display
@@ -72,8 +77,8 @@ def _server_instructions(repo_path: str | None = None) -> str:
             "folder's working tree, and not your branch. For any file your branch changed "
             f"(git diff --name-only {commit[:10] if commit else '<that commit>'}...HEAD, plus "
             "uncommitted edits), Read the file itself: index hits for it show the indexed "
-            "version, and line numbers may be off. Use the index for how the rest of the "
-            f"codebase works. It follows {ref} on its own when that ref moves; do not call "
+            f"version, and line numbers may be off. {routing}"
+            f"It follows {ref} on its own when that ref moves; do not call "
             "`reindex` to pick up branch work. `index_status` reports freshness."
         )
     return (
@@ -81,7 +86,7 @@ def _server_instructions(repo_path: str | None = None) -> str:
         "It does not see edits in other branches or worktrees. For any file your branch "
         "changed (git diff --name-only <that commit>...HEAD, plus uncommitted edits), Read "
         "the file itself: index hits for it show the indexed version, and line numbers may "
-        "be off. Use the index for how the rest of the codebase works. "
+        f"be off. {routing}"
         "Never call `reindex` from a git worktree made for separate or parallel work; it "
         "refuses there, and one server per index keeps it current on its own. "
         "`index_status` reports freshness."
@@ -214,7 +219,7 @@ def _bind_index(fn):
 _read_limiter: "anyio.CapacityLimiter | None" = None
 
 
-def _tool(*, reads_index: bool = True):
+def _tool(*, reads_index: bool = True, **hints):
     """Register ``fn`` as an MCP tool that runs in a worker thread.
 
     FastMCP calls a plain ``def`` tool directly on the event loop, so one slow
@@ -224,7 +229,22 @@ def _tool(*, reads_index: bool = True):
     (``reads_index=False``) does neither: it would only load the index it is
     about to rebuild, and a rebuild must not hold up searches. The module keeps
     the plain function, so the TUI and the tests still call it directly.
+
+    ADR-049: ``readOnlyHint`` is ``reads_index``, so every read tool declares it
+    without its author doing anything; a writer passes its other annotations
+    (``destructiveHint=...``) as ``hints``. The wrapper redacts secrets from the
+    returned text, so only what leaves the server is scrubbed: the plain
+    function's output is unchanged. Every session pays for the listing (B-019),
+    so the docstring is sent dedented, and without the ``{"result": string}``
+    output schema FastMCP would generate for a ``-> str`` tool.
     """
+    import inspect
+    from mcp.types import ToolAnnotations
+    from redact import redact
+    if "readOnlyHint" in hints:
+        raise TypeError("readOnlyHint is derived from reads_index")
+    annotations = ToolAnnotations(readOnlyHint=reads_index, **hints)
+
     def register(fn):
         bound = _bind_index(fn) if reads_index else fn
 
@@ -233,12 +253,15 @@ def _tool(*, reads_index: bool = True):
             global _read_limiter
             call = functools.partial(bound, *args, **kwargs)
             if not reads_index:
-                return await anyio.to_thread.run_sync(call)
-            if _read_limiter is None:
-                _read_limiter = anyio.CapacityLimiter(1)
-            return await anyio.to_thread.run_sync(call, limiter=_read_limiter)
+                out = await anyio.to_thread.run_sync(call)
+            else:
+                if _read_limiter is None:
+                    _read_limiter = anyio.CapacityLimiter(1)
+                out = await anyio.to_thread.run_sync(call, limiter=_read_limiter)
+            return redact(out) if isinstance(out, str) else out
 
-        mcp.tool()(run_in_thread)
+        mcp.tool(description=inspect.cleandoc(fn.__doc__ or ""), annotations=annotations,
+                 structured_output=False)(run_in_thread)
         return bound
     return register
 
@@ -1270,16 +1293,11 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     """
     PREFERRED ENTRY POINT for all architectural investigations.
     Replaces raw `semantic_code_search` when you want a complete picture of how a
-    concept, feature, data type, or function flows through the system.
+    concept, feature, data type, or function flows through the system: semantic
+    search plus one hop of the call graph around the best hits.
 
-    Internally runs the full Retrieve-Traverse-Rerank pipeline:
-      1. Semantic Search  — FAISS tier-1 index, top-50 by cosine similarity.
-      2. Graph Expansion  — one-hop call-graph traversal via SQLite for top-5 seeds.
-      3. Ranking — Reciprocal Rank Fusion; a reranker model only when enabled in indexer.toml.
-
-    When deep=True, runs up to 3 iterative retrieval rounds with explored-node memory
-    and query enrichment from prior evidence, stopping early when the score plateau
-    indicates diminishing returns.
+    deep=True runs up to 3 retrieval rounds, each enriched by the last; slower, for
+    when one round comes back thin.
 
     Returns a Markdown report with:
       - <evidence> XML tags (source, lines, fqn, type) for each retrieved chunk, showing
@@ -1545,8 +1563,8 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     return context
 
 
-@_tool(reads_index=False)
-def reindex(changed_files_only: bool = False) -> str:
+@_tool(reads_index=False, destructiveHint=True, idempotentHint=False)
+def reindex(changed_files_only: bool = True) -> str:
     """
     Rebuilds the index from its source: this folder's files, or, when indexer.toml sets
     `[indexer] source = "git:<ref>"`, that ref's commit, never your branch or your edits.
@@ -1554,11 +1572,11 @@ def reindex(changed_files_only: bool = False) -> str:
     Rarely needed: the server's watchdog keeps the index current on its own
     (index_status shows whether it is). Never call it to pick up branch work.
 
-    changed_files_only=True  — incremental: only processes files added, modified, or
-                               deleted since the last run. Fast for frequent refreshes.
-    changed_files_only=False — full (default): clears all index state first, then
-                               re-indexes every file from scratch. Use after major
-                               refactors or when the incremental index appears corrupted.
+    changed_files_only=True  — incremental (default): only files added, modified, or
+                               deleted since the last run. Fast.
+    changed_files_only=False — full: WIPES the index, then re-embeds every file. Slow
+                               (tens of minutes) and destructive; only when the index is
+                               corrupted, and never from a client with a request timeout.
 
     Returns a summary of chunks added/updated/removed, then reloads the in-memory indexes.
     """
@@ -1640,6 +1658,7 @@ def _reindex(changed_files_only: bool) -> str:
     if not changed_files_only:
         # #50: keep a copy of the index to restore if the rebuild raises (embedder OOM,
         # a failed model download), rather than leaving it empty until the next rerun.
+        # ADR-049: a backup a killed run left behind is restored here, never deleted.
         _backup_dir = _snapshot_index(INDEX_DIR, db_path)
         # Wipe all index state so run_incremental treats everything as new
         if os.path.exists(db_path):
@@ -1677,12 +1696,16 @@ def _reindex(changed_files_only: bool) -> str:
         if _backup_dir is not None:
             sys.stdout = _old_stdout
             _restore_index(_backup_dir, INDEX_DIR, db_path)
+            # ADR-049: removed only once the restore has finished; a kill before
+            # this line leaves the backup for the next full rebuild to restore.
+            shutil.rmtree(_backup_dir, ignore_errors=True)
             _reload_indexes()
             print("[MCP] reindex: full rebuild failed; the previous index was restored")
         raise
     finally:
         sys.stdout = _old_stdout
     if _backup_dir is not None:
+        # run_incremental returned, so the new index is saved: the backup is done.
         shutil.rmtree(_backup_dir, ignore_errors=True)
 
     # Reload in-memory state so subsequent MCP tool calls see the updated index. The
@@ -1724,21 +1747,16 @@ def index_status(since: str = "1d", limit: int = 20) -> str:
     """Report index freshness and which files changed recently (ADR-025 §6).
 
     Use this to answer "what changed in this codebase lately?" and "is the index
-    current with the code?" — e.g. before trusting the other tools on recently
-    edited files, or to feed a downstream multi-project context hub. Output is
-    agent-parseable: absolute ISO-8601 UTC timestamps and full repo-relative
-    paths, never prose you have to re-parse.
+    current with the code?", e.g. before trusting the other tools on recently
+    edited files. Timestamps are ISO-8601 UTC; paths are repo-relative.
 
-    `since` accepts a relative window ("1d", "12h", "30m", "7d") or an absolute
-    ISO-8601 timestamp ("2026-07-15T00:00:00Z"). Files whose CONTENT changed after
-    that point are listed — content_changed_at, not index-write time — so a file
-    re-indexed today but unchanged in a week does not show up. Files with no git
-    history (untracked / vendored) carry a NULL stamp and are correctly excluded.
-    `limit` caps the list at its newest entries (default 20; 0 lists all); the
-    count shown is always the full one.
+    `since` is a relative window ("1d", "12h", "30m") or an ISO-8601 timestamp.
+    Lists files whose CONTENT changed after it (not when they were re-indexed);
+    files with no git history are left out. `limit` caps the list at its newest
+    entries (default 20; 0 lists all); the count shown is always the full one.
 
-    Reports: last_verified_at, last_indexed_commit vs current HEAD (with the list
-    of diverged files when stale), files_total, and the recent-change list.
+    Reports: last_verified_at, last_indexed_commit vs current HEAD (with the files
+    that diverged when stale), files_total, and the recent-change list.
     """
     import os
     import subprocess
@@ -2057,32 +2075,23 @@ def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
 @_tool()
 def what_writes(tag: str, include_readers: bool = False) -> str:
     """
-    Given a PLC tag, reports EXACTLY which routines write it and at which rungs.
+    Given a PLC tag, reports EXACTLY which routines write it and at which rungs:
+    "an alarm will not clear, so what sets that bit?". Go one hop at a time: the
+    next question is `what_writes` on whichever condition looks wrong.
 
-    This is the question a controls engineer asks first on a support call: an alarm
-    will not clear, a valve will not open, a sequence will not advance — so what
-    sets that bit? Answer it one hop at a time and let the human prune: the next
-    question is `what_writes` on whichever condition looks wrong.
-
-    **This is a lookup, not a search.** It reads resolved `writes` edges straight
-    out of the graph — no embedding, no ranking, no reranker. Every result is a
-    real write position the extractor resolved, and the list is complete. Do not
-    reach for semantic_code_search or trace_data_flow for this question; both rank,
-    and a ranked answer to "what writes X" can silently omit a writer.
+    **A lookup, not a search:** it reads resolved `writes` edges from the graph, so
+    the list is complete. Do not use semantic_code_search or trace_data_flow for
+    this; both rank, and a ranked answer can silently omit a writer.
 
     Inputs:
-      tag             — the tag as an engineer types it (e.g. 'Valve_Open'), or a
-                        scoped FQN ('Filler.Step') for a program-scoped tag
-      include_readers — also list where the tag is READ. Off by default because
-                        widely-read tags produce long lists; turn it on when you
-                        are asking "what uses this" rather than "what sets this"
+      tag             — as an engineer types it ('Valve_Open'), or a scoped FQN
+                        ('Filler.Step') for a program-scoped tag
+      include_readers — also list where the tag is READ ("what uses this" rather
+                        than "what sets this"); off by default, as the lists get long
 
-    Output: each writing routine with its rung numbers, plus alias/module-I/O
-    mapping when the tag is an alias.
-
-    What this CANNOT tell you: which of several conditions is *currently* true.
-    That needs a live connection to the controller. This enumerates the candidates
-    — which is the half you can do from the phone without going online.
+    Output: each writing routine with its rung numbers, plus the alias/module-I/O
+    mapping when the tag is an alias. It cannot tell which condition is *currently*
+    true; that needs a live connection to the controller.
     """
     print(f"\n[MCP] what_writes: tag='{tag}' readers={include_readers}")
     db = _db()
@@ -2397,13 +2406,25 @@ def _snapshot_index(index_dir: str, db_path: str) -> str:
 
     The database is copied with SQLite's backup API, which reads a consistent
     snapshot through the WAL. Returns the backup directory.
+
+    ADR-049 (B-057): a backup that already exists was left by a full rebuild that
+    never finished, so it is the good copy and the live index is suspect. It is
+    restored and reused, never deleted. A new snapshot is copied into a
+    ``.partial`` directory and renamed into place only once complete, so a
+    ``.partial`` left behind was killed before the wipe and is safe to discard.
     """
     backup_dir = os.path.join(index_dir, ".pre-full-reindex")
-    shutil.rmtree(backup_dir, ignore_errors=True)   # left by a killed earlier run
-    os.makedirs(backup_dir)
+    if os.path.isdir(backup_dir):
+        print("[MCP] reindex: an earlier full rebuild never finished; restoring the "
+              "index it backed up before starting this one")
+        _restore_index(backup_dir, index_dir, db_path)
+        return backup_dir
+    partial = backup_dir + ".partial"
+    shutil.rmtree(partial, ignore_errors=True)
+    os.makedirs(partial)
     if os.path.exists(db_path):
         src = sqlite3.connect(db_path)
-        dst = sqlite3.connect(os.path.join(backup_dir, "graph.db"))
+        dst = sqlite3.connect(os.path.join(partial, "graph.db"))
         try:
             src.backup(dst)
         finally:
@@ -2411,12 +2432,14 @@ def _snapshot_index(index_dir: str, db_path: str) -> str:
             src.close()
     for name in os.listdir(index_dir):
         if name.endswith(".faiss"):
-            shutil.copy2(os.path.join(index_dir, name), os.path.join(backup_dir, name))
+            shutil.copy2(os.path.join(index_dir, name), os.path.join(partial, name))
+    os.replace(partial, backup_dir)
     return backup_dir
 
 
 def _restore_index(backup_dir: str, index_dir: str, db_path: str) -> None:
-    """Put back what `_snapshot_index` saved, then delete the backup."""
+    """Put back what `_snapshot_index` saved. The backup is kept: it is copied,
+    never moved, so a restore killed partway can simply be run again (ADR-049)."""
     saved_db = os.path.join(backup_dir, "graph.db")
     if os.path.exists(saved_db):
         src = sqlite3.connect(saved_db)
@@ -2431,8 +2454,9 @@ def _restore_index(backup_dir: str, index_dir: str, db_path: str) -> None:
         if name.endswith(".faiss") and name not in saved_faiss:
             os.remove(os.path.join(index_dir, name))
     for name in saved_faiss:
-        os.replace(os.path.join(backup_dir, name), os.path.join(index_dir, name))
-    shutil.rmtree(backup_dir, ignore_errors=True)
+        tmp = os.path.join(index_dir, name + ".restoring")
+        shutil.copy2(os.path.join(backup_dir, name), tmp)
+        os.replace(tmp, os.path.join(index_dir, name))
 
 
 def _reload_indexes() -> None:

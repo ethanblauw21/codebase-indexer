@@ -506,8 +506,9 @@ class SearchScreen(Screen):
                 else:
                     params[p.name] = val
             except Exception:
+                # ADR-049: an unreadable Mode field means incremental, never a full rebuild.
                 params[p.name] = (
-                    False if p.name in ("deep", "changed_files_only") else ""
+                    False if p.name == "deep" else True if p.name == "changed_files_only" else ""
                 )
         return params
 

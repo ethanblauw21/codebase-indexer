@@ -113,6 +113,8 @@ not merely age the downstream numbers, it can invert their conclusion.
 - Use the PR template (`.github/pull_request_template.md`).
 - **Merge strategy:** Merge commits only. No squash, no rebase. Branch history is preserved.
 - Manually verify the MCP server starts cleanly and `reindex` runs without error before requesting review.
+  "`reindex` runs without error" means against a scratch index or a test target, **never the live
+  one**: MCP Inspector's fixed 60 s request timeout kills any full rebuild partway (ADR-049, B-057).
 - Update the ADR Implementation Log before merging (Major changes only).
 
 ## 6. Commit Messages
