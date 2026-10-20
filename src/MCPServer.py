@@ -1,3 +1,4 @@
+import blas_threads  # noqa: F401 — B-062: before anything imports numpy or faiss
 import contextvars
 import functools
 import os

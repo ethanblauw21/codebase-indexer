@@ -1,3 +1,4 @@
+import blas_threads  # noqa: F401 — B-062: OPENBLAS_NUM_THREADS before faiss and numpy load
 import os
 import sqlite3
 import faiss

@@ -34,6 +34,7 @@ Run it with ``python src/model_host.py``. Clients start it on demand
 """
 from __future__ import annotations
 
+import blas_threads  # noqa: F401 — B-062: before torch or core pulls in numpy
 import base64
 import heapq
 import hmac

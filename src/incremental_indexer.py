@@ -63,6 +63,7 @@ pointer.  Always deduplicate the id array first (np.unique preserves int64).
 """
 from __future__ import annotations
 
+import blas_threads  # noqa: F401 — B-062: before anything imports numpy or faiss
 import argparse
 import os
 import subprocess
