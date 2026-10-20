@@ -363,6 +363,12 @@ def test_get_graph_edges_all_kinds_and_resolved_target(tmp_path):
 
     db = CodeDB(tmp_path / "graph.db")
     try:
+        # ADR-053: an edge must end at a repo node, so the targets exist here.
+        db._conn.execute("INSERT INTO files(id, path, content_hash) VALUES (1, 'canonical.target', 'h')")
+        for fqn in ("mod.B", "mod.Cls.method"):
+            db._conn.execute(
+                "INSERT INTO symbols(fqn, file_id, kind, name, start_line, end_line, text) "
+                "VALUES (?, 1, 'function', ?, 1, 1, '')", (fqn, fqn))
         db._conn.execute(
             "INSERT INTO edges(source_fqn, target, kind, resolved_target) VALUES (?,?,?,?)",
             ("mod.A", "mod.B", "CALLS", None),

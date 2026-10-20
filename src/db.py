@@ -1300,11 +1300,52 @@ class CodeDB:
         differently.  ``resolved_target`` is preferred over the raw ``target``
         when present, so edges point at canonical FQNs.  Read-only; reflects the
         current committed graph on the shared connection.
+
+        ADR-053: only edges whose target is a node the repo defines — a symbol FQN
+        or an indexed file path — are returned.  An unresolved ``append``, ``bool``
+        or ``os`` is not a module of this codebase, and as a node it became a
+        community member and a betweenness hub.  An EXTENDS/IMPLEMENTS target is a
+        bare type name the resolver never binds, so it is bound here to the type of
+        that name in the subclass's own file, else to the repo's only type of that
+        name; ``Protocol`` or an ambiguous ``Animal`` is dropped.
         """
         rows = self._conn.execute(
-            "SELECT source_fqn, COALESCE(resolved_target, target) AS tgt, kind FROM edges"
+            """
+            SELECT source_fqn, COALESCE(resolved_target, target) AS tgt, kind FROM edges
+            WHERE COALESCE(resolved_target, target) IN (SELECT fqn FROM symbols)
+               OR COALESCE(resolved_target, target) IN (SELECT path FROM files)
+            """
         ).fetchall()
-        return [(r["source_fqn"], r["tgt"], r["kind"]) for r in rows]
+        edges = [(r["source_fqn"], r["tgt"], r["kind"]) for r in rows]
+
+        heritage = self._conn.execute(
+            """
+            SELECT e.source_fqn, e.target, e.kind, s.file_id FROM edges e
+            LEFT JOIN symbols s ON s.fqn = e.source_fqn
+            WHERE e.kind IN ('EXTENDS', 'IMPLEMENTS') AND e.resolved_target IS NULL
+              AND e.target NOT IN (SELECT fqn FROM symbols)
+            """
+        ).fetchall()
+        if not heritage:
+            return edges
+        type_kinds = ("class", "interface", "struct", "record", "partial_class",
+                      "enum", "type_alias", "typedef")
+        names = sorted({r["target"] for r in heritage})
+        types: dict[str, list[tuple[str, int]]] = {}
+        for i in range(0, len(names), 500):          # SQLite's bound-parameter limit
+            batch = names[i:i + 500]
+            for r in self._conn.execute(
+                f"SELECT name, fqn, file_id FROM symbols WHERE name IN ({','.join('?' * len(batch))}) "
+                f"AND kind IN ({','.join('?' * len(type_kinds))})",
+                (*batch, *type_kinds),
+            ):
+                types.setdefault(r["name"], []).append((r["fqn"], r["file_id"]))
+        for r in heritage:
+            cands = types.get(r["target"], [])
+            pick = [f for f, fid in cands if fid == r["file_id"]] or [f for f, _ in cands]
+            if len(pick) == 1:
+                edges.append((r["source_fqn"], pick[0], r["kind"]))
+        return edges
 
     # ------------------------------------------------------------------
     # Point lookups and search
