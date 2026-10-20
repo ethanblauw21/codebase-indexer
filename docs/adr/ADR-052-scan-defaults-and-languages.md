@@ -198,6 +198,15 @@ Rules kept narrow on purpose:
   `public`, `mocks`, which are not defaults) and now also misses this ADR's additions; that file
   is not edited this round.
 
+- 2026-10-20 — **Gates** (Linux cloud container, Python 3.12, CPU, PyPI `torch` 2.14.1 run on CPU,
+  no model, huggingface.co unreachable so `HF_HUB_OFFLINE=1`): flake8 clean; `pytest --co` 775
+  collected, no errors (704 on `871b55c`); `pytest` **724 passed, 48 failed, 2 skipped, 1 xfailed**
+  against `871b55c`'s 654 / 48 / 2 / 0. The 48 failures are the **same 48 test ids on both**, all
+  from tests that load the embedder's tokenizer from HuggingFace. The +70 passed are this ADR's 66
+  passing tests and 4 conformance parametrizations over the new fixtures.
+  `conformance_eval --check-baseline`, `resolution_eval --check-baseline` and
+  `l5x_fixture_teeth --check` exit 0. No MCP tool changed, so no Inspector run.
+
 **Open questions for @edb:**
 
 1. **Removing one default.** `files` has `!` exceptions, but `dirs` and `extensions` still need a
