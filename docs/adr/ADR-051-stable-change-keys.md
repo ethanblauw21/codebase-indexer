@@ -1,6 +1,6 @@
 # ADR-051: Change Keys That Ignore Line Endings and Slice Positions
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20
 **Branch:** `feature/adr-051-stable-change-keys`
 **Reviewer:** @edb
