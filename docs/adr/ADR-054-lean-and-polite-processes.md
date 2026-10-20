@@ -1,6 +1,6 @@
 # ADR-054: Lean Indexer Processes and a Polite Background Summarizer
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20
 **Branch:** `feature/adr-054-process-footprint`
 **Reviewer:** @edb
