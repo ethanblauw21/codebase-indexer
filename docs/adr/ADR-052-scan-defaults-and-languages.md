@@ -1,6 +1,6 @@
 # ADR-052: Scan Defaults — Apps Script, .NET Output, Razor as Text, Credential Files
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20
 **Branch:** `feature/adr-052-scan-defaults-and-languages`
 **Reviewer:** @edb
