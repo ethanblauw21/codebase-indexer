@@ -35,7 +35,8 @@ class _FakeKernel32:
 def posix(monkeypatch):
     calls = []
     monkeypatch.setattr(sys, "platform", "linux")
-    monkeypatch.setattr(os, "nice", lambda inc: calls.append(inc) or inc)
+    # raising=False: Windows has no os.nice, and these run there too (B-047)
+    monkeypatch.setattr(os, "nice", lambda inc: calls.append(inc) or inc, raising=False)
     return calls
 
 
@@ -70,7 +71,7 @@ def test_posix_failure_is_logged_not_raised(monkeypatch, caplog):
 
     def refuse(_inc):
         raise PermissionError("not allowed")
-    monkeypatch.setattr(os, "nice", refuse)
+    monkeypatch.setattr(os, "nice", refuse, raising=False)
     sm._lower_priority()
     assert "could not lower its priority" in caplog.text
 
