@@ -555,6 +555,48 @@ def reconcile_vectors(
 
 
 # ---------------------------------------------------------------------------
+# Tier-1 vector reuse (ADR-051 §5, B-034)
+# ---------------------------------------------------------------------------
+
+TIER1 = "tier1_surgical"
+
+
+def tier1_vectors_to_reuse(
+    db:     CodeDB,
+    index:  faiss.Index,
+    paths:  list[str],
+) -> dict[int, tuple[str, np.ndarray]]:
+    """{chunk id: (text hash, vector)} for every tier-1 chunk of `paths` that has a
+    vector, read before `purge_stale_vectors` removes them.
+
+    A modified file's chunks are all purged and re-ingested. One whose id and
+    `chunk_text_hash` come back unchanged gets this vector back instead of a new
+    embedding (`_prepare_file`). The hash leaves out `Lines:`, so a symbol that only
+    moved keeps a vector embedded with its old line numbers, as an unchanged file's
+    chunks already do. Tiers 2 and 3 are not reused: a slice's text changes with any
+    edit above it (B-048).
+    """
+    id_map = getattr(index, "id_map", None)
+    if not paths or id_map is None or index.ntotal == 0:
+        return {}
+    position = {int(i): p for p, i in enumerate(faiss.vector_to_array(id_map))}
+    flat = index.index
+    out: dict[int, tuple[str, np.ndarray]] = {}
+    for start in range(0, len(paths), 500):
+        part = paths[start:start + 500]
+        rows = db._conn.execute(
+            "SELECT f.path, c.scope, c.text FROM chunks c JOIN files f ON f.id = c.file_id "
+            f"WHERE c.tier = ? AND f.path IN ({','.join('?' * len(part))})",
+            [TIER_NUM[TIER1], *part],
+        ).fetchall()
+        for path, scope, text in rows:
+            fid = stable_id(TIER1, path, scope)
+            if fid in position:
+                out[fid] = (chunk_text_hash(text), flat.reconstruct(position[fid]))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Project-descriptor ingest: parse edges only — no chunking or embedding
 # ---------------------------------------------------------------------------
 
@@ -676,7 +718,7 @@ class _FilePlan:
         "rel_path", "content_hash", "content_changed_at", "authored_at",
         "symbols", "edges", "references", "symbol_types",
         "tier_chunks", "tier_ids", "tier_texts", "summary_items",
-        "tier_vectors", "summary_vectors",
+        "tier_reused", "tier_vectors", "summary_vectors",
     )
 
     def __init__(
@@ -693,6 +735,7 @@ class _FilePlan:
         tier_ids: dict[str, list[int]],
         tier_texts: dict[str, list[str]],
         summary_items: dict[str, list[tuple[int, str]]],
+        tier_reused: Optional[dict[str, dict[int, np.ndarray]]] = None,
     ) -> None:
         self.rel_path = rel_path
         self.content_hash = content_hash
@@ -706,6 +749,9 @@ class _FilePlan:
         self.tier_ids = tier_ids
         self.tier_texts = tier_texts
         self.summary_items = summary_items
+        # ADR-051 §5 (B-034): {tier: {position in tier_texts: vector}} for chunks that
+        # keep the vector they already had; those texts are not embedded again.
+        self.tier_reused = tier_reused or {}
         self.tier_vectors: dict[str, np.ndarray] = {}
         self.summary_vectors: dict[str, np.ndarray] = {}
 
@@ -715,20 +761,35 @@ class _FilePlan:
         summary texts (same order)."""
         texts: list[str] = []
         for tier_name, _, _ in TIER_CONFIGS:
-            texts.extend(self.tier_texts.get(tier_name, ()))
+            reused = self.tier_reused.get(tier_name, {})
+            texts.extend(t for i, t in enumerate(self.tier_texts.get(tier_name, ()))
+                         if i not in reused)
         for tier_name, _, _ in TIER_CONFIGS:
             texts.extend(s for _fid, s in self.summary_items.get(tier_name, ()))
         return texts
 
-    def scatter(self, vectors: np.ndarray) -> None:
+    def scatter(self, vectors: Optional[np.ndarray]) -> None:
         """Split `vectors` — already normalized and aligned to `pending_texts()` —
-        into this file's per-tier code and summary vectors."""
+        into this file's per-tier code and summary vectors, putting reused vectors
+        back in their places. `None` when nothing was pending."""
+        if vectors is None:
+            vectors = np.empty((0, 0), dtype=np.float32)
         offset = 0
         for tier_name, _, _ in TIER_CONFIGS:
             n = len(self.tier_texts.get(tier_name, ()))
-            if n:
-                self.tier_vectors[tier_name] = vectors[offset:offset + n]
-            offset += n
+            reused = self.tier_reused.get(tier_name, {})
+            fresh = vectors[offset:offset + n - len(reused)]
+            offset += n - len(reused)
+            if not n:
+                continue
+            if not reused:
+                self.tier_vectors[tier_name] = fresh
+                continue
+            full = np.empty((n, len(next(iter(reused.values())))), dtype=np.float32)
+            rest = iter(fresh)
+            for i in range(n):
+                full[i] = reused[i] if i in reused else next(rest)
+            self.tier_vectors[tier_name] = full
         for tier_name, _, _ in TIER_CONFIGS:
             items = self.summary_items.get(tier_name, ())
             n = len(items)
@@ -767,6 +828,7 @@ def _prepare_file(
     summarizer:    Optional[object] = None,
     content_changed_at: Optional[str] = None,
     authored_at:        Optional[str] = None,
+    reuse:         Optional[dict[int, tuple[str, np.ndarray]]] = None,
 ) -> _FilePlan:
     """Everything `ingest_file` did before it touched the embedder: AST parse,
     three-tier chunking, import-edge resolution, and summary-cache lookups
@@ -777,6 +839,10 @@ def _prepare_file(
     The DocumentStore text/tag cache is populated here, same as it always was:
     it does not depend on the embedding and MCP reads should see it as soon as
     the chunk exists.
+
+    `reuse` is `tier1_vectors_to_reuse`'s map: a tier-1 chunk whose id is in it with
+    the same text hash keeps that vector instead of being embedded (ADR-051 §5).
+    Entries are popped as they are looked at.
     """
     print(f"  [ingest:{rel_path}] chunking...", flush=True)
     tier_chunks: dict[str, list] = chunk_all_tiers(rel_path, content)
@@ -805,6 +871,7 @@ def _prepare_file(
     tier_ids:      dict[str, list[int]] = {}
     tier_texts:    dict[str, list[str]] = {}
     summary_items: dict[str, list[tuple[int, str]]] = {}
+    tier_reused:   dict[str, dict[int, np.ndarray]] = {}
 
     for tier_name, chunks in tier_chunks.items():
         ids: list[int] = []
@@ -826,6 +893,17 @@ def _prepare_file(
 
         tier_ids[tier_name] = ids
         tier_texts[tier_name] = texts
+
+        if reuse and tier_name == TIER1:
+            kept = {}
+            for i, (fid, text) in enumerate(zip(ids, texts)):
+                old = reuse.pop(fid, None)
+                if old is not None and old[0] == chunk_text_hash(text):
+                    kept[i] = old[1]
+            if kept:
+                tier_reused[tier_name] = kept
+                print(f"  [ingest:{rel_path}] {tier_name}: {len(kept)} of {len(texts)} "
+                      f"vector(s) reused, code unchanged", flush=True)
 
         if not texts:
             print(f"  [ingest:{rel_path}] {tier_name}: no chunks, skipping", flush=True)
@@ -879,6 +957,7 @@ def _prepare_file(
         tier_ids=tier_ids,
         tier_texts=tier_texts,
         summary_items=summary_items,
+        tier_reused=tier_reused,
     )
 
 
@@ -970,6 +1049,8 @@ def ingest_file(
         faiss.normalize_L2(vectors)
         print(f"  [ingest:{rel_path}] embedding done, shape={vectors.shape}", flush=True)
         plan.scatter(vectors)
+    else:
+        plan.scatter(None)
 
     return _write_plan(plan, faiss_indexes, doc_store, db)
 
@@ -1286,6 +1367,13 @@ def _run_incremental(
     stale_paths = diff.modified + diff.deleted
     stale_ids = get_stale_ids(db, stale_paths) if stale_paths else np.empty(0, dtype=np.int64)
 
+    # ADR-051 §5 (B-034): read the modified files' tier-1 vectors before the purge, so
+    # a chunk whose code did not change keeps its vector. Not on a pre-ADR-030 index,
+    # whose code vectors have summaries folded in.
+    _reuse = (tier1_vectors_to_reuse(db, faiss_indexes[TIER1], diff.modified)
+              if db.meta_get("embed_layout") == EMBED_LAYOUT else {})
+    n_reused = 0
+
     if len(stale_ids) > 0:
         n_removed = purge_stale_vectors(faiss_indexes, doc_store, stale_ids)
         print(f"  Purged {n_removed} stale vector IDs ({len(stale_paths)} file(s)).")
@@ -1402,8 +1490,7 @@ def _run_incremental(
         offset = 0
         for plan, n in zip(plans, counts_by_plan):
             try:
-                if n:
-                    plan.scatter(vectors[offset:offset + n])
+                plan.scatter(vectors[offset:offset + n] if n else None)
                 counts = _write_plan(plan, faiss_indexes, doc_store, db)
                 t1 = counts.get("tier1_surgical",       0)
                 t2 = counts.get("tier2_component",       0)
@@ -1473,7 +1560,9 @@ def _run_incremental(
                     summarizer=summarizer,
                     content_changed_at=_cc_at,
                     authored_at=_auth_at,
+                    reuse=_reuse,
                 )
+                n_reused += len(plan.tier_reused.get(TIER1, ()))
                 timing["prep"] += time.monotonic() - _t_prep
                 texts = plan.pending_texts()
                 pending_plans.append(plan)
@@ -1506,6 +1595,9 @@ def _run_incremental(
               f"prepare {timing['prep']:.1f}s, write {timing['write']:.1f}s, "
               f"wall {time.monotonic() - pass2_start:.1f}s "
               f"(overlap {'on' if embedder is not None else 'off'})", flush=True)
+    if n_reused:
+        print(f"  Reused {n_reused} tier-1 vector(s) whose code did not change (ADR-051).")
+    _reuse.clear()
 
     # ADR-021: resolve CALLS-edge bare callee names to in-repo FQNs so the graph
     # Traverse step has real neighbours to walk. Runs once here, over the now-complete
