@@ -91,8 +91,8 @@ So the dedup key includes the file. Cross-file collapse is an open question for 
 
 **Worse:**
 - Vendored or copy-pasted files still take one slot per copy in `semantic_code_search`.
-- A dedup pass over the pool on every call: a dict over at most `max(35, top_n)` strings (≤ ~150
-  with the summary path). Negligible next to an embedding.
+- A dedup pass over the pool on every call: a dict over the pool, at most `max(35, top_n)` chunks
+  (`top_n` is 80 for `trace_data_flow`). Negligible next to an embedding.
 - With summaries on, removing a twin from the code ranking moves every chunk below it up a rank, so
   their code-side RRF share grows a little against summary-only chunks. The fused order can change
   in ways other than "one fewer duplicate". Not measured: there is no GPU or model here.
@@ -144,9 +144,48 @@ So the dedup key includes the file. Cross-file collapse is an open question for 
 ## Implementation Log
 
 - [x] ADR (this file), first commit on the branch
-- [ ] B-010: `_dedupe_same_text` before every cut; tests
-- [ ] B-009: `stack_provenance` + `append_baseline` stamp; harness `reranker_enabled`; tests; CONTRIBUTING §4.2 line
-- [ ] B-005: the two doc pointers, in their own commit
-- [ ] Gates
+- [x] B-010: `_dedupe_same_text` before the three cuts in `_rerank` and the final cut in
+  `_fuse_summaries`. In `_fuse_summaries` the fused list is now built in full (≤ ~60 chunks)
+  before the cut, so the dedup runs ahead of the existing ADR-030 part filter.
+- [x] B-010 tests, `tests/test_dedupe_results.py` (9):
+  - a tier-2/tier-3 twin pair becomes one tier-2 hit at the pair's best score, and the slot refills;
+  - the tier-2 hit wins when it ranks first too; a tier-1 chunk equal to its whole file stands for all three;
+  - identical text in two files keeps both copies;
+  - distinct texts keep their order, and a collapse leaves every other hit in order;
+  - empty text never matches;
+  - the reranked path collapses too;
+  - a twin that arrives only through its summary, under another scope label, doesn't take a second slot.
+- [x] B-009: `stack_provenance()` and the `append_baseline` stamp; tests in `tests/test_eval_common.py`
+  (3): a temp `indexer.toml` with non-default ids reaches the row through the working directory; a
+  field the record sets wins; a missing key reports the code default.
+- [x] B-009, outside this ADR's file list (smallest change, both files are owned by no session):
+  - `tools/real_repo_eval.py`: per-arm rows record `ARMS[arm]["reranker_enabled"]`; lift rows
+    record it when both arms agree and `None` when they differ (the reranker lift);
+  - `tools/coir_eval.py`: rows record `embedder_model_id` and `reranker_model_id` from the
+    harness's own `load_config()` (it loads its models from `_ROOT/indexer.toml` with its own
+    fallbacks, not through `core.py`), and `reranker_enabled = reranker is not None`.
+- [x] `CONTRIBUTING.md` §4.2: one line saying the harness stamps each row.
+- [x] B-005: the two doc pointers, in their own commit. `adr-backlog.md`'s lines had moved to 151 and
+  178 since the backlog item was written.
+- [x] Gates, on CPU, Python 3.12.3, no model and no network to huggingface.co (`HF_HUB_OFFLINE=1`):
+  - flake8 on `src/`: clean;
+  - `pytest --co`: 716 collected (704 on `871b55c`), no errors;
+  - `pytest`: 666 passed, 2 skipped, 48 failed. `871b55c` gives 654 passed, 2 skipped and the
+    **same 48 failures**, all from the HuggingFace tokenizer the chunker needs, which isn't
+    cached here (31 direct `OSError`/`LocalEntryNotFoundError`, the rest are files that then
+    failed to index);
+  - `conformance_eval.py --check-baseline`, `resolution_eval.py --check-baseline`,
+    `l5x_fixture_teeth.py --check`: all exit 0.
+- [x] MCP Inspector: not run. No tool, signature or docstring changed; the dedup is inside
+  `retrieve()`.
+- [ ] **Not measured:** the duplicate rate before and after on a real index. The tier-2/3 windows
+  are cut by the embedder's tokenizer, which isn't available here, so not even a model-free count
+  of twin files was possible. The 2026-07-27 figure (about a fifth of the slots; `BAAI/bge-code-v1`,
+  dim 1536, reranker off, `fusion_mode = "rrf"`, 98-file index of this repo) is the only number.
+  Worth re-running those four queries on the next GPU session.
 
 **Notes:**
+- 2026-10-20: chose `(file, text)` over `text` as the key once it was clear `find_similar_code`
+  and `detect_pattern_violations` read `retrieve()`'s output directly. See Decision §2.
+- 2026-10-20: `pip install torch --index-url https://download.pytorch.org/whl/cpu` was blocked
+  here; `pip install -e ".[dev]"` pulled torch from PyPI instead.
