@@ -89,6 +89,8 @@ Two obligations, and the second is the one that gets skipped:
 
 1. **Stamp it.** A result file records the model ids and dimensions it ran with, alongside the
    `git_sha` it already carries. A number you cannot attribute to a stack is not evidence.
+   `tools/eval_common.append_baseline` does this for every row it writes (ADR-055): the embedder id and
+   dimension, the reranker id and whether it was on, and the summarizer id, from the run's own config.
 2. **Invalidate it, in the same PR as the swap.** Do not leave a superseded baseline reading as
    current. Add the caveat where the *verdict* lives — the ADR — not only in the results file, since
    the ADR is what people quote.

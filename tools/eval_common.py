@@ -40,6 +40,31 @@ def git_sha(cwd=None):
         return "unknown"
 
 
+def stack_provenance(config=None):
+    """The models a run used, for stamping every baseline row (ADR-055, B-009).
+
+    Read from ``load_indexer_config()``, the call ``core.py`` and ``HybridRetriever``
+    make during the run, so the stamp cannot drift from what ran. A key the config
+    leaves out reports the code default the run fell back to. ``reranker_enabled`` is
+    the config's switch; a harness that turns the reranker on per arm records its own.
+    """
+    from config import DEFAULT_SUMMARIZER_MODEL_ID, load_indexer_config
+    from core import _DEFAULT_DIMENSION, _DEFAULT_MODEL_ID
+    from hybrid_retriever import _DEFAULT_RERANKER_ENABLED, _DEFAULT_RERANKER_MODEL_ID
+
+    cfg = load_indexer_config() if config is None else config
+    emb = cfg.get("embeddings", {})
+    rer = cfg.get("reranker", {})
+    summ = cfg.get("summarization", {})
+    return {
+        "embedder_model_id": emb.get("model_id", _DEFAULT_MODEL_ID),
+        "embedder_dim": int(emb.get("dimension", _DEFAULT_DIMENSION)),
+        "reranker_model_id": rer.get("model_id", _DEFAULT_RERANKER_MODEL_ID),
+        "reranker_enabled": bool(rer.get("enabled", _DEFAULT_RERANKER_ENABLED)),
+        "summarizer_model_id": str(summ.get("model_id", DEFAULT_SUMMARIZER_MODEL_ID)),
+    }
+
+
 def dcg(gains):
     return sum(g / np.log2(i + 2) for i, g in enumerate(gains))
 
@@ -94,13 +119,17 @@ def ci95(values):
     return 1.96 * float(arr.std(ddof=1)) / (arr.size ** 0.5)
 
 
-def append_baseline(record, path, key_fields=("subtask", "config")):
+def append_baseline(record, path, key_fields=("subtask", "config"), config=None):
     """Append ``record`` to a JSONL baseline, replacing any row with the same key.
 
     ``key_fields`` are the record keys that identify a unique run (CoIR:
     subtask×config; real-repo: repo×arm×language). The file is rewritten sorted by
-    the key so diffs stay stable and git-friendly (§6 comparability). Returns ``path``.
+    the key so diffs stay stable and git-friendly (§6 comparability). The record is
+    stamped with ``stack_provenance(config)`` first; a field it already has wins.
+    Returns ``path``.
     """
+    for k, v in stack_provenance(config).items():
+        record.setdefault(k, v)
     existing = []
     if os.path.exists(path):
         existing = list(read_jsonl(path))

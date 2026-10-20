@@ -82,3 +82,60 @@ def test_append_baseline_custom_key_fields(tmp_path):
     assert len(rows) == 2                                  # (B) replaced, (C) appended
     b = next(r for r in rows if r["arm"] == "B")
     assert b["mrr"] == 0.9
+
+
+# ── ADR-055 (B-009): every row names its stack ──────────────────────────────
+
+_TOML = """
+[embeddings]
+model_id = "example/fake-embedder"
+dimension = 384
+
+[reranker]
+model_id = "example/fake-reranker"
+enabled = true
+
+[summarization]
+model_id = "example/fake-summarizer"
+"""
+
+
+def test_append_baseline_stamps_the_stack_the_run_loaded(tmp_path, monkeypatch):
+    # The run's config is found from the working directory, as core.py and
+    # HybridRetriever find it; non-default ids prove the values come from it.
+    (tmp_path / "indexer.toml").write_text(_TOML, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    path = str(tmp_path / "out" / "b.jsonl")
+    ec.append_baseline({"subtask": "s1", "config": "dense", "v": 1}, path)
+    row = next(ec.read_jsonl(path))
+    assert row["embedder_model_id"] == "example/fake-embedder"
+    assert row["embedder_dim"] == 384
+    assert row["reranker_model_id"] == "example/fake-reranker"
+    assert row["reranker_enabled"] is True
+    assert row["summarizer_model_id"] == "example/fake-summarizer"
+
+
+def test_a_field_the_record_sets_wins_over_the_config(tmp_path, monkeypatch):
+    # The real-repo eval turns the reranker on per arm, whatever the config says.
+    (tmp_path / "indexer.toml").write_text(_TOML, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    path = str(tmp_path / "b.jsonl")
+    ec.append_baseline({"repo": "click", "arm": "B", "reranker_enabled": False}, path,
+                       ("repo", "arm"))
+    row = next(ec.read_jsonl(path))
+    assert row["reranker_enabled"] is False
+    assert row["reranker_model_id"] == "example/fake-reranker"
+
+
+def test_a_key_the_config_leaves_out_reports_the_code_default(tmp_path):
+    import config
+    import core
+    import hybrid_retriever as hr
+    stack = ec.stack_provenance({"embeddings": {"model_id": "example/fake-embedder"}})
+    assert stack == {
+        "embedder_model_id": "example/fake-embedder",
+        "embedder_dim": core._DEFAULT_DIMENSION,
+        "reranker_model_id": hr._DEFAULT_RERANKER_MODEL_ID,
+        "reranker_enabled": hr._DEFAULT_RERANKER_ENABLED,
+        "summarizer_model_id": config.DEFAULT_SUMMARIZER_MODEL_ID,
+    }
