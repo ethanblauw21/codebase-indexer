@@ -213,7 +213,7 @@ def _bind_index(fn):
 _read_limiter: "anyio.CapacityLimiter | None" = None
 
 
-def _tool(*, reads_index: bool = True):
+def _tool(*, reads_index: bool = True, **hints):
     """Register ``fn`` as an MCP tool that runs in a worker thread.
 
     FastMCP calls a plain ``def`` tool directly on the event loop, so one slow
@@ -223,7 +223,22 @@ def _tool(*, reads_index: bool = True):
     (``reads_index=False``) does neither: it would only load the index it is
     about to rebuild, and a rebuild must not hold up searches. The module keeps
     the plain function, so the TUI and the tests still call it directly.
+
+    ADR-049: ``readOnlyHint`` is ``reads_index``, so every read tool declares it
+    without its author doing anything; a writer passes its other annotations
+    (``destructiveHint=...``) as ``hints``. The wrapper redacts secrets from the
+    returned text, so only what leaves the server is scrubbed: the plain
+    function's output is unchanged. Every session pays for the listing (B-019),
+    so the docstring is sent dedented, and without the ``{"result": string}``
+    output schema FastMCP would generate for a ``-> str`` tool.
     """
+    import inspect
+    from mcp.types import ToolAnnotations
+    from redact import redact
+    if "readOnlyHint" in hints:
+        raise TypeError("readOnlyHint is derived from reads_index")
+    annotations = ToolAnnotations(readOnlyHint=reads_index, **hints)
+
     def register(fn):
         bound = _bind_index(fn) if reads_index else fn
 
@@ -232,12 +247,15 @@ def _tool(*, reads_index: bool = True):
             global _read_limiter
             call = functools.partial(bound, *args, **kwargs)
             if not reads_index:
-                return await anyio.to_thread.run_sync(call)
-            if _read_limiter is None:
-                _read_limiter = anyio.CapacityLimiter(1)
-            return await anyio.to_thread.run_sync(call, limiter=_read_limiter)
+                out = await anyio.to_thread.run_sync(call)
+            else:
+                if _read_limiter is None:
+                    _read_limiter = anyio.CapacityLimiter(1)
+                out = await anyio.to_thread.run_sync(call, limiter=_read_limiter)
+            return redact(out) if isinstance(out, str) else out
 
-        mcp.tool()(run_in_thread)
+        mcp.tool(description=inspect.cleandoc(fn.__doc__ or ""), annotations=annotations,
+                 structured_output=False)(run_in_thread)
         return bound
     return register
 
