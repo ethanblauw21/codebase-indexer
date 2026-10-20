@@ -80,7 +80,7 @@ def test_the_server_holds_one_copy_of_the_index(stub_loading):
 def test_every_registered_tool_is_async_with_the_same_arguments():
     """#53: FastMCP runs a sync tool on the event loop; an async one it awaits."""
     tools = M.mcp._tool_manager.list_tools()
-    assert len(tools) == 14
+    assert len(tools) == 17      # 14, plus ADR-050's three symbol-table tools
     for t in tools:
         assert t.is_async, t.name
         plain = getattr(M, t.name)

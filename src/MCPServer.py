@@ -2391,6 +2391,563 @@ def map_module_communities(target_path: str = "", min_community_size: int = 3,
 _reindex_lock = threading.Lock()
 
 
+# ---------------------------------------------------------------------------
+# ADR-050 — answers straight from the symbol table: a file's outline, one
+# symbol's source, the symbols a diff touched. No retrieval and no model.
+# ---------------------------------------------------------------------------
+
+_OUTLINE_SIG_CHARS = 200     # a derived signature is cut here
+_SOURCE_MAX_LINES = 400      # a longer span is cut, with a pointer to the outline
+_GIT_TIMEOUT = 30            # seconds, for every git call changed_symbols makes
+_BLAST_SYMBOLS = 25          # changed symbols whose callers blast_radius looks up
+_SKELETON_STUB = " ...\n"    # what ADR-034 puts in place of a member's body
+_PY_EXTS = (".py", ".pyi")
+
+
+def _require_index(db) -> None:
+    """Fail when nothing has been built here, rather than call every file 'not indexed'."""
+    if not db.has_files():
+        raise RuntimeError(
+            "No index here: graph.db holds no files. The server indexes the directory it "
+            f"was started in ({os.getcwd()}); build it there first.")
+
+
+def _indexed_path(db, file: str) -> str:
+    """The repo-relative POSIX path the index stores for ``file``.
+
+    Takes either separator, a leading ``./``, an absolute path inside the repo, or a
+    trailing part of a path (``db.py``) that matches exactly one indexed file.
+    """
+    raw = (file or "").strip()
+    if not raw:
+        raise ValueError("file is required: a repo-relative path such as 'src/db.py'")
+    p = raw.replace("\\", "/")
+    root = os.getcwd().replace("\\", "/").rstrip("/")
+    if p.lower().startswith(root.lower() + "/"):
+        p = p[len(root) + 1:]
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.strip("/")
+    if db.get_file_record(p):
+        return p
+    hits = db.find_file_paths(p)
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        raise ValueError(f"'{file}' matches {len(hits)} indexed files; pass one of:\n"
+                         + "".join(f"  {h}\n" for h in hits))
+    msg = f"'{file}' is not in the index."
+    if os.path.isfile(os.path.join(os.getcwd(), p)):
+        msg += (" The file exists, so it is excluded by [ignore], not a language the "
+                "indexer parses, or not indexed yet; Read it directly.")
+    near = db.find_file_paths(p.rsplit("/", 1)[-1]) if "/" in p else []
+    if near:
+        msg += " Indexed files with that name:\n" + "".join(f"  {h}\n" for h in near)
+    raise LookupError(msg)
+
+
+def _signature(text: str, path: str) -> str:
+    """A symbol's declaration, from its stored text: everything up to its body.
+
+    No signature is stored (ADR-050 §1), so it is cut from the text: decorator and
+    attribute lines are skipped, then it stops at the first ``{``, ``;`` or ``=>``
+    outside brackets, or, in Python, at a ``:`` that ends a line. Collapsed to one line.
+    """
+    lines = text.split("\n")
+    while len(lines) > 1 and lines[0].lstrip().startswith(("@", "[")):
+        lines.pop(0)                                    # decorators, C# attributes
+    body = "\n".join(lines)
+    python = path.lower().endswith(_PY_EXTS)
+    depth, cut = 0, None
+    for i, ch in enumerate(body):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if ch in "{;" or body.startswith("=>", i):
+                cut = i
+                break
+            if python and ch == ":" and body[i + 1:].split("\n", 1)[0].split("#", 1)[0].strip() == "":
+                cut = i
+                break
+    head = body[:cut] if cut is not None else lines[0]
+    sig = re.sub(r"\s+", " ", head).strip()
+    sig = re.sub(r"\(\s+", "(", re.sub(r",?\s+\)", ")", sig))
+    if len(sig) > _OUTLINE_SIG_CHARS:
+        sig = sig[:_OUTLINE_SIG_CHARS] + " …"
+    return sig or lines[0].strip()
+
+
+def _nesting(locs: list[dict]) -> list[int]:
+    """Each symbol's depth inside the ones before it (input is outer-before-inner)."""
+    depths: list[int] = []
+    stack: list[int] = []                   # end lines of the enclosing symbols
+    for loc in locs:
+        while stack and loc["start_line"] > stack[-1]:
+            stack.pop()
+        depths.append(len(stack))
+        stack.append(loc["end_line"])
+    return depths
+
+
+def _index_source(db) -> tuple[str, str | None]:
+    """(``index_meta.source``, the indexed commit): what the index was built from."""
+    return db.meta_get("source") or "worktree", db.meta_get("last_indexed_commit")
+
+
+def _source_label(db) -> str | None:
+    """For a git-mode index, which commit answers come from; None for the folder."""
+    label, commit = _index_source(db)
+    if not label.startswith("git:"):
+        return None
+    if not commit:
+        raise RuntimeError(f"This index reads {label} but records no last_indexed_commit; "
+                           "it has no finished build to read from.")
+    return f"commit {commit[:10]} ({label}): the index's source, not your working tree"
+
+
+def _open_source(db):
+    """The ``source.py`` Source the index was built from, and its _source_label.
+
+    Git mode (ADR-042) reads the indexed commit, so the text is exactly what the symbol
+    table describes; the folder is read as the indexer reads it.
+    """
+    from source import GitCommitSource, GitError, WorkingTreeSource
+    where = _source_label(db)
+    if where is None:
+        return WorkingTreeSource(os.getcwd()), None
+    commit = _index_source(db)[1]
+    try:
+        return GitCommitSource(os.getcwd(), commit), where
+    except GitError as exc:
+        raise RuntimeError(f"Cannot read the indexed commit {commit[:10]}: {exc}") from exc
+
+
+def _file_unchanged(db, path: str) -> bool:
+    """Whether the file still has the content hash it was indexed with."""
+    rec = db.get_file_record(path)
+    if rec is None:
+        return False
+    label, commit = _index_source(db)
+    if label.startswith("git:"):
+        try:
+            blob = _git_run("rev-parse", "--verify", "--quiet", f"{commit}:{path}").strip()
+        except RuntimeError:
+            return False
+        return blob == rec["content_hash"]
+    from source import md5_file
+    try:
+        return md5_file(os.path.join(os.getcwd(), path)) == rec["content_hash"]
+    except OSError:
+        return False
+
+
+def _text_blocks(stored: str) -> list[str]:
+    """The pieces of a stored symbol text that appear verbatim in its source.
+
+    A class's text is an ADR-034 skeleton (member bodies replaced by `` ...``), and a
+    merged overload set is its parts reordered, so the text as a whole need not occur in
+    the file. Each run of lines between stubs and blank lines does.
+    """
+    blocks = []
+    for piece in stored.split(_SKELETON_STUB):
+        for block in re.split(r"\n\s*\n", piece):
+            block = block.strip()
+            if block.endswith(" ..."):
+                block = block[:-4].rstrip()
+            if block:
+                blocks.append(block)
+    return blocks
+
+
+def _locate(stored: str, lines: list[str], start: int, end: int) -> tuple[int, int] | None:
+    """Where the symbol whose indexed text is ``stored`` is now, or None if it changed.
+
+    Its indexed span still holding every block of the stored text confirms it in place.
+    Otherwise a span of the same length starting where its first block now occurs, if
+    exactly one such span holds every block, is where it moved to.
+    """
+    blocks = _text_blocks(stored)
+    if not blocks:
+        return None
+
+    def holds(a: int, b: int) -> bool:
+        span = "\n".join(lines[a - 1:b])
+        return all(blk in span for blk in blocks)
+
+    if holds(start, end):
+        return start, end
+    first = blocks[0].split("\n", 1)[0]
+    found = [i + 1 for i, line in enumerate(lines) if first in line]
+    moved = [(a, a + end - start) for a in found if holds(a, a + end - start)]
+    return moved[0] if len(moved) == 1 else None
+
+
+@_tool()
+def get_file_outline(file: str) -> str:
+    """
+    List what one file defines: each symbol's kind, signature and line range, nested,
+    with no bodies. Call this instead of Read when you need to know what a file
+    contains or where something is in it, then get_symbol_source for the one symbol
+    you need (or Read just its lines). `file` is a repo-relative path (either slash),
+    an absolute path in the repo, or a unique tail such as 'db.py'. Fails if the file
+    is not indexed; says so if it is indexed but defines no symbols. Lines are the
+    indexed version's, and the outline says when the file has changed since.
+    """
+    print(f"\n[MCP] get_file_outline: '{file}'")
+    db = _db()
+    _require_index(db)
+    path = _indexed_path(db, file)
+    locs = db.get_file_symbol_locations(path)
+    where = _source_label(db)
+
+    out = [f"--- OUTLINE: {path} ({len(locs)} symbol(s)) ---"]
+    if where:
+        out.append(f"(as of {where})")
+    elif not _file_unchanged(db, path):
+        out.append("⚠️ This file has changed on disk since it was indexed; line numbers "
+                   "may be off until the watchdog re-indexes it.")
+    if not locs:
+        out.append("The file is indexed but defines no symbols the parser extracts "
+                   "(e.g. only top-level statements, or a config/descriptor file). "
+                   "Read it if you need its contents.")
+        return "\n".join(out)
+    for loc, depth in zip(locs, _nesting(locs)):
+        sig = _signature(loc["text"], path)
+        if loc["name"] not in sig:
+            sig = f"{loc['name']}  {sig}"
+        out.append(f"{'  ' * depth}L{loc['start_line']}-{loc['end_line']}  {loc['kind']}  {sig}")
+    return "\n".join(out)
+
+
+def _match_symbols(db, symbol: str) -> list[dict]:
+    """Locations of ``symbol``: a bare name, a qualified tail or an FQN."""
+    def norm(fqn: str) -> str:
+        fqn = re.sub(r"(\(.*\)|/\d+)$", "", fqn)        # C++ parameter lists, C# arity
+        return fqn.replace("::", ".")
+
+    q = norm(symbol.strip())
+    name = q.rsplit(".", 1)[-1]
+    seen, hits = set(), []
+    for cand in {name, symbol.strip()}:
+        for loc in db.find_symbol_locations(cand):
+            key = (loc["fqn"], loc["path"], loc["start_line"])
+            if key in seen:
+                continue
+            seen.add(key)
+            f = norm(loc["fqn"])
+            if loc["name"] == symbol.strip() or f == q or f.endswith("." + q):
+                hits.append(loc)
+    return sorted(hits, key=lambda h: (h["path"], h["start_line"], h["fqn"]))
+
+
+@_tool()
+def get_symbol_source(symbol: str, file: str = "") -> str:
+    """
+    Return one function's, method's or class's source instead of Reading its whole
+    file. `symbol` is a name ('login'), a qualified tail ('AuthService.login') or an
+    FQN; `file` optionally narrows it (same forms as get_file_outline). Several matches
+    are listed (FQN, file, lines) for you to call again with `file` or a qualified name.
+    The text is read from the source the index was built from and checked against what
+    was indexed: a symbol that moved comes with its new lines, and one that changed
+    since indexing fails rather than show stale code, so Read the file then.
+    """
+    print(f"\n[MCP] get_symbol_source: symbol='{symbol}' file='{file}'")
+    if not symbol or not symbol.strip():
+        raise ValueError("symbol is required: a name, 'Class.method' or an FQN")
+    db = _db()
+    _require_index(db)
+    hits = _match_symbols(db, symbol)
+    if file:
+        path = _indexed_path(db, file)
+        hits = [h for h in hits if h["path"] == path]
+    if not hits:
+        near = sorted({s.fqn for s in db.search_symbols(symbol.strip().rsplit(".", 1)[-1])})[:8]
+        msg = f"No symbol '{symbol}' in the index" + (f" in {file}" if file else "") + "."
+        if near:
+            msg += " Symbols starting with that name:\n" + "".join(f"  {f}\n" for f in near)
+        raise LookupError(msg)
+    if len(hits) > 1:
+        out = [f"'{symbol}' is ambiguous: {len(hits)} symbols match. Call again with `file` "
+               "or a qualified name (e.g. 'Class.method'):"]
+        out += [f"  {h['fqn']}  [{h['kind']}]  {h['path']}:{h['start_line']}-{h['end_line']}"
+                for h in hits[:30]]
+        if len(hits) > 30:
+            out.append(f"  … {len(hits) - 30} more")
+        return "\n".join(out)
+
+    hit = hits[0]
+    path, start, end = hit["path"], hit["start_line"], hit["end_line"]
+    src, where = _open_source(db)
+    try:
+        text = src.read(path)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(f"{path} could not be read ({exc}); it may have been deleted "
+                           "since it was indexed.") from exc
+    finally:
+        src.close()
+    lines = text.split("\n")
+    unchanged = _file_unchanged(db, path)
+    notes = []
+    if not unchanged:
+        found = _locate(hit["text"], lines, start, end)
+        if found is None:
+            raise RuntimeError(
+                f"{hit['fqn']} has changed since it was indexed: {path} lines {start}-{end} "
+                "no longer hold the indexed code, and it was not found elsewhere in the file. "
+                "Not showing stale text. Read the file (get_file_outline lists the indexed "
+                "lines), or call again once the watchdog has re-indexed it.")
+        if found != (start, end):
+            notes.append(f"Moved since indexing: indexed at lines {start}-{end}, now at "
+                         f"{found[0]}-{found[1]}. Other line numbers in this file may have "
+                         "shifted too.")
+            start, end = found
+        else:
+            notes.append(f"{path} has changed since it was indexed, but this symbol's lines "
+                         "have not.")
+
+    shown_end = min(end, start + _SOURCE_MAX_LINES - 1)
+    out = [f"--- {hit['fqn']}  [{hit['kind']}]  {path}:{start}-{end} ---"]
+    if where:
+        out.append(f"(from {where})")
+    out += notes
+    out += [f"{n:>5}  {lines[n - 1]}" for n in range(start, shown_end + 1) if n <= len(lines)]
+    if shown_end < end:
+        out.append(f"  … {end - shown_end} more line(s) cut; get_file_outline lists its members, "
+                   f"or Read {path} from line {shown_end + 1}.")
+    return "\n".join(out)
+
+
+def _git_run(*args: str) -> str:
+    """``git <args>`` in the repo; its stdout. Raises RuntimeError with git's own message."""
+    import subprocess
+    try:
+        done = subprocess.run(
+            ["git", *args], cwd=os.getcwd(), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, timeout=_GIT_TIMEOUT,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("git is not installed or not on PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"git {args[0]} timed out after {_GIT_TIMEOUT} s") from exc
+    if done.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed: {done.stderr.strip() or f'exit {done.returncode}'}")
+    return done.stdout
+
+
+_UNSAFE_REF_RE = re.compile(r"[\s\x00-\x1f\x7f]")
+
+
+def _check_ref_shape(ref: str) -> str:
+    """``ref`` stripped; refuses an empty, option-like or malformed one before git sees it."""
+    ref = (ref or "").strip()
+    if not ref:
+        raise ValueError("ref is required: a branch, tag or commit such as 'main'")
+    if ref.startswith("-") or _UNSAFE_REF_RE.search(ref) or len(ref) > 256:
+        raise ValueError(f"ref {ref!r} is not a git ref (refs cannot start with '-' or "
+                         "contain whitespace or control characters)")
+    return ref
+
+
+def _verify_ref(ref: str) -> str:
+    """The commit ``ref`` names, after _check_ref_shape."""
+    ref = _check_ref_shape(ref)
+    try:
+        return _git_run("rev-parse", "--verify", "--quiet", "--end-of-options",
+                        f"{ref}^{{commit}}").strip()
+    except RuntimeError as exc:
+        raise ValueError(f"ref {ref!r} does not name a commit in this repository "
+                         "(fetch it first?)") from exc
+
+
+def _diff_hunks(diff: str) -> list[dict]:
+    """Per file of a ``git diff -U0``: its old and new paths, status and new-side changes.
+
+    ``ranges`` are new-side line ranges added or changed; ``points`` are new-side lines
+    after which old lines were only deleted. Header lines are read only before a file's
+    first hunk, so a deleted line that starts with ``--`` is not mistaken for one.
+    """
+    files: list[dict] = []
+    cur: dict | None = None
+    in_header = False
+    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+    for line in diff.split("\n"):
+        if line.startswith("diff --git "):
+            cur = {"old": None, "new": None, "status": "modified", "ranges": [], "points": []}
+            files.append(cur)
+            in_header = True
+            continue
+        if cur is None:
+            continue
+        if in_header and not line.startswith("@@"):
+            if line.startswith("new file mode"):
+                cur["status"] = "added"
+            elif line.startswith("deleted file mode"):
+                cur["status"] = "deleted"
+            elif line.startswith("rename from "):
+                cur["status"], cur["old"] = "renamed", line[len("rename from "):]
+            elif line.startswith("rename to "):
+                cur["new"] = line[len("rename to "):]
+            elif line.startswith("--- "):
+                cur["old"] = None if line[4:] == "/dev/null" else line[4:]
+            elif line.startswith("+++ "):
+                cur["new"] = None if line[4:] == "/dev/null" else line[4:]
+            continue
+        m = hunk_re.match(line)
+        if m:
+            in_header = False
+            start = int(m.group(1))
+            count = int(m.group(2)) if m.group(2) is not None else 1
+            if count:
+                cur["ranges"].append((start, start + count - 1))
+            else:
+                cur["points"].append(start)
+    return files
+
+
+def _touched(locs: list[dict], ranges: list[tuple[int, int]], points: list[int]) -> list[dict]:
+    """The symbols a change falls in: in a symbol's own lines, not only a nested one's.
+
+    A one-line edit in a method reports the method, not also its class. A pure deletion
+    counts only strictly inside a symbol (``start <= after < end``).
+    """
+    hit = []
+    for i, loc in enumerate(locs):
+        s, e = loc["start_line"], loc["end_line"]
+        if not (any(a <= e and b >= s for a, b in ranges) or any(s <= p < e for p in points)):
+            continue
+        kids = [(k["start_line"], k["end_line"]) for j, k in enumerate(locs)
+                if j != i and s <= k["start_line"] and k["end_line"] <= e
+                and (k["start_line"], k["end_line"]) != (s, e)]
+
+        def own(n: int) -> bool:
+            return not any(a <= n <= b for a, b in kids)
+
+        if any(own(n) for a, b in ranges for n in range(max(a, s), min(b, e) + 1)) or \
+                any(s <= p < e and not any(a <= p < b for a, b in kids) for p in points):
+            hit.append(loc)
+    return hit
+
+
+@_tool()
+def changed_symbols(ref: str, blast_radius: bool = False, limit: int = 100) -> str:
+    """
+    List the functions, methods and classes whose lines changed between a git ref and
+    the indexed code. Use it to review a branch or PR ("what did this touch?") instead
+    of reading the diff file by file. `ref` is a branch, tag or commit; the diff starts
+    at its merge base with the indexed code, so 'main' means "since this branch left
+    main". blast_radius=True also lists each changed symbol's resolved callers (and a
+    count of unverified ones) and each changed file's importers. Symbols deleted since
+    `ref` are not in the index; deleted files are listed by name. `limit` caps the
+    symbols listed (0 = all).
+    """
+    print(f"\n[MCP] changed_symbols: ref='{ref}' blast_radius={blast_radius}")
+    _check_ref_shape(ref)
+    db = _db()
+    _require_index(db)
+    try:
+        _git_run("rev-parse", "--show-toplevel")
+    except RuntimeError as exc:
+        raise RuntimeError(f"changed_symbols needs a git repository: {os.getcwd()} is not "
+                           f"inside one ({exc})") from exc
+    base_ref = _verify_ref(ref)
+
+    label, commit = _index_source(db)
+    git_mode = label.startswith("git:")
+    if git_mode and not commit:
+        raise RuntimeError(f"This index reads {label} but records no last_indexed_commit.")
+    try:
+        tip = commit if git_mode else _git_run("rev-parse", "--verify", "HEAD").strip()
+        base = _git_run("merge-base", base_ref, tip).strip() or base_ref
+    except RuntimeError:
+        base = base_ref                         # unrelated histories, or no HEAD yet
+    diff_args = ["-c", "core.quotePath=false", "diff", "-U0", "--no-color", "--no-ext-diff",
+                 "--no-textconv", "--no-prefix", "--relative", "-M", base]
+    if git_mode:
+        diff_args.append(commit)
+    files = _diff_hunks(_git_run(*diff_args, "--"))
+    if not git_mode:
+        # Untracked files count only when indexed: the rest (build output, the index's
+        # own directory when it is not gitignored) is not work under review.
+        for p in _git_run("ls-files", "--others", "--exclude-standard", "-z").split("\0"):
+            if p and db.get_file_record(p) is not None:
+                files.append({"old": None, "new": p, "status": "untracked", "ranges": [], "points": []})
+
+    changed: list[tuple[str, str, list[dict]]] = []      # (path, status, symbols)
+    deleted, unindexed, quiet, behind = [], [], [], []
+    for f in files:
+        if f["status"] == "deleted" or not f["new"]:
+            deleted.append(f["old"])
+            continue
+        path = f["new"]
+        if db.get_file_record(path) is None:
+            unindexed.append(path)
+            continue
+        locs = db.get_file_symbol_locations(path)
+        if f["status"] in ("added", "untracked"):
+            syms = locs
+        else:
+            syms = _touched(locs, f["ranges"], f["points"])
+        if not git_mode and not _file_unchanged(db, path):
+            behind.append(path)
+        if syms:
+            changed.append((path, f["status"], syms))
+        else:
+            quiet.append(path)
+
+    side = f"indexed commit {commit[:10]}" if git_mode else "the working tree"
+    total = sum(len(s) for _, _, s in changed)
+    out = [f"--- CHANGED SYMBOLS: {ref} → {side} (merge base {base[:10]}) ---",
+           f"{total} symbol(s) in {len(changed)} file(s). Lines are the indexed code's."]
+    if behind:
+        out.append(f"⚠️ {len(behind)} file(s) changed on disk since they were indexed; their "
+                   "ranges may be off until the watchdog re-indexes them: " + ", ".join(behind))
+
+    texts = _texts_by_file() if blast_radius else {}
+    changed_fqns = {loc["fqn"] for _, _, syms in changed for loc in syms}
+    shown = blasted = 0
+    for path, status, syms in changed:
+        if limit and shown >= limit:
+            break
+        out.append(f"\n{path} ({status})")
+        if blast_radius:
+            importers, _ = _import_relations(path, texts)
+            if importers:
+                names = sorted(importers)
+                out.append(f"  imported by {len(names)}: " + ", ".join(names[:10])
+                           + (" …" if len(names) > 10 else ""))
+        for loc in syms:
+            if limit and shown >= limit:
+                break
+            shown += 1
+            out.append(f"  L{loc['start_line']}-{loc['end_line']}  {loc['kind']}  {loc['fqn']}")
+            if blast_radius and blasted < _BLAST_SYMBOLS:
+                blasted += 1
+                verified, candidate = _caller_evidence(loc["name"], path)
+                callers = [n.fqn + (" (also changed)" if n.fqn in changed_fqns else "")
+                           for n in verified if n.fqn != loc["fqn"]]
+                line = "      callers: " + (", ".join(callers[:10]) if callers else "none resolved")
+                if len(callers) > 10:
+                    line += f" … {len(callers) - 10} more"
+                if candidate:
+                    line += f"; {len(candidate)} unverified (verify_candidate_edges)"
+                out.append(line)
+    if shown < total:
+        out.append(f"\n… {total - shown} more symbol(s); pass limit=0 to list all.")
+    if blast_radius and blasted < total:
+        out.append(f"(callers looked up for the first {blasted} symbol(s) only)")
+    if quiet:
+        out.append("\nChanged, but no symbol's own lines: " + ", ".join(quiet))
+    if deleted:
+        out.append("Deleted since the merge base (their symbols are not in the index): "
+                   + ", ".join(p for p in deleted if p))
+    if unindexed:
+        out.append(f"Changed but not indexed ({len(unindexed)}): " + ", ".join(unindexed[:20])
+                   + (" …" if len(unindexed) > 20 else ""))
+    return "\n".join(out)
+
+
 def _snapshot_index(index_dir: str, db_path: str) -> str:
     """Copy graph.db and every .faiss file in `index_dir` to a backup directory.
 
