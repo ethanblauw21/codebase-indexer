@@ -63,6 +63,11 @@ def _server_instructions(repo_path: str | None = None) -> str:
                   file=sys.stderr, flush=True)
     built = (f"commit {commit[:10]}, last verified {verified}" if commit
              else "no finished build yet")
+    # ADR-049 (B-021 point 3): when to reach for the index instead of Grep.
+    routing = ("For how the rest of the codebase works, where a symbol is used, what writes a "
+               "field, or blast radius, call `semantic_code_search`, `trace_data_flow`, "
+               "`what_writes` or `analyze_blast_radius` before Grep; use Grep for exact "
+               "strings and for the files your branch changed. ")
     if ref is not None:
         # ADR-042 §5: the index is a commit, read from git, not any folder.
         from index_location import ref_display
@@ -71,8 +76,8 @@ def _server_instructions(repo_path: str | None = None) -> str:
             "folder's working tree, and not your branch. For any file your branch changed "
             f"(git diff --name-only {commit[:10] if commit else '<that commit>'}...HEAD, plus "
             "uncommitted edits), Read the file itself: index hits for it show the indexed "
-            "version, and line numbers may be off. Use the index for how the rest of the "
-            f"codebase works. It follows {ref} on its own when that ref moves; do not call "
+            f"version, and line numbers may be off. {routing}"
+            f"It follows {ref} on its own when that ref moves; do not call "
             "`reindex` to pick up branch work. `index_status` reports freshness."
         )
     return (
@@ -80,7 +85,7 @@ def _server_instructions(repo_path: str | None = None) -> str:
         "It does not see edits in other branches or worktrees. For any file your branch "
         "changed (git diff --name-only <that commit>...HEAD, plus uncommitted edits), Read "
         "the file itself: index hits for it show the indexed version, and line numbers may "
-        "be off. Use the index for how the rest of the codebase works. "
+        f"be off. {routing}"
         "Never call `reindex` from a git worktree made for separate or parallel work; it "
         "refuses there, and one server per index keeps it current on its own. "
         "`index_status` reports freshness."
@@ -1287,16 +1292,11 @@ def investigate_architecture(target_concept: str, deep: bool = False) -> str:
     """
     PREFERRED ENTRY POINT for all architectural investigations.
     Replaces raw `semantic_code_search` when you want a complete picture of how a
-    concept, feature, data type, or function flows through the system.
+    concept, feature, data type, or function flows through the system: semantic
+    search plus one hop of the call graph around the best hits.
 
-    Internally runs the full Retrieve-Traverse-Rerank pipeline:
-      1. Semantic Search  — FAISS tier-1 index, top-50 by cosine similarity.
-      2. Graph Expansion  — one-hop call-graph traversal via SQLite for top-5 seeds.
-      3. Ranking — Reciprocal Rank Fusion; a reranker model only when enabled in indexer.toml.
-
-    When deep=True, runs up to 3 iterative retrieval rounds with explored-node memory
-    and query enrichment from prior evidence, stopping early when the score plateau
-    indicates diminishing returns.
+    deep=True runs up to 3 retrieval rounds, each enriched by the last; slower, for
+    when one round comes back thin.
 
     Returns a Markdown report with:
       - <evidence> XML tags (source, lines, fqn, type) for each retrieved chunk, showing
@@ -1746,21 +1746,16 @@ def index_status(since: str = "1d", limit: int = 20) -> str:
     """Report index freshness and which files changed recently (ADR-025 §6).
 
     Use this to answer "what changed in this codebase lately?" and "is the index
-    current with the code?" — e.g. before trusting the other tools on recently
-    edited files, or to feed a downstream multi-project context hub. Output is
-    agent-parseable: absolute ISO-8601 UTC timestamps and full repo-relative
-    paths, never prose you have to re-parse.
+    current with the code?", e.g. before trusting the other tools on recently
+    edited files. Timestamps are ISO-8601 UTC; paths are repo-relative.
 
-    `since` accepts a relative window ("1d", "12h", "30m", "7d") or an absolute
-    ISO-8601 timestamp ("2026-07-15T00:00:00Z"). Files whose CONTENT changed after
-    that point are listed — content_changed_at, not index-write time — so a file
-    re-indexed today but unchanged in a week does not show up. Files with no git
-    history (untracked / vendored) carry a NULL stamp and are correctly excluded.
-    `limit` caps the list at its newest entries (default 20; 0 lists all); the
-    count shown is always the full one.
+    `since` is a relative window ("1d", "12h", "30m") or an ISO-8601 timestamp.
+    Lists files whose CONTENT changed after it (not when they were re-indexed);
+    files with no git history are left out. `limit` caps the list at its newest
+    entries (default 20; 0 lists all); the count shown is always the full one.
 
-    Reports: last_verified_at, last_indexed_commit vs current HEAD (with the list
-    of diverged files when stale), files_total, and the recent-change list.
+    Reports: last_verified_at, last_indexed_commit vs current HEAD (with the files
+    that diverged when stale), files_total, and the recent-change list.
     """
     import os
     import subprocess
@@ -2079,32 +2074,23 @@ def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
 @_tool()
 def what_writes(tag: str, include_readers: bool = False) -> str:
     """
-    Given a PLC tag, reports EXACTLY which routines write it and at which rungs.
+    Given a PLC tag, reports EXACTLY which routines write it and at which rungs:
+    "an alarm will not clear, so what sets that bit?". Go one hop at a time: the
+    next question is `what_writes` on whichever condition looks wrong.
 
-    This is the question a controls engineer asks first on a support call: an alarm
-    will not clear, a valve will not open, a sequence will not advance — so what
-    sets that bit? Answer it one hop at a time and let the human prune: the next
-    question is `what_writes` on whichever condition looks wrong.
-
-    **This is a lookup, not a search.** It reads resolved `writes` edges straight
-    out of the graph — no embedding, no ranking, no reranker. Every result is a
-    real write position the extractor resolved, and the list is complete. Do not
-    reach for semantic_code_search or trace_data_flow for this question; both rank,
-    and a ranked answer to "what writes X" can silently omit a writer.
+    **A lookup, not a search:** it reads resolved `writes` edges from the graph, so
+    the list is complete. Do not use semantic_code_search or trace_data_flow for
+    this; both rank, and a ranked answer can silently omit a writer.
 
     Inputs:
-      tag             — the tag as an engineer types it (e.g. 'Valve_Open'), or a
-                        scoped FQN ('Filler.Step') for a program-scoped tag
-      include_readers — also list where the tag is READ. Off by default because
-                        widely-read tags produce long lists; turn it on when you
-                        are asking "what uses this" rather than "what sets this"
+      tag             — as an engineer types it ('Valve_Open'), or a scoped FQN
+                        ('Filler.Step') for a program-scoped tag
+      include_readers — also list where the tag is READ ("what uses this" rather
+                        than "what sets this"); off by default, as the lists get long
 
-    Output: each writing routine with its rung numbers, plus alias/module-I/O
-    mapping when the tag is an alias.
-
-    What this CANNOT tell you: which of several conditions is *currently* true.
-    That needs a live connection to the controller. This enumerates the candidates
-    — which is the half you can do from the phone without going online.
+    Output: each writing routine with its rung numbers, plus the alias/module-I/O
+    mapping when the tag is an alias. It cannot tell which condition is *currently*
+    true; that needs a live connection to the controller.
     """
     print(f"\n[MCP] what_writes: tag='{tag}' readers={include_readers}")
     db = _db()
