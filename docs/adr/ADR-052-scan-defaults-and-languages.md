@@ -46,8 +46,10 @@ defaults were filed separately:
   unresolved. The one wrong binding is a function name defined in **two** `.gs` files: Apps Script
   runs whichever file loads last, everywhere, while the resolver's *same-file* step binds each
   caller to its own file's copy. That is a duplicate definition — almost always a bug in the script
-  — and fixing it needs `call_resolver.py` to know a file's language. It is recorded as a known gap
-  (an `xfail(strict=True)` test asserting the correct answer), not fixed here.
+  — and fixing it needs `call_resolver.py` to know a file's language. **Fixed at @edb's request
+  (open question 3):** a bare call from a `.gs` file with several candidates skips the same-file
+  and import-scoped steps and stays unresolved. A member call (`this.total()`) keeps the
+  same-file step, and `.js` callers are unchanged. The strict xfail is now a passing test.
 
 ### 2. `obj` everywhere; `bin` only under MSBuild's configuration folders (B-063 item 1)
 
@@ -114,6 +116,17 @@ Rules kept narrow on purpose:
   library (`google/auth/credentials.py`).
 - No content check: the scan gate sees only paths (the watchdog never opens the file). Content is
   the output-redaction pass's job (ADR-049).
+
+### 5. `!` drops one default from `dirs`, `root_dirs` and `extensions` (added at @edb's request)
+
+`extra_dirs = ["!obj"]` removes that one built-in default and keeps the rest, so a repo that wants
+`obj/` indexed no longer has to replace the whole list (which freezes every later default).
+- Works in `extra_dirs`, `extra_root_dirs` and `extra_extensions`, alongside additions in the same
+  list. Matching is case-folded, and a multi-segment default (`!bin/Debug`) can be dropped too.
+- A `!name` that matches no default raises: it would remove nothing, and a typo would keep
+  indexing what the user meant to drop.
+- A `!` in a bare key (`dirs = ["!obj"]`) raises: the bare key already replaces the defaults.
+- `files` keeps its own `!` meaning (§4): a pattern that re-includes matching names.
 
 ## Consequences
 
@@ -209,13 +222,21 @@ Rules kept narrow on purpose:
 
 **Open questions for @edb:**
 
-1. **Removing one default.** `files` has `!` exceptions, but `dirs` and `extensions` still need a
-   full replacement to drop a single default (e.g. a repo that wants `obj/` indexed). Worth a
-   `!` form for those knobs too?
-2. **`.xaml`.** Left opt-in (§3). If the B-063 build on AcadeDesignTools shows XAML answers
-   questions the code-behind can't, flip it.
-3. **Apps Script duplicates.** Is the duplicate-definition wrong binding worth a language-aware
-   rule in `call_resolver.py` (no same-file step for `.gs`), or is it fine as a known gap?
-4. **gcloud key-name pattern.** `*-<12 hex>.json` also matches any hyphenated name ending in 12 hex
-   digits (a content-hashed build manifest). Acceptable loss, or drop it and rely on the other
-   service-account patterns?
+Answered by @edb, 2026-10-20:
+
+1. ~~**Removing one default.**~~ Yes: built, Decision §5.
+2. ~~**`.xaml`.**~~ Stays opt-in until the B-063 build on AcadeDesignTools shows XAML answers
+   questions the code-behind can't.
+3. ~~**Apps Script duplicates.**~~ Yes, a rule: built, Decision §1.
+4. ~~**gcloud key-name pattern.**~~ Keep `*-<12 hex>.json`; losing a content-hashed manifest is
+   acceptable.
+
+- [x] Follow-up after @edb answered the open questions (2026-10-20, local, not the cloud session):
+  - `call_resolver.py`: the Apps Script duplicate rule (§1). Three tests replace the strict xfail:
+    the `.gs` duplicate stays unresolved, a `.js` duplicate still binds to its own file, and a `.gs`
+    member call keeps the same-file step.
+  - `scan_policy.py`: `!` removal in `extra_dirs`/`extra_root_dirs`/`extra_extensions` (§5), six
+    tests.
+  - Gates on Windows, Python 3.14.4, CPU, tokenizer cached (`HF_HUB_OFFLINE=1`): `pytest` 782
+    passed, 1 skipped, 0 failed; flake8 on `src/` clean; `conformance_eval.py` and
+    `resolution_eval.py --check-baseline` exit 0.

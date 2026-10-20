@@ -136,7 +136,31 @@ def _as_str_list(value: object, key: str) -> list[str]:
     return list(value)
 
 
-def _resolve(block: dict, key: str, defaults: frozenset[str]) -> frozenset[str]:
+def _extend(defaults: frozenset[str], values: list[str], key: str) -> frozenset[str]:
+    """``extra_*``: add each entry to the defaults, and remove each ``!name`` from them.
+
+    ``!`` drops one built-in default without a bare-key replacement, which would freeze
+    every later default (ADR-052). A ``!name`` that matches no default raises: it removes
+    nothing, and a typo there would otherwise keep indexing what the user meant to drop.
+    Matching is folded like every directory comparison.
+    """
+    removed: set[str] = set()
+    for value in values:
+        if not value.startswith("!"):
+            continue
+        hits = {d for d in defaults if _fold(d) == _fold(value[1:])}
+        if not hits:
+            raise ValueError(
+                f"[ignore].{key}: `{value}` names no built-in default, so it removes "
+                f"nothing. `!` drops a default; to add an entry, leave the `!` off."
+            )
+        removed |= hits
+    added = {v for v in values if not v.startswith("!")}
+    return (frozenset(defaults) - removed) | frozenset(added)
+
+
+def _resolve(block: dict, key: str, defaults: frozenset[str], *,
+             removable: bool = True) -> frozenset[str]:
     """Apply the ADR-026 §1 precedence table to one knob.
 
     ============  =============  =========================================
@@ -151,6 +175,10 @@ def _resolve(block: dict, key: str, defaults: frozenset[str]) -> frozenset[str]:
     An explicitly empty list is honored as written and is *not* the same as an
     absent key: ``extra_dirs = []`` is a no-op and ``dirs = []`` means "exclude
     nothing" — legal, destructive, and exactly what someone asking for it asked for.
+
+    With ``removable`` (every knob but ``files``, whose ``!`` is a pattern re-include), a
+    ``!name`` entry in ``extra_*`` removes that one default (:func:`_extend`). In the bare
+    key it raises: the bare key already replaces the defaults, so there is nothing to remove.
 
     Both keys set is an error rather than a silent precedence because there is no
     reading of "extend *and* replace" a user could have meant, and guessing is how
@@ -168,9 +196,19 @@ def _resolve(block: dict, key: str, defaults: frozenset[str]) -> frozenset[str]:
         )
 
     if bare is not None:
-        return frozenset(_as_str_list(bare, key))
+        values = _as_str_list(bare, key)
+        negated = sorted(v for v in values if v.startswith("!"))
+        if removable and negated:
+            raise ValueError(
+                f"[ignore].{key} replaces the defaults, so {negated} has nothing to "
+                f"remove. Use `{extra_key}` to drop one default and keep the rest."
+            )
+        return frozenset(values)
     if extra is not None:
-        return frozenset(defaults) | frozenset(_as_str_list(extra, extra_key))
+        values = _as_str_list(extra, extra_key)
+        if removable:
+            return _extend(defaults, values, extra_key)
+        return frozenset(defaults) | frozenset(values)
     return frozenset(defaults)
 
 
@@ -198,7 +236,7 @@ def _resolve_files(block: dict, defaults: frozenset[str]) -> frozenset[str]:
     A pattern with a ``/`` raises: these match the file's *name*, so
     ``config/secret.json`` would match nothing and exclude nothing, silently.
     """
-    resolved = _resolve(block, "files", defaults)
+    resolved = _resolve(block, "files", defaults, removable=False)
     bad = sorted(p for p in resolved if "/" in p or "\\" in p)
     if bad:
         raise ValueError(

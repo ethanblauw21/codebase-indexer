@@ -97,7 +97,7 @@ It is a **leaf module** — `os`, `dataclasses`, `functools`, `fnmatch`, `config
 
 Two predicates, and the difference matters: `is_indexable()` is source that gets chunked and embedded; `is_scannable()` is that plus the `.csproj`/`.sln`/`compile_commands.json` descriptors, which are parsed for edges only. The watchdog uses the second — using the first meant editing a `.csproj` never triggered a reindex.
 
-Configuration is the `[ignore]` block. `extra_dirs` / `extra_root_dirs` / `extra_extensions` / `extra_files` **add** to the defaults; the bare `dirs` / `root_dirs` / `extensions` / `files` keys **replace** them; setting both spellings of one knob raises. Defaults live in `scan_policy.py` and are deliberately **not** duplicated into the shipped `indexer.toml` — a bare key there would freeze this repo's gate and silently drop every future default.
+Configuration is the `[ignore]` block. `extra_dirs` / `extra_root_dirs` / `extra_extensions` / `extra_files` **add** to the defaults; the bare `dirs` / `root_dirs` / `extensions` / `files` keys **replace** them; setting both spellings of one knob raises. A `!name` entry in `extra_dirs` / `extra_root_dirs` / `extra_extensions` drops that one default and keeps the rest (`!` in `extra_files` re-includes matching names instead). Defaults live in `scan_policy.py` and are deliberately **not** duplicated into the shipped `indexer.toml` — a bare key there would freeze this repo's gate and silently drop every future default.
 
 What the defaults decide, and why (ADR-052):
 
