@@ -156,6 +156,16 @@ developer is doing. Summarization runs in one of two places:
   executor built with the lowering initializer, a real worker on Linux reporting nice 10, and the
   model host's spawn and summarizer load leaving priority alone on both OS branches.
 - [x] Stretch: investigated and not built (Decision §4)
+- [x] MCP Inspector 2.8.0, run from an empty temp directory: this branch changes no tool, so only
+  `tools/list --strict` was run to show the server still starts with `blas_threads` as its first
+  import. It exits 0 with 14 tools, and the JSON is identical to `871b55c`'s listing.
+- [x] Gates, 2026-10-20, on the Linux stack above: flake8 clean; 729 tests collected (704 on
+  `871b55c`); conformance, resolution and L5X fixture-teeth baselines hold. `pytest` gives 679 passed,
+  48 failed, 2 skipped, against 654 / 48 / 2 on `871b55c`. The 48 failures are the same tests on
+  both. The container cannot reach huggingface.co, so these tests cannot load the `BAAI/bge-code-v1`
+  tokenizer: 31 fail on that `OSError`, and the rest fail on assertions downstream of it. The run used
+  `HF_HUB_OFFLINE=1`; without it, each of those tests waits out download retries, and the suite did
+  not finish in 30 minutes.
 
 **Notes:**
 
