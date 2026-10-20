@@ -166,7 +166,7 @@ empty index.
 - [x] `trace_data_flow` reads the rules, sweeps for definitions and producers
 - [x] Both tools raise when there is no index (`_require_built_index`)
 - [x] Tests: `tests/test_graph_tools_communities.py` (7), `tests/test_graph_tools_data_flow.py`
-  (12), one existing test updated
+  (13), one existing test updated
 - [x] `src/CLAUDE.md` paragraphs, MCP Inspector run
 
 **Notes:**

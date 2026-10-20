@@ -282,6 +282,12 @@ def test_csharp_ef_and_sql_writers_and_type_definitions(monkeypatch, tmp_path):
     assert "OrderRepo.Get" in b["CONSUMERS"]
 
 
+def test_an_empty_name_is_refused(monkeypatch, tmp_path):
+    _wire(monkeypatch, tmp_path, PY_CHUNKS)
+    with pytest.raises(ValueError):
+        M.trace_data_flow("  ")
+
+
 # ------------------------------------------------------------- no index: isError
 
 def _call(tool: str, args: dict):

@@ -877,12 +877,12 @@ def _rule_match(patterns: list, text: str):
     return None
 
 
-def _rule_entry(layer: str, file_path: str, doc: dict, match) -> str:
+def _rule_entry(layer: str, file_path: str, doc: dict, match, tag: str = "") -> str:
     """A trace entry whose snippet is centred on the rule's match, not the chunk's start."""
     text = doc['text']
     start = max(0, match.start() - 40)
     snippet = text[start:start + 140].replace('\n', ' ').strip() + "..."
-    return f"- [{layer}] {file_path}\n  [Scope]: {get_clean_scope(doc)}\n  [Snippet]: {snippet}\n\n"
+    return f"- [{layer}] {file_path}\n  [Scope]: {get_clean_scope(doc)}\n{tag}  [Snippet]: {snippet}\n\n"
 
 
 @_tool()
@@ -901,6 +901,8 @@ def trace_data_flow(target_symbol: str) -> str:
     setValue(s)/appendRow/setProperty, EF Core. Rule hits are searched across the whole
     index; the other buckets come from ranked search. Exploratory: verify before acting.
     """
+    if not target_symbol.strip():
+        raise ValueError("trace_data_flow: target_symbol is empty; pass the data's name.")
     _require_built_index("trace_data_flow")
     print(f"\n[MCP] Running v11.0 trace for '{target_symbol}'...")
     query_text = f"Definition, usage, and fetching of {target_symbol} get{target_symbol} fetch{target_symbol}"
@@ -1002,7 +1004,8 @@ def trace_data_flow(target_symbol: str) -> str:
         snippet = doc_text[:140].replace('\n', ' ').strip() + "..."
         entry = f"- [{layer}] {file_path}\n  [Scope]: {clean_scope}\n{violation_tag}  [Snippet]: {snippet}\n\n"
         if rule_hit is not None:
-            entry = _rule_entry(layer, file_path, {'scope': c.scope, 'text': c.text, 'file': c.file}, rule_hit)
+            entry = _rule_entry(layer, file_path, {'scope': c.scope, 'text': c.text, 'file': c.file},
+                                rule_hit, violation_tag)
 
         seen_files_any_bucket.add(file_path)
 
