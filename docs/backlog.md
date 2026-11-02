@@ -2290,7 +2290,7 @@ them. GanttWebApp writes `audit_events` through `recordAudit(...)`, not a direct
 
 **Want:** a `[data_flow]` block in `indexer.toml` that adds to the adapter rules, using the same
 shape (`definition`, `producer`, `file_marker`, with `{name}` for the traced name), for example
-`producer = ["recordAudit\("]`. It adds rules; it never replaces the built-in ones.
+`producer = ['recordAudit\(']` (a TOML literal string, so the backslash stays). It adds rules; it never replaces the built-in ones.
 
 **Build when** a session actually traces something like `audit_events` and misses the writer.
 @edb chose not to build it inside ADR-053.
