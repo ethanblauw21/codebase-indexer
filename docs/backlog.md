@@ -101,6 +101,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-065](#b-065) | Benchmark the tier groupings {1,2,3}, {1,2} and {1} on build time AND retrieval accuracy, to find the best speed-to-accuracy trade | @edb, 2026-10-15 | M | raw |
 | [B-066](#b-066) | Sessions working on branches skip the index on purpose, because it covers only the base branch | cross-session survey, 2026-11-02 | M–L | raw |
 | [B-067](#b-067) | Nothing records which tools are called, so usage can only be surveyed from agents' memory | cross-session survey, 2026-11-02 | S | raw |
+| [B-068](#b-068) | A git-mode index on an alias ref goes stale without warning when the alias's branch is retired | cross-session survey, 2026-11-02 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2196,12 +2197,41 @@ The index earns its place on questions about behaviour, and no session asked one
    at query time. Costs one incremental build per branch; the summary cache keyed by text hash keeps
    it cheap.
 
+**How the two live repos branch** (asked of each session the same day; claims checked against git,
+not fetched):
+
+| | InventoryApp-V2 | GanttWebApp |
+|---|---|---|
+| Flow | feature → `next` → `main` (its ADR-022); `next` is reset to `main` after each release | two separate lines: `integration/staging-<date>` (new one each cycle) and `master`; staging is never promoted to master as a whole |
+| Prod deploys from | `main`, automatically after green CI | `master` or `release/<date>`, by hand |
+| Staging deploys from | usually `next`, by hand | a local, unpushed `deploy/staging-<date>` branch |
+| Merges | squash into `next`/`flowchart`; release PRs rebase-merged | merge commits, features `--no-ff` |
+| Long-lived branches | `flowchart`, 60 commits ahead of `main`, with its own PRs | the staging line, 182 ahead of `master`; `master` has 59 commits staging lacks (hotfixes, mostly rebuilt on staging by cherry-pick) |
+| Worktrees | 10 × `../wt-*` | 18 × `../GanttWebApp-*` |
+| Index today | `origin/main` | `refs/code-index/target` → `origin/integration/staging-2026-10-01` |
+| Session wants | `main`, plus `flowchart` | staging |
+
+What that means here:
+
+- **Both base indexes are right.** Neither session wants a different default.
+- **Only one second index is wanted: V2's `flowchart`.** Git mode takes one ref per index, so it
+  needs another index and a rule for which one a session gets (a worktree branched from
+  `flowchart` uses it; everything else uses `main`). Gantt's alias ref may be reusable for this.
+- **Short-lived branches need only option 1.** Both sessions `Read` the files they changed and don't
+  want those branches indexed, so option 2 can wait.
+- **Never index a rewritten or local ref:** V2's `next` (reset after every release, so each
+  release would look like a large change) or Gantt's `deploy/staging-*` (local, unpushed, rebuilt
+  each deploy).
+- **Optional:** a `master` index for Gantt, for hotfix-only and release-branch files. Small gap,
+  since hotfixes are rebuilt on staging; wait until a session misses something.
+- The staging alias has its own trap: [B-068](#b-068).
+
 **Done when:** a re-run of the same survey, with sessions on branches, finds them calling the index
 rather than routing around it. The 2026-11-02 servers ran pre-ADR-049 code, but no reply blamed
 anything that changed since.
 
 **Related:** B-052, [B-020](#b-020) (diff-scoped tools), ADR-042, ADR-050 (`changed_symbols`,
-unmerged), B-067.
+unmerged), B-067, B-068.
 
 ### B-067 — Nothing records which tools are called, so usage can only be surveyed from agents' memory
 
@@ -2221,3 +2251,29 @@ results, but a query can carry pasted code or a secret. Run it through ADR-049's
 its length and a hash, or leave it out.
 
 **Related:** B-066, ADR-049 (redaction).
+
+### B-068 — A git-mode index on an alias ref goes stale without warning when the alias's branch is retired
+
+**Source:** cross-session survey, 2026-11-02 · **Status:** raw · **Size:** S
+
+GanttWebApp's index reads `git:refs/code-index/target`, a symbolic ref set by hand, as the comment
+in its `indexer.toml` says:
+`git symbolic-ref refs/code-index/target refs/remotes/origin/integration/staging-<date>`.
+Today it points to `integration/staging-2026-10-01`, and ordinary fetches move it forward.
+
+A new staging integration branch is cut each cycle. When that happens, the old branch stops moving,
+the alias keeps pointing at it, and the index stays current with a branch nobody works on.
+`index_status` reports a finished run on the alias, so nothing looks wrong. Sessions would then
+answer from last cycle's code until someone remembers to repoint the alias.
+
+**Want:** `index_status` (and the server's instructions line) warns when either:
+- the alias's target hasn't moved in N days while the remote has newer commits elsewhere, or
+- a newer branch matching a configured pattern exists, for example
+  `[index] follow = "origin/integration/staging-*"`. The pattern could also replace the hand-set alias
+  entirely, with the newest match being followed.
+
+**Watch for:** following a pattern automatically switches to a new branch with a large diff, so the
+first run after a cycle cut re-processes everything the cycles differ by. Warn first; auto-follow only
+if @edb wants it.
+
+**Related:** [B-066](#b-066), ADR-042.
