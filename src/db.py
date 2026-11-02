@@ -47,16 +47,35 @@ from ast_chunker import Chunk, Edge, Reference, Symbol, SymbolType
 # a 57-file GanttWebApp update, 2026-09-29). The summary never depends on them.
 _LINES_HEADER_RE = re.compile(r"\nLines: \d+-\d+\Z")
 _CODE_MARKER = "\nCode:\n"
-SUMMARY_KEY_VERSION = "no-lines"
+# ADR-051 (B-048): a slice's header ends with `Scope: <parent> (Part i/N)`. A window
+# added or dropped anywhere in the file changes N in every slice of it, and keying on
+# N re-summarized every slice whose code had not moved.
+_PART_HEADER_RE = re.compile(r"(\nScope: [^\n]*) \(Part \d+/\d+\)\Z")
+SUMMARY_KEY_VERSION = "no-lines-no-part"
 
 
-def summary_cache_key(text: str) -> str:
-    """The `chunk_summaries` key for a chunk's text: its MD5 with the header's
-    `Lines: a-b` left out. Text without that header (tier 2/3) keys as before."""
+def summary_input(text: str) -> str:
+    """The text the summarizer is sent for a chunk: a slice header's `(Part i/N)`
+    becomes `(Part)`, so a cached summary cannot quote a position that has since
+    changed (ADR-051 §3). Any other text is returned as is."""
+    head, marker, body = text.partition(_CODE_MARKER)
+    if not marker:
+        return text
+    return _PART_HEADER_RE.sub(r"\1 (Part)", head, count=1) + marker + body
+
+
+def _md5_without_lines(text: str) -> str:
     head, marker, body = text.partition(_CODE_MARKER)
     if marker:
         head = _LINES_HEADER_RE.sub("", head, count=1)
     return hashlib.md5((head + marker + body).encode()).hexdigest()
+
+
+def summary_cache_key(text: str) -> str:
+    """The `chunk_summaries` key for a chunk's text: the MD5 of `summary_input(text)`
+    with the header's `Lines: a-b` left out (ADR-045). Text with neither header keys
+    as its plain MD5."""
+    return _md5_without_lines(summary_input(text))
 
 # ---------------------------------------------------------------------------
 # Return type for graph queries
@@ -199,8 +218,9 @@ CREATE INDEX IF NOT EXISTS idx_chunks_tags     ON chunks(tags) WHERE tags != '';
 
 -- -------------------------------------------------------------------------
 -- chunk_summaries — LLM extraction cache keyed by summary_cache_key(chunk_text): MD5 of
--- the text without its `Lines:` header (ADR-045), so a symbol that only moved keeps its
--- summary. A rename re-summarizes tier 1, whose header names the file.
+-- the text without its `Lines:` header (ADR-045) and with a slice's `(Part i/N)` as
+-- `(Part)` (ADR-051), so a symbol that only moved, or a slice whose file gained or lost a
+-- window, keeps its summary. A rename re-summarizes tier 1, whose header names the file.
 -- -------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS chunk_summaries (
     text_hash  TEXT PRIMARY KEY,
@@ -521,20 +541,24 @@ class CodeDB:
         )
 
     def _migrate_summary_keys(self) -> None:
-        """ADR-045: copy each cached summary to its line-free key, once per database.
+        """ADR-045, ADR-051 §4: copy each cached summary to its current key, once per
+        database.
 
-        The old key is MD5 of the chunk text as stored in `chunks`, so every indexed
-        chunk's summary can be re-keyed without the model. Old rows stay: an older
-        indexer on the same database keeps finding them, and they cost a few KB.
+        Every older key is a function of the chunk text as stored in `chunks`: its
+        plain MD5 before ADR-045, its MD5 without `Lines:` before ADR-051. So every
+        indexed chunk's summary can be re-keyed without the model, from whichever key
+        it has. Old rows stay: an older indexer on the same database keeps finding
+        them, and they cost a few KB.
         """
         if self.meta_get("summary_key") == SUMMARY_KEY_VERSION:
             return
         pairs = []
         for (text,) in self._conn.execute("SELECT text FROM chunks"):
             new = summary_cache_key(text)
-            old = hashlib.md5(text.encode()).hexdigest()
-            if new != old:
-                pairs.append((new, old))
+            # The newer old key first: INSERT OR IGNORE keeps the first copy.
+            for old in dict.fromkeys((_md5_without_lines(text), hashlib.md5(text.encode()).hexdigest())):
+                if old != new:
+                    pairs.append((new, old))
         with self._tx() as cur:
             cur.executemany(
                 "INSERT OR IGNORE INTO chunk_summaries(text_hash, summary, created_at) "

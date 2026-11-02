@@ -13,7 +13,7 @@ a *shared accessor* would not have been enough — that synchronizes values, not
 behaviour. Both consumers now call the same predicate.
 
 **Leaf placement is load-bearing, not cosmetic.** This module imports only ``os``,
-``dataclasses`` and ``config``. A policy helper living in ``incremental_indexer`` and
+``dataclasses``, ``fnmatch`` and ``config``. A policy helper living in ``incremental_indexer`` and
 imported by ``config`` deadlocks at import time, and would surface only through the
 server's function-local import path — the hardest possible place to see it.
 
@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from functools import cached_property
 
 from config import find_config_path, index_dir_setting, load_indexer_config
@@ -55,6 +56,13 @@ DEFAULT_IGNORE_DIRS: frozenset[str] = frozenset({
     # Editor, tooling and infrastructure state
     ".continue", ".claude", ".vs", ".vscode",
     "Modelfiles", ".github", ".firebase", ".idx", "genkit",
+
+    # .NET build output (ADR-052 §2, B-063). `obj` is MSBuild's intermediate tree —
+    # 38% of AcadeDesignTools' `.cs` files were generated `obj/` output. Bare `bin` is
+    # NOT here: `bin/*.py` and `bin/*.js` are real scripts in Python and npm projects.
+    # MSBuild writes `bin/<Configuration>/` or `bin/<Platform>/<Configuration>/`, so the
+    # multi-segment entries below match only that (consecutive directory names, any depth).
+    "obj", "bin/Debug", "bin/Release", "bin/x64", "bin/x86",
 })
 
 DEFAULT_IGNORE_ROOT_DIRS: frozenset[str] = frozenset({"functions"})
@@ -65,8 +73,23 @@ DEFAULT_IGNORE_ROOT_DIRS: frozenset[str] = frozenset({"functions"})
 # statement about code that never runs.
 DEFAULT_INDEXABLE_EXTS: frozenset[str] = frozenset({
     ".py", ".ts", ".tsx", ".js", ".jsx",     # Tier-A: JS/TS/Python
+    ".gs",                                    # Apps Script: the JS adapter (ADR-052 §1)
     ".cs",                                    # Tier-A: C#
     ".cpp", ".cc", ".cxx", ".h", ".hpp",      # Tier-A: C++ (.h routed to the C++ adapter)
+    ".cshtml", ".razor",                      # Razor/Blazor: text only, no adapter (ADR-052 §3)
+})
+
+# File-name patterns never scanned, whatever the extension knob says (ADR-052 §4, B-018):
+# files that typically hold credentials. `fnmatch` over the case-folded file name; a `!`
+# pattern re-includes. Narrow on purpose — `*key*.json` would take `keyboard.json`, and
+# `*credentials*` without `.json` would take `credentials.py`, which is ordinary source.
+DEFAULT_IGNORE_FILES: frozenset[str] = frozenset({
+    ".env", ".env.*", "!.env.example", "!.env.sample", "!.env.template",
+    "*credentials*.json", "client_secret*.json",
+    "*service[-_]account*.json", "serviceaccount*.json", "*firebase-adminsdk*.json",
+    "*-" + "[0-9a-f]" * 12 + ".json",        # gcloud key download: <project>-<12 hex>.json
+    "secrets.json",
+    "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
 })
 
 # Project descriptor files: edges only, no chunking or embedding. Not operator knobs —
@@ -113,7 +136,31 @@ def _as_str_list(value: object, key: str) -> list[str]:
     return list(value)
 
 
-def _resolve(block: dict, key: str, defaults: frozenset[str]) -> frozenset[str]:
+def _extend(defaults: frozenset[str], values: list[str], key: str) -> frozenset[str]:
+    """``extra_*``: add each entry to the defaults, and remove each ``!name`` from them.
+
+    ``!`` drops one built-in default without a bare-key replacement, which would freeze
+    every later default (ADR-052). A ``!name`` that matches no default raises: it removes
+    nothing, and a typo there would otherwise keep indexing what the user meant to drop.
+    Matching is folded like every directory comparison.
+    """
+    removed: set[str] = set()
+    for value in values:
+        if not value.startswith("!"):
+            continue
+        hits = {d for d in defaults if _fold(d) == _fold(value[1:])}
+        if not hits:
+            raise ValueError(
+                f"[ignore].{key}: `{value}` names no built-in default, so it removes "
+                f"nothing. `!` drops a default; to add an entry, leave the `!` off."
+            )
+        removed |= hits
+    added = {v for v in values if not v.startswith("!")}
+    return (frozenset(defaults) - removed) | frozenset(added)
+
+
+def _resolve(block: dict, key: str, defaults: frozenset[str], *,
+             removable: bool = True) -> frozenset[str]:
     """Apply the ADR-026 §1 precedence table to one knob.
 
     ============  =============  =========================================
@@ -128,6 +175,10 @@ def _resolve(block: dict, key: str, defaults: frozenset[str]) -> frozenset[str]:
     An explicitly empty list is honored as written and is *not* the same as an
     absent key: ``extra_dirs = []`` is a no-op and ``dirs = []`` means "exclude
     nothing" — legal, destructive, and exactly what someone asking for it asked for.
+
+    With ``removable`` (every knob but ``files``, whose ``!`` is a pattern re-include), a
+    ``!name`` entry in ``extra_*`` removes that one default (:func:`_extend`). In the bare
+    key it raises: the bare key already replaces the defaults, so there is nothing to remove.
 
     Both keys set is an error rather than a silent precedence because there is no
     reading of "extend *and* replace" a user could have meant, and guessing is how
@@ -145,9 +196,19 @@ def _resolve(block: dict, key: str, defaults: frozenset[str]) -> frozenset[str]:
         )
 
     if bare is not None:
-        return frozenset(_as_str_list(bare, key))
+        values = _as_str_list(bare, key)
+        negated = sorted(v for v in values if v.startswith("!"))
+        if removable and negated:
+            raise ValueError(
+                f"[ignore].{key} replaces the defaults, so {negated} has nothing to "
+                f"remove. Use `{extra_key}` to drop one default and keep the rest."
+            )
+        return frozenset(values)
     if extra is not None:
-        return frozenset(defaults) | frozenset(_as_str_list(extra, extra_key))
+        values = _as_str_list(extra, extra_key)
+        if removable:
+            return _extend(defaults, values, extra_key)
+        return frozenset(defaults) | frozenset(values)
     return frozenset(defaults)
 
 
@@ -169,6 +230,22 @@ def _resolve_exts(block: dict, defaults: frozenset[str]) -> frozenset[str]:
     return frozenset(e.lower() for e in resolved)
 
 
+def _resolve_files(block: dict, defaults: frozenset[str]) -> frozenset[str]:
+    """Same precedence as :func:`_resolve`, for file-name patterns.
+
+    A pattern with a ``/`` raises: these match the file's *name*, so
+    ``config/secret.json`` would match nothing and exclude nothing, silently.
+    """
+    resolved = _resolve(block, "files", defaults, removable=False)
+    bad = sorted(p for p in resolved if "/" in p or "\\" in p)
+    if bad:
+        raise ValueError(
+            f"[ignore].files patterns match a file name, not a path: {bad}. "
+            f"Exclude a directory with `extra_dirs` instead."
+        )
+    return resolved
+
+
 # ---------------------------------------------------------------------------
 # The policy object
 # ---------------------------------------------------------------------------
@@ -182,6 +259,7 @@ class ScanPolicy:
     ignore_dirs: frozenset[str]        # excluded at any depth
     ignore_root_dirs: frozenset[str]   # excluded at the repository root only
     extensions: frozenset[str]         # chunked + embedded
+    ignore_files: frozenset[str] = DEFAULT_IGNORE_FILES   # file-name patterns; `!` re-includes
     project_exts: frozenset[str] = PROJECT_EXTS
     project_files: frozenset[str] = PROJECT_FILES
     index_dir_name: str = ".code-index"   # [indexer].index_dir's last component (ADR-042)
@@ -196,6 +274,21 @@ class ScanPolicy:
     @cached_property
     def _folded_root_dirs(self) -> frozenset[str]:
         return frozenset(_fold(d) for d in self.ignore_root_dirs)
+
+    @cached_property
+    def _folded_dir_paths(self) -> tuple[tuple[str, ...], ...]:
+        """Multi-segment `ignore_dirs` entries (`bin/Debug`), as folded name tuples."""
+        return tuple(
+            tuple(_fold(p) for p in d.strip("/").split("/"))
+            for d in self.ignore_dirs if "/" in d.strip("/")
+        )
+
+    @cached_property
+    def _folded_file_patterns(self) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """(exclude, re-include) file-name patterns, folded once."""
+        pats = [_fold(p) for p in self.ignore_files]
+        return (tuple(p for p in pats if not p.startswith("!")),
+                tuple(p[1:] for p in pats if p.startswith("!")))
 
     def is_ignored_dir(self, name: str, *, at_root: bool = False) -> bool:
         """Whether ``os.walk`` should prune a directory entry named ``name``.
@@ -225,11 +318,35 @@ class ScanPolicy:
             return False
         if parts[0] and self.is_ignored_dir(parts[0], at_root=True) and len(parts) > 1:
             return True
-        return any(self.is_ignored_dir(part) for part in parts[:-1])
+        if any(self.is_ignored_dir(part) for part in parts[:-1]):
+            return True
+        return self._under_ignored_dir_path(parts[:-1])
+
+    def _under_ignored_dir_path(self, dir_parts: list[str]) -> bool:
+        """A multi-segment entry matches consecutive directory names at any depth.
+
+        Path-level only: :meth:`prune` sees one name at a time, so the walk descends into
+        `bin/Debug/` and this rejects every file under it.
+        """
+        if not self._folded_dir_paths:
+            return False
+        folded = [_fold(p) for p in dir_parts]
+        for seq in self._folded_dir_paths:
+            n = len(seq)
+            if any(tuple(folded[i:i + n]) == seq for i in range(len(folded) - n + 1)):
+                return True
+        return False
+
+    def is_ignored_file(self, rel_path: str) -> bool:
+        """Does the file's name match an `ignore_files` pattern (ADR-052 §4)?"""
+        name = _fold(rel_path.rsplit("/", 1)[-1])
+        exclude, keep = self._folded_file_patterns
+        return (any(fnmatchcase(name, p) for p in exclude)
+                and not any(fnmatchcase(name, p) for p in keep))
 
     def is_indexable(self, rel_path: str) -> bool:
         """Is this repo-relative path a source file the scan chunks and embeds?"""
-        if self._under_ignored_dir(rel_path):
+        if self._under_ignored_dir(rel_path) or self.is_ignored_file(rel_path):
             return False
         return _suffix(rel_path) in self.extensions
 
@@ -239,7 +356,7 @@ class ScanPolicy:
         Broader than :meth:`is_indexable` by exactly the descriptor files, which are
         parsed for edges but never chunked or embedded.
         """
-        if self._under_ignored_dir(rel_path):
+        if self._under_ignored_dir(rel_path) or self.is_ignored_file(rel_path):
             return False
         name = rel_path.rsplit("/", 1)[-1]
         return (
@@ -262,7 +379,8 @@ class ScanPolicy:
             f"[scan] config={origin} root={self.root} "
             f"ignore_dirs={len(self.ignore_dirs)} "
             f"ignore_root_dirs={sorted(self.ignore_root_dirs)} "
-            f"extensions={len(self.extensions)}"
+            f"extensions={len(self.extensions)} "
+            f"ignore_files={len(self.ignore_files)}"
         )
 
 
@@ -307,6 +425,7 @@ def scan_policy(start_dir: str | None = None) -> ScanPolicy:
         ignore_dirs=_resolve(block, "dirs", DEFAULT_IGNORE_DIRS),
         ignore_root_dirs=_resolve(block, "root_dirs", DEFAULT_IGNORE_ROOT_DIRS),
         extensions=_resolve_exts(block, DEFAULT_INDEXABLE_EXTS),
+        ignore_files=_resolve_files(block, DEFAULT_IGNORE_FILES),
         index_dir_name=os.path.basename(os.path.normpath(index_dir_setting(key))),
     )
     _cache[key] = policy

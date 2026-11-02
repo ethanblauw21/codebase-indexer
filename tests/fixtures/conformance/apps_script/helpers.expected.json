@@ -1,0 +1,19 @@
+{
+  "feature": "apps_script/helpers",
+  "language": "apps_script",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "getEstimateSheet", "kind": "function"},
+    {"fqn": "sumColumn", "kind": "function"},
+    {"fqn": "formatCurrency", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "getEstimateSheet", "target": "getActive", "kind": "call"},
+    {"source": "getEstimateSheet", "target": "getSheetByName", "kind": "call"},
+    {"source": "sumColumn", "target": "getRange", "kind": "call"},
+    {"source": "sumColumn", "target": "getLastRow", "kind": "call"},
+    {"source": "sumColumn", "target": "getValues", "kind": "call"},
+    {"source": "formatCurrency", "target": "currencySymbol", "kind": "call"},
+    {"source": "formatCurrency", "target": "toFixed", "kind": "call"}
+  ]
+}
