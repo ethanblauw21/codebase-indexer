@@ -136,6 +136,21 @@ class ParseResult(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
+# Data-flow rules (ADR-053) — shared SQL idioms for adapters' data_flow_rules()
+# ---------------------------------------------------------------------------
+# `{name}` stands for the traced name. Keywords match upper case only, the usual SQL
+# style in code, so a docstring's "Update chunk_summaries when ..." is not a writer.
+_SQL_IDENT = r"""[\"'`\[]?{name}\b"""
+SQL_DEFINITION_RULES = [
+    rf"\bCREATE\s+(?:TEMP(?:ORARY)?\s+)?(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?{_SQL_IDENT}",
+]
+SQL_PRODUCER_RULES = [
+    rf"\b(?:INSERT(?:\s+OR\s+[A-Z]+)?\s+INTO|REPLACE\s+INTO|DELETE\s+FROM)\s+{_SQL_IDENT}",
+    rf"\bUPDATE(?:\s+OR\s+[A-Z]+)?\s+{_SQL_IDENT}[\]\"'`]?\s+SET\b",
+]
+
+
+# ---------------------------------------------------------------------------
 # FQN builder — language-neutral default; C# adapter overrides for CLR convention
 # ---------------------------------------------------------------------------
 

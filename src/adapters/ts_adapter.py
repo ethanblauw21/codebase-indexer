@@ -323,6 +323,25 @@ class _WebAdapter:
         root = Parser(lang).parse(src).root_node
         return self._analyze_tags_impl(root, src, path, lang, ext, symbols)
 
+    def data_flow_rules(self) -> dict[str, list[str]]:
+        """ADR-053: Apps Script's definitions and writers, for trace_data_flow.
+
+        Firestore and Next.js stay in trace_data_flow itself, unchanged. These rules
+        apply only to a file that uses an Apps Script service (`file_marker`), so a
+        Next.js form's `setValue()` is not a writer. clasp pulls `.gs` files as `.js`.
+        """
+        return {
+            "file_marker": [r"\b(?:SpreadsheetApp|PropertiesService|DocumentApp|DriveApp|ScriptApp)\b"],
+            "definition": [
+                r"(?m)^\s*(?:function|class)\s+{name}\b",
+                r"(?m)^\s*(?:const|let|var)\s+{name}\s*=",
+            ],
+            "producer": [
+                r"\.(?:setValues?|setFormulas?|appendRow|insertRows?\w*|setProperty|setProperties"
+                r"|deleteProperty|deleteAllProperties)\s*\(",
+            ],
+        }
+
     # ------------------------------------------------------------------
     # Internal: symbol extraction (mirrors _extract_ts_symbols exactly)
     # ------------------------------------------------------------------

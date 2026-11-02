@@ -8,7 +8,10 @@ from typing import Optional
 from tree_sitter import Language, Parser, Node
 import tree_sitter_python as tspython
 
-from adapters.base import Edge, ParseResult, Reference, Symbol, TestConventions, build_fqn
+from adapters.base import (
+    SQL_DEFINITION_RULES, SQL_PRODUCER_RULES, Edge, ParseResult, Reference, Symbol, TestConventions,
+    build_fqn,
+)
 from adapters._treesitter import (
     merge_adjacent_same_fqn, node_text, run_query, skeleton_with_lines,
 )
@@ -232,6 +235,25 @@ class PythonAdapter:
 
     def project_resolver(self):
         return None
+
+    def data_flow_rules(self) -> dict[str, list[str]]:
+        """ADR-053: what defines and what writes a traced name, for trace_data_flow.
+
+        `{name}` stands for the name. A bare rebinding (`name = fetch()`) is not a
+        producer: it is usually a read into a local.
+        """
+        return {
+            "definition": SQL_DEFINITION_RULES + [
+                r"(?m)^\s*class\s+{name}\b",
+                r"(?m)^{name}\s*(?::[^=\n]+)?=(?!=)",       # module level: column 0
+            ],
+            "producer": SQL_PRODUCER_RULES + [
+                r"\.{name}\s*(?:\[[^\]\n]*\]\s*)*(?:[-+*/|&]?=)(?!=)",
+                r"(?<![\w.]){name}\s*(?:\[[^\]\n]*\]\s*)+(?:[-+*/|&]?=)(?!=)",
+                r"(?<!\w){name}\.(?:append|extend|insert|update|add|setdefault|pop|popitem"
+                r"|remove|discard|clear)\(",
+            ],
+        }
 
     # ------------------------------------------------------------------
     # Internal helpers
