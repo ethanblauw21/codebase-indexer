@@ -39,23 +39,23 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-002](#b-002) | Summarizer model id is hardcoded while every other model reads `indexer.toml` | ADR-009/020 sweeps | S | **promoted → ADR-026** |
 | [B-003](#b-003) | ~~Grow the private eval slice to de-noise the clean-TypeScript reranker signal~~ | ADR-019 §6 clause-3 FAIL, 2026-07-07 | M | **dropped** |
 | [B-004](#b-004) | ~~Per-language reranking — the reranker helped Python and hurt TypeScript~~ | ADR-019 §6, 2026-07-07 | M | **dropped** |
-| [B-005](#b-005) | Stale "150+ languages" / "ADR-004 tiers" pointers in the research docs | doc sweep, 2026-07-27 | S | raw |
+| [B-005](#b-005) | Stale "150+ languages" / "ADR-004 tiers" pointers in the research docs | doc sweep, 2026-07-27 | S | **done** (#88, ADR-055) |
 | [B-006](#b-006) | Supply-chain release verification (SBOM, signing) | study §9.6 | L | raw · trigger-gated |
 | [B-007](#b-007) | Verifiable retrieval — Merkle proofs over served index results | study §9.6 | L | raw · trigger-gated |
 | [B-008](#b-008) | Indexer crashes on a Windows `cp1252` console before indexing a single file | found 2026-07-27 | S | **done** (#79, ADR-043) |
-| [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | shaped |
-| [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | shaped |
+| [B-009](#b-009) | Eval result files don't record which models produced them | reranker provenance miss, 2026-07-27 | S | **done** (#88, ADR-055) |
+| [B-010](#b-010) | The same chunk text is returned twice, as separate tier-2 and tier-3 hits | first live search on the rebuilt index, 2026-07-27 | S | **partly done** (#88, ADR-055: read-time dedup); rest shaped |
 | [B-011](#b-011) | Multi-tier RRF **cannot** reinforce — the tier name is inside the FAISS id, so the tiers are disjoint document sets | same run, 2026-07-27 | M | shaped |
 | [B-012](#b-012) | No interactive GPU for the *functional* gates — free notebook tiers (Colab, Kaggle) unevaluated | session question, 2026-07-28 | M | raw |
-| [B-013](#b-013) | The watchdog daemon's summarizer competes with foreground work on every save | NPU discussion, 2026-07-28 | S | shaped |
+| [B-013](#b-013) | The watchdog daemon's summarizer competes with foreground work on every save | NPU discussion, 2026-07-28 | S | **done** (#89, ADR-054) |
 | [B-014](#b-014) | The local GPU has never been benchmarked — baseline it before turning the watchdog daemon back on | session, 2026-09-16 | M | shaped |
-| [B-015](#b-015) | Apps Script `.gs` files are not indexed — no REGISTRY entry | session, 2026-09-16 | S | raw |
+| [B-015](#b-015) | Apps Script `.gs` files are not indexed — no REGISTRY entry | session, 2026-09-16 | S | **done** (#90, ADR-052) |
 | [B-016](#b-016) | No tool returns a single symbol's source; agents Read whole files to see one function | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | M | shaped |
 | [B-017](#b-017) | No file-outline tool (symbols, signatures and ranges without bodies) | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | shaped |
-| [B-018](#b-018) | Tool output is not secret-redacted: a key committed in an indexed repo is pasted into agent context | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | shaped |
-| [B-019](#b-019) | The MCP tool-schema context cost (14 tools) has never been measured | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | raw |
+| [B-018](#b-018) | Tool output is not secret-redacted: a key committed in an indexed repo is pasted into agent context | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | **done** (#92, #90, ADR-049 + ADR-052) |
+| [B-019](#b-019) | The MCP tool-schema context cost (14 tools) has never been measured | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | **done** (#92, ADR-049) |
 | [B-020](#b-020) | No diff-scoped tools: "symbols changed since `<ref>`", blast radius over a diff | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | M | raw |
-| [B-021](#b-021) | Nothing steers the agent from native Read/Grep toward the index (opt-in hint, never a deny) | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | raw |
+| [B-021](#b-021) | Nothing steers the agent from native Read/Grep toward the index (opt-in hint, never a deny) | [jcodemunch study](./study-jcodemunch-mcp.md), 2026-09-24 | S | **partly done** (#92, ADR-049: point 3); rest raw |
 | [B-022](#b-022) | The summarizer runs one chunk at a time on the GPU | GPU baseline session, 2026-09-24 | M | **promoted → ADR-027** |
 | [B-023](#b-023) | Several projects watched at once cannot share one 8 GB card | GPU baseline session, 2026-09-24 | L | **promoted → ADR-028** |
 | [B-026](#b-026) | Class members lose their docs, private methods and getters from the index, and a method arrives without its class | ADR-030 p-queue diagnosis, grill + jury, 2026-09-25 | L | Stage 1 promoted → ADR-034 |
@@ -67,7 +67,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-025](#b-025) | Appended summaries make intent retrieval worse; the same summaries help when kept apart | retrieval check, 2026-09-25 | M | **promoted → ADR-030** |
 | [B-032](#b-032) | A save during a running watchdog reindex starts a second reindex in parallel | daemon queue review, 2026-09-25 | S | promoted → [ADR-036](adr/ADR-036-one-reindex-at-a-time.md) |
 | [B-033](#b-033) | Two MCP servers on one project write the same index with no lock, and FAISS files are overwritten in place | daemon queue review, 2026-09-25 | M | **done** (#71, ADR-038) |
-| [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | raw |
+| [B-034](#b-034) | A changed file is re-embedded in full, even chunks whose text did not change | daemon queue review, 2026-09-25 | S–M | **partly done** (#91, ADR-051: tier 1); rest raw |
 | [B-035](#b-035) | A reindex killed before its FAISS save leaves files that look indexed and have no vectors, forever | chunk-shape study, 2026-09-25 | S | promoted → ADR-037 (#43) |
 | [B-036](#b-036) | A fresh install gets mcp 2.x, where the MCP server cannot import, and CI's green check hides it | PR test-merge, 2026-09-25 | S | **done** (#44) |
 | [B-037](#b-037) | `analyze_blast_radius` and `find_dead_code` take 10–20 minutes per call | dogfood of all 13 tools, 2026-09-26 | S | **done** (#45) |
@@ -78,27 +78,31 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-042](#b-042) | `trace_data_flow` only understands Firestore and Next.js code | same dogfood, 2026-09-26 | M | raw |
 | [B-043](#b-043) | `map_module_communities` fills communities with names from outside the repo | same dogfood, 2026-09-26 | S–M | raw |
 | [B-044](#b-044) | After the first search, every in-process reindex runs out of VRAM and skips summaries | same dogfood, 2026-09-26 | S | **done** |
-| [B-045](#b-045) | No tool declares `readOnlyHint` | Inspector run, 2026-09-25 | S | raw |
+| [B-045](#b-045) | No tool declares `readOnlyHint` | Inspector run, 2026-09-25 | S | **done** (#92, ADR-049) |
 | [B-046](#b-046) | The watchdog fires while the model host is starting, with no file saved | dogfood host run, 2026-09-26 | S | raw |
 | [B-047](#b-047) | Seven tests fail on every CI run because they depend on Windows paths, and the advisory step hides it | signoff CI check, 2026-09-26 | S | **done** (#69) |
-| [B-048](#b-048) | A save re-summarizes a file's tier-2/3 slices whose code did not change | InventoryApp first index, 2026-09-28 | S–M | shaped |
+| [B-048](#b-048) | A save re-summarizes a file's tier-2/3 slices whose code did not change | InventoryApp first index, 2026-09-28 | S–M | **partly done** (#91, ADR-051: fix 1); rest shaped |
 | [B-049](#b-049) | The model-host log and the summarize progress lines carry no timestamps, so rates can't be tracked | InventoryApp first index, 2026-09-28 | S | **done** (#73, ADR-039) |
 | [B-050](#b-050) | Pass 2 embeds in batches of 1–4 texts (per file per tier), so a full build embeds at about half speed | InventoryApp first index, 2026-09-28 | S | **done** (#74, ADR-040) |
 | [B-052](#b-052) | The index covers one folder, so work in git worktrees (one per branch) is not indexed | InventoryApp go-live, 2026-09-28 | M | **done** (#76, ADR-042) |
 | [B-053](#b-053) | The server gives agents no usage instructions, and every session on one index runs its own watchdog | InventoryApp go-live, 2026-09-28 | S–M | **done** (#71, ADR-038) |
-| [B-054](#b-054) | A line-ending-only difference counts as a changed file (raw-byte MD5) | InventoryApp fork, 2026-09-28 | S | shaped |
+| [B-054](#b-054) | A line-ending-only difference counts as a changed file (raw-byte MD5) | InventoryApp fork, 2026-09-28 | S | **done** (#91, ADR-051) |
 | [B-055](#b-055) | Pass 2 waits for each embed call before preparing the next window | B-050 follow-up, 2026-09-28 | S | **done** (#78, ADR-040 addendum) |
 | [B-051](#b-051) | The shared model host runs on whatever interpreter launched it, so a CPU-only env can put every project's models on the CPU | InventoryApp go-live, 2026-09-28 | S | **done** (#72, ADR-041) |
-| [B-056](#b-056) | Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols | @edb grill, 2026-09-28 | M (Stage 1) + M (Stage 2) | shaped |
-| [B-057](#b-057) | A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild | incident, 2026-09-29 | S | shaped |
+| [B-056](#b-056) | Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols | @edb grill, 2026-09-28 | M (Stage 1) + M (Stage 2) | **done** (#80, ADR-044: correctness half; display half dropped) |
+| [B-057](#b-057) | A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild | incident, 2026-09-29 | S | **done** (#92, ADR-049) |
 | [B-058](#b-058) | Moving a symbol's line numbers re-summarizes it, because the summary cache is keyed on its `Lines:` header | @edb, 2026-09-29 | S | promoted → ADR-045 |
 | [B-059](#b-059) | A crash mid-migration can empty the edges graph, and three places swallow failures silently (#55, #54) | 2026-09-27 assessment; @edb, 2026-09-29 | S | promoted → ADR-046 |
 | [B-060](#b-060) | Tool calls read loose index globals that a swap can change mid-call, block the event loop, and hold a second copy of the index (#52, #53, #63) | 2026-09-27 assessment; @edb, 2026-09-29 | M | promoted → ADR-047 |
 | [B-061](#b-061) | When the model host is unreachable, the fallback may load a second model copy on the 8 GB card (#66, suspected) | 2026-09-27 assessment; @edb, 2026-09-29 | S–M | promoted → ADR-048 |
-| [B-062](#b-062) | Importing `core` commits 3.6 GB per process, 2.1 GB of it OpenBLAS thread buffers | @edb, 2026-10-06 | S | shaped |
-| [B-063](#b-063) | Run a full build on a real ASP.NET project (EganEstimator) and check search quality; `obj/`, `bin/` and EF `Migrations/` get indexed by default | @edb, 2026-10-15 | S | raw |
-| [B-064](#b-064) | Razor views (`.cshtml`) and Blazor components (`.razor`) are not indexed at all | @edb, 2026-10-15 | M–L | raw |
+| [B-062](#b-062) | Importing `core` commits 3.6 GB per process, 2.1 GB of it OpenBLAS thread buffers | @edb, 2026-10-06 | S | **done** (#89, ADR-054) |
+| [B-063](#b-063) | Run a full build on a real ASP.NET project (EganEstimator) and check search quality; `obj/`, `bin/` and EF `Migrations/` get indexed by default | @edb, 2026-10-15 | S | **partly done** (#90, ADR-052: item 1); rest raw |
+| [B-064](#b-064) | Razor views (`.cshtml`) and Blazor components (`.razor`) are not indexed at all | @edb, 2026-10-15 | M–L | **partly done** (#90, ADR-052: level 1); rest raw |
 | [B-065](#b-065) | Benchmark the tier groupings {1,2,3}, {1,2} and {1} on build time AND retrieval accuracy, to find the best speed-to-accuracy trade | @edb, 2026-10-15 | M | raw |
+| [B-066](#b-066) | Sessions working on branches skip the index on purpose, because it covers only the base branch | cross-session survey, 2026-11-02 | M–L | raw |
+| [B-067](#b-067) | Nothing records which tools are called, so usage can only be surveyed from agents' memory | cross-session survey, 2026-11-02 | S | raw |
+| [B-068](#b-068) | A git-mode index on an alias ref goes stale without warning when the alias's branch is retired | cross-session survey, 2026-11-02 | S | raw |
+| [B-069](#b-069) | `trace_data_flow` can't see writes made through a project's own helper; no way to add rules in `indexer.toml` | ADR-053 open question 3, 2026-11-02 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -269,7 +273,7 @@ we no longer trust. Recorded in ADR-009 §P4 and ADR-019 §6.
 <a id="b-005"></a>
 ### B-005 — Stale competitor-figure and ADR-004 pointers
 
-**Source:** doc sweep, 2026-07-27 · **Status:** raw · **Size:** S
+**Source:** doc sweep, 2026-07-27 · **Status:** done (#88, [ADR-055](adr/ADR-055-one-result-per-text.md)) · **Size:** S
 
 Two stale pointers survive in the research docs:
 
@@ -349,7 +353,7 @@ The second is smaller and cannot regress; the first keeps the nicer output. Eith
 <a id="b-009"></a>
 ### B-009 — Eval result files don't record which models produced them
 
-**Source:** the reranker provenance miss, 2026-07-27 · **Status:** shaped · **Size:** S
+**Source:** the reranker provenance miss, 2026-07-27 · **Status:** done (#88, [ADR-055](adr/ADR-055-one-result-per-text.md)) · **Size:** S
 
 Every row in `benchmarks/real_repo/*.jsonl` carries `repo`, `language`, `arm`, `n`, `git_sha` and the
 metrics — but **not the model ids it ran with**. So a result cannot state its own stack, and
@@ -378,7 +382,7 @@ Worth doing precisely because a convention people must remember is the thing tha
 <a id="b-010"></a>
 ### B-010 — The same chunk text is returned twice, as separate tier-2 and tier-3 hits
 
-**Source:** first live search on the rebuilt index, 2026-07-27 · **Status:** shaped · **Size:** S
+**Source:** first live search on the rebuilt index, 2026-07-27 · **Status:** partly done (#88, [ADR-055](adr/ADR-055-one-result-per-text.md): read-time dedup); rest shaped · **Size:** S
 
 A query for *"how are stable FAISS ids computed from a file and offset"* returned, at ranks 2 and 3:
 
@@ -568,7 +572,7 @@ decides whether this is a real option or a dead end. ~10 minutes.
 <a id="b-013"></a>
 ### B-013 — The watchdog daemon's summarizer competes with foreground work on every save
 
-**Source:** NPU discussion, 2026-07-28 · **Status:** shaped · **Size:** S
+**Source:** NPU discussion, 2026-07-28 · **Status:** done (#89, [ADR-054](adr/ADR-054-lean-and-polite-processes.md)) · **Size:** S
 
 `[summarization].enabled = true` in the shipped `indexer.toml`, so every debounced reindex the
 watchdog schedules runs `IsolatedChunkSummarizer` (`incremental_indexer.py:704`) and generates a
@@ -649,7 +653,7 @@ the rebuild; confirm it by counting rows.
 <a id="b-015"></a>
 ### B-015 — Apps Script `.gs` files are not indexed
 
-**Source:** session, 2026-09-16 · **Status:** raw · **Size:** S
+**Source:** session, 2026-09-16 · **Status:** done (#90, [ADR-052](adr/ADR-052-scan-defaults-and-languages.md)) · **Size:** S
 
 `src/adapters/__init__.py` REGISTRY maps `.js`/`.jsx` to the JavaScript adapter but has no `.gs`
 entry, so Apps Script source is invisible unless it sits on disk as `.js`. That is clasp's default,
@@ -693,7 +697,7 @@ then fetch the one symbol you need.
 <a id="b-018"></a>
 ### B-018 — Tool output is not secret-redacted
 
-**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.3, 2026-09-24 · **Status:** shaped · **Size:** S
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.3, 2026-09-24 · **Status:** done (#92, #90, [ADR-049](adr/ADR-049-safe-reindex-and-tool-output.md) + [ADR-052](adr/ADR-052-scan-defaults-and-languages.md)) · **Size:** S
 
 indexer returns raw chunk text. If a repo it indexes has a committed credential (a service-account
 JSON, a `.env` that slipped in, a hardcoded token), `semantic_code_search` and friends paste it into
@@ -711,7 +715,7 @@ covering private-key blocks, common token prefixes, and `"private_key":` JSON fi
 <a id="b-019"></a>
 ### B-019 — The MCP tool-schema context cost has never been measured
 
-**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.4, 2026-09-24 · **Status:** raw · **Size:** S
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.4, 2026-09-24 · **Status:** done (#92, [ADR-049](adr/ADR-049-safe-reindex-and-tool-output.md)) · **Size:** S
 
 Every session with `repo-indexer` connected pays for 14 tool descriptions and schemas before a single
 call. jCodeMunch ships a `tool_surface: "counter"` mode to cut this. Measure first:
@@ -736,7 +740,7 @@ whether to shell out to git or read `content_changed_at`.
 <a id="b-021"></a>
 ### B-021 — Nothing steers the agent from native Read/Grep toward the index
 
-**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.6, 2026-09-24 · **Status:** raw · **Size:** S
+**Source:** [jcodemunch study](./study-jcodemunch-mcp.md) §3.6, 2026-09-24 · **Status:** partly done (#92, [ADR-049](adr/ADR-049-safe-reindex-and-tool-output.md): point 3); rest raw · **Size:** S
 
 jCodeMunch's optional PreToolUse hook nudges Read and Grep toward its tools, and in strict mode
 **denies** them. The deny is out: a stale index then blocks the fallback, the opposite of fail
@@ -1253,7 +1257,7 @@ agents on one repo.
 
 ### B-034 — A changed file is re-embedded in full, even chunks whose text did not change
 
-**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** raw · **Size:** S–M
+**Source:** review of the watchdog and daemon queue with @edb, 2026-09-25 · **Status:** partly done (#91, [ADR-051](adr/ADR-051-stable-change-keys.md): tier 1); rest raw · **Size:** S–M
 
 Change detection works per file: an MD5 of the file's content (`compute_diff`,
 `incremental_indexer.py:278`). A modified file has all its chunks removed and every chunk embedded
@@ -1454,7 +1458,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 ### B-045 — No tool declares `readOnlyHint`
 
-**Source:** MCP Inspector run, 2026-09-25 (recorded in ADR-037's notes) · **Status:** raw · **Size:** S
+**Source:** MCP Inspector run, 2026-09-25 (recorded in ADR-037's notes) · **Status:** done (#92, [ADR-049](adr/ADR-049-safe-reindex-and-tool-output.md)) · **Size:** S
 
 - Eleven of the thirteen tools only read. Declaring `readOnlyHint` lets a client auto-approve them.
   `reindex` writes; `index_status` loads the indexes but writes nothing.
@@ -1493,7 +1497,7 @@ Option 1 is the fix. Option 2 is worth adding with it. It interacts with B-033's
 
 ### B-048 — A save re-summarizes a file's tier-2/3 slices whose code did not change
 
-**Source:** InventoryApp-V2 first index, 2026-09-28 · **Status:** shaped · **Size:** S–M
+**Source:** InventoryApp-V2 first index, 2026-09-28 · **Status:** partly done (#91, [ADR-051](adr/ADR-051-stable-change-keys.md): fix 1); rest shaped · **Size:** S–M
 
 Summaries are cached by an MD5 of the chunk text (`chunk_text_hash`, `incremental_indexer.py:654`).
 For tier 1 that now holds up: the header is `File:` + `Entity:`, with no line numbers, so an edit
@@ -1686,7 +1690,7 @@ index was missing about 20% of current `main`.
 
 ### B-054 — A line-ending-only difference counts as a changed file (raw-byte MD5)
 
-**Source:** InventoryApp fork, 2026-09-28 · **Status:** shaped · **Size:** S
+**Source:** InventoryApp fork, 2026-09-28 · **Status:** done (#91, [ADR-051](adr/ADR-051-stable-change-keys.md)) · **Size:** S
 
 - `md5_file` (`incremental_indexer.py:122`) hashes raw bytes. With `core.autocrlf=true`, the same file can be LF in one
   checkout and CRLF in another: InventoryApp-V2 had 36 LF files, and the fresh worktree was all CRLF.
@@ -1715,7 +1719,7 @@ index was missing about 20% of current `main`.
 <a id="b-056"></a>
 ### B-056 — Search results say nothing about the dependencies a chunk uses, and calls into dependencies can resolve to in-repo symbols
 
-**Source:** @edb grill, 2026-09-28 · **Status:** shaped · **Size:** M (Stage 1) + M (Stage 2)
+**Source:** @edb grill, 2026-09-28 · **Status:** done (#80, [ADR-044](adr/ADR-044-python-imports-captured-and-resolved.md): correctness half; display half dropped) · **Size:** M (Stage 1) + M (Stage 2)
 
 **The want.** When a returned chunk calls into a third-party package, say which package it is and
 what it does, in one short line. Frontier models mostly know `zod` or `json.loads`. A small, locally
@@ -1884,7 +1888,7 @@ ADR-011 (call resolution order and receiver types); ADR-032 (search budget); ADR
 <a id="b-057"></a>
 ### B-057 — A second full reindex that is killed deletes the only good backup, and `reindex` defaults to a full rebuild
 
-**Source:** incident, 2026-09-29 · **Status:** shaped · **Size:** S
+**Source:** incident, 2026-09-29 · **Status:** done (#92, [ADR-049](adr/ADR-049-safe-reindex-and-tool-output.md)) · **Size:** S
 
 **What happened.** While checking ADR-043, an agent called the `reindex` tool through MCP Inspector
 twice (09:07 and 09:09) against this repo's live index, with no arguments, expecting a quick
@@ -1995,7 +1999,7 @@ embedder in a server, and watch VRAM.
 
 ### B-062 — Importing `core` commits 3.6 GB per process, 2.1 GB of it OpenBLAS thread buffers
 
-**Source:** @edb, 2026-10-06 (disk cleanup: `pagefile.sys` had grown to 58 GB) · **Status:** shaped
+**Source:** @edb, 2026-10-06 (disk cleanup: `pagefile.sys` had grown to 58 GB) · **Status:** done (#89, [ADR-054](adr/ADR-054-lean-and-polite-processes.md))
 · **Size:** S
 
 Every indexer process commits about 3.6 GB of private memory before it loads a model. Three
@@ -2041,7 +2045,7 @@ Importing them lazily would save the remaining ~1 GB per MCP server.
 ### B-063 — No full build has been run on a real ASP.NET project, and `obj/` gets indexed by default
 
 **Source:** @edb, 2026-10-15 (writing an overview for the IT programmers, who work in ASP.NET) ·
-**Status:** raw · **Size:** S
+**Status:** partly done (#90, [ADR-052](adr/ADR-052-scan-defaults-and-languages.md): item 1); rest raw · **Size:** S
 
 Before the indexer goes to IT, a real full build should show how search does on ASP.NET code. The
 candidate is EganEstimator (`G:\Blauw, Ethan\Project Examples\Estimator_2.0\EganEstimator`), an
@@ -2076,7 +2080,7 @@ EganEstimator) is real source but mostly noise for search.
 
 ### B-064 — Razor views (`.cshtml`) and Blazor components (`.razor`) are not indexed at all
 
-**Source:** @edb, 2026-10-15 · **Status:** raw · **Size:** M–L
+**Source:** @edb, 2026-10-15 · **Status:** partly done (#90, [ADR-052](adr/ADR-052-scan-defaults-and-languages.md): level 1); rest raw · **Size:** M–L
 
 ASP.NET MVC and Razor Pages put much of an app's behavior in `.cshtml` files, and Blazor puts it in
 `.razor` files. Neither extension is in `DEFAULT_INDEXABLE_EXTS` and there is no adapter for
@@ -2159,3 +2163,136 @@ it may need more queries before small differences mean anything. Runs need the G
 so schedule them as background jobs.
 
 **Depends on:** none. **Related:** #82, B-048, B-058, ADR-030, the chunk-shape study (PR #42).
+
+### B-066 — Sessions working on branches skip the index on purpose, because it covers only the base branch
+
+**Source:** cross-session survey, 2026-11-02 · **Status:** raw · **Size:** M–L
+
+On 2026-11-02 every running Claude session (5) was asked how it used the code-indexer that day. **None
+had called a single tool.** Three had no server connected (playwright harness, TE3, claude-conductor).
+The two with a live index skipped it deliberately, for the same reason:
+
+- **InventoryApp-V2:** every question was about code on non-main branches (`origin/flowchart`,
+  `fix/break-routes-deep-links`, `fix/receive-line-validation`, `fix/break-ui-findings`). The index
+  covers `origin/main` only, so the session used `git show` / `git grep` against those refs.
+- **GanttWebApp:** the session worked in fresh worktrees off `origin/master` and `staging`. The
+  repo's `CLAUDE.local.md` says the index follows staging and to `Read` any file the branch changed,
+  so the session read files directly.
+
+This is the gap [B-052](#b-052) left open. ADR-042 built its option 4 (index a commit, not a folder),
+which gives a stable base, but not option 1 (flag stale hits) or option 3 (a per-branch overlay). The
+guidance B-052 wrote, "`Read` files your branch changed", works: agents follow it, and so they never
+reach the index. Branch work is the normal case in both live repos, so a base-only index loses to
+`git grep <ref>` even when its results are right.
+
+**Not this item:** both sessions also said their questions named exact identifiers (`receiveContainer`,
+`recordAudit`, `audit_events`), where grep is complete. That's grep's strength, not an index defect.
+The index earns its place on questions about behaviour, and no session asked one that day.
+
+**Options, cheapest first** (from B-052, now ranked by the survey):
+1. **Answer from the caller's ref for files it changed.** Given a ref or worktree path, run
+   `git diff --name-only <index commit>...<ref>`, then mark those hits as stale or drop them, and add a
+   grep-level pass over the changed files at that ref. This needs no embedding, and tells the agent
+   when the base is still good.
+2. **Per-branch overlay:** embed only the branch's changed files into a small side index and merge it
+   at query time. Costs one incremental build per branch; the summary cache keyed by text hash keeps
+   it cheap.
+
+**How the two live repos branch** (asked of each session the same day; claims checked against git,
+not fetched):
+
+| | InventoryApp-V2 | GanttWebApp |
+|---|---|---|
+| Flow | feature → `next` → `main` (its ADR-022); `next` is reset to `main` after each release | two separate lines: `integration/staging-<date>` (new one each cycle) and `master`; staging is never promoted to master as a whole |
+| Prod deploys from | `main`, automatically after green CI | `master` or `release/<date>`, by hand |
+| Staging deploys from | usually `next`, by hand | a local, unpushed `deploy/staging-<date>` branch |
+| Merges | squash into `next`/`flowchart`; release PRs rebase-merged | merge commits, features `--no-ff` |
+| Long-lived branches | `flowchart`, 60 commits ahead of `main`, with its own PRs | the staging line, 182 ahead of `master`; `master` has 59 commits staging lacks (hotfixes, mostly rebuilt on staging by cherry-pick) |
+| Worktrees | 10 × `../wt-*` | 18 × `../GanttWebApp-*` |
+| Index today | `origin/main` | `refs/code-index/target` → `origin/integration/staging-2026-10-01` |
+| Session wants | `main`, plus `flowchart` | staging |
+
+What that means here:
+
+- **Both base indexes are right.** Neither session wants a different default.
+- **Only one second index is wanted: V2's `flowchart`.** Git mode takes one ref per index, so it
+  needs another index and a rule for which one a session gets (a worktree branched from
+  `flowchart` uses it; everything else uses `main`). Gantt's alias ref may be reusable for this.
+- **Short-lived branches need only option 1.** Both sessions `Read` the files they changed and don't
+  want those branches indexed, so option 2 can wait.
+- **Never index a rewritten or local ref:** V2's `next` (reset after every release, so each
+  release would look like a large change) or Gantt's `deploy/staging-*` (local, unpushed, rebuilt
+  each deploy).
+- **Optional:** a `master` index for Gantt, for hotfix-only and release-branch files. Small gap,
+  since hotfixes are rebuilt on staging; wait until a session misses something.
+- The staging alias has its own trap: [B-068](#b-068).
+
+**Done when:** a re-run of the same survey, with sessions on branches, finds them calling the index
+rather than routing around it. The 2026-11-02 servers ran pre-ADR-049 code, but no reply blamed
+anything that changed since.
+
+**Related:** B-052, [B-020](#b-020) (diff-scoped tools), ADR-042, ADR-050 (`changed_symbols`,
+unmerged), B-067, B-068.
+
+### B-067 — Nothing records which tools are called, so usage can only be surveyed from agents' memory
+
+**Source:** cross-session survey, 2026-11-02 · **Status:** raw · **Size:** S
+
+The [B-066](#b-066) survey had to ask each session what it remembered. Two sessions (InventoryApp-V2,
+GanttWebApp) said parts of their history had been rebuilt without a summary, so they "can't vouch for"
+earlier calls. The server keeps no record of its own, so the question "is anyone using this?" has no
+answer that doesn't depend on recall.
+
+**Want:** an append-only call log per index (for example `.code-index/calls.jsonl`). One line per tool
+call: timestamp, tool name, latency, result count, whether the call came back empty or errored, and the
+index commit it answered from. Add a `tools/` script that summarizes it by tool and by day.
+
+**Open question for @edb:** whether to log query text. It's the most useful field for finding bad
+results, but a query can carry pasted code or a secret. Run it through ADR-049's redaction, log only
+its length and a hash, or leave it out.
+
+**Related:** B-066, ADR-049 (redaction).
+
+### B-068 — A git-mode index on an alias ref goes stale without warning when the alias's branch is retired
+
+**Source:** cross-session survey, 2026-11-02 · **Status:** raw · **Size:** S
+
+GanttWebApp's index reads `git:refs/code-index/target`, a symbolic ref set by hand, as the comment
+in its `indexer.toml` says:
+`git symbolic-ref refs/code-index/target refs/remotes/origin/integration/staging-<date>`.
+Today it points to `integration/staging-2026-10-01`, and ordinary fetches move it forward.
+
+A new staging integration branch is cut each cycle. When that happens, the old branch stops moving,
+the alias keeps pointing at it, and the index stays current with a branch nobody works on.
+`index_status` reports a finished run on the alias, so nothing looks wrong. Sessions would then
+answer from last cycle's code until someone remembers to repoint the alias.
+
+**Want:** `index_status` (and the server's instructions line) warns when either:
+- the alias's target hasn't moved in N days while the remote has newer commits elsewhere, or
+- a newer branch matching a configured pattern exists, for example
+  `[index] follow = "origin/integration/staging-*"`. The pattern could also replace the hand-set alias
+  entirely, with the newest match being followed.
+
+**Watch for:** following a pattern automatically switches to a new branch with a large diff, so the
+first run after a cycle cut re-processes everything the cycles differ by. Warn first; auto-follow only
+if @edb wants it.
+
+**Related:** [B-066](#b-066), ADR-042.
+
+### B-069 — `trace_data_flow` can't see writes made through a project's own helper
+
+**Source:** ADR-053 open question 3, answered 2026-11-02 · **Status:** raw · **Size:** S
+
+ADR-053 gave each adapter built-in data-flow rules (SQL writes, Firestore `.set/.add/.update`, Apps
+Script `setValue`, EF Core `.Add`). A project that writes through its own wrapper gets nothing from
+them. GanttWebApp writes `audit_events` through `recordAudit(...)`, not a direct `.add()`, so
+`trace_data_flow("audit_events")` would list no producer there.
+
+**Want:** a `[data_flow]` block in `indexer.toml` that adds to the adapter rules, using the same
+shape (`definition`, `producer`, `file_marker`, with `{name}` for the traced name), for example
+`producer = ['recordAudit\(']` (a TOML literal string, so the backslash stays). It adds rules; it never replaces the built-in ones.
+
+**Build when** a session actually traces something like `audit_events` and misses the writer.
+@edb chose not to build it inside ADR-053.
+
+**Related:** ADR-053 §2, ADR-026 (configuration authority).
