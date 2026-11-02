@@ -104,7 +104,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-068](#b-068) | A git-mode index on an alias ref goes stale without warning when the alias's branch is retired | cross-session survey, 2026-11-02 | S | raw |
 | [B-069](#b-069) | `trace_data_flow` can't see writes made through a project's own helper; no way to add rules in `indexer.toml` | ADR-053 open question 3, 2026-11-02 | S | raw |
 | [B-070](#b-070) | In git mode, `reindex()` warns the index is stale and advises a full rebuild, because it compares against the checkout's `HEAD` instead of the indexed ref | live passes on V2 and Gantt, 2026-11-02 | S | raw |
-| [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | raw |
+| [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | **done** (#97) |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2340,7 +2340,7 @@ on another branch and gets no staleness block, and a folder-mode test still gets
 ### B-071 — Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire
 
 **Source:** @edb, via the conductor session, 2026-11-02. The reference is InventoryApp-V2's
-`.github/workflows/ci.yml` (#294, #304, #405). · **Status:** raw · **Size:** S
+`.github/workflows/ci.yml` (#294, #304, #405). · **Status:** done (#97) · **Size:** S
 
 `ci.yml` runs all five jobs on every PR and push, docs included. `tripwire.yml` filters PRs by path,
 but runs on every push to master, so a docs-only merge also pays the tripwire. Measured from
