@@ -102,6 +102,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-066](#b-066) | Sessions working on branches skip the index on purpose, because it covers only the base branch | cross-session survey, 2026-11-02 | M–L | raw |
 | [B-067](#b-067) | Nothing records which tools are called, so usage can only be surveyed from agents' memory | cross-session survey, 2026-11-02 | S | raw |
 | [B-068](#b-068) | A git-mode index on an alias ref goes stale without warning when the alias's branch is retired | cross-session survey, 2026-11-02 | S | raw |
+| [B-069](#b-069) | `trace_data_flow` can't see writes made through a project's own helper; no way to add rules in `indexer.toml` | ADR-053 open question 3, 2026-11-02 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2277,3 +2278,21 @@ first run after a cycle cut re-processes everything the cycles differ by. Warn f
 if @edb wants it.
 
 **Related:** [B-066](#b-066), ADR-042.
+
+### B-069 — `trace_data_flow` can't see writes made through a project's own helper
+
+**Source:** ADR-053 open question 3, answered 2026-11-02 · **Status:** raw · **Size:** S
+
+ADR-053 gave each adapter built-in data-flow rules (SQL writes, Firestore `.set/.add/.update`, Apps
+Script `setValue`, EF Core `.Add`). A project that writes through its own wrapper gets nothing from
+them. GanttWebApp writes `audit_events` through `recordAudit(...)`, not a direct `.add()`, so
+`trace_data_flow("audit_events")` would list no producer there.
+
+**Want:** a `[data_flow]` block in `indexer.toml` that adds to the adapter rules, using the same
+shape (`definition`, `producer`, `file_marker`, with `{name}` for the traced name), for example
+`producer = ["recordAudit\("]`. It adds rules; it never replaces the built-in ones.
+
+**Build when** a session actually traces something like `audit_events` and misses the writer.
+@edb chose not to build it inside ADR-053.
+
+**Related:** ADR-053 §2, ADR-026 (configuration authority).
