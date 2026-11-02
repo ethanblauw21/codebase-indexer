@@ -99,6 +99,8 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-063](#b-063) | Run a full build on a real ASP.NET project (EganEstimator) and check search quality; `obj/`, `bin/` and EF `Migrations/` get indexed by default | @edb, 2026-10-15 | S | raw |
 | [B-064](#b-064) | Razor views (`.cshtml`) and Blazor components (`.razor`) are not indexed at all | @edb, 2026-10-15 | M–L | raw |
 | [B-065](#b-065) | Benchmark the tier groupings {1,2,3}, {1,2} and {1} on build time AND retrieval accuracy, to find the best speed-to-accuracy trade | @edb, 2026-10-15 | M | raw |
+| [B-066](#b-066) | Sessions working on branches skip the index on purpose, because it covers only the base branch | cross-session survey, 2026-11-02 | M–L | raw |
+| [B-067](#b-067) | Nothing records which tools are called, so usage can only be surveyed from agents' memory | cross-session survey, 2026-11-02 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2159,3 +2161,63 @@ it may need more queries before small differences mean anything. Runs need the G
 so schedule them as background jobs.
 
 **Depends on:** none. **Related:** #82, B-048, B-058, ADR-030, the chunk-shape study (PR #42).
+
+### B-066 — Sessions working on branches skip the index on purpose, because it covers only the base branch
+
+**Source:** cross-session survey, 2026-11-02 · **Status:** raw · **Size:** M–L
+
+On 2026-11-02 every running Claude session (5) was asked how it used the code-indexer that day. **None
+had called a single tool.** Three had no server connected (playwright harness, TE3, claude-conductor).
+The two with a live index skipped it deliberately, for the same reason:
+
+- **InventoryApp-V2:** every question was about code on non-main branches (`origin/flowchart`,
+  `fix/break-routes-deep-links`, `fix/receive-line-validation`, `fix/break-ui-findings`). The index
+  covers `origin/main` only, so the session used `git show` / `git grep` against those refs.
+- **GanttWebApp:** the session worked in fresh worktrees off `origin/master` and `staging`. The
+  repo's `CLAUDE.local.md` says the index follows staging and to `Read` any file the branch changed,
+  so the session read files directly.
+
+This is the gap [B-052](#b-052) left open. ADR-042 built its option 4 (index a commit, not a folder),
+which gives a stable base, but not option 1 (flag stale hits) or option 3 (a per-branch overlay). The
+guidance B-052 wrote, "`Read` files your branch changed", works: agents follow it, and so they never
+reach the index. Branch work is the normal case in both live repos, so a base-only index loses to
+`git grep <ref>` even when its results are right.
+
+**Not this item:** both sessions also said their questions named exact identifiers (`receiveContainer`,
+`recordAudit`, `audit_events`), where grep is complete. That's grep's strength, not an index defect.
+The index earns its place on questions about behaviour, and no session asked one that day.
+
+**Options, cheapest first** (from B-052, now ranked by the survey):
+1. **Answer from the caller's ref for files it changed.** Given a ref or worktree path, run
+   `git diff --name-only <index commit>...<ref>`, then mark those hits as stale or drop them, and add a
+   grep-level pass over the changed files at that ref. This needs no embedding, and tells the agent
+   when the base is still good.
+2. **Per-branch overlay:** embed only the branch's changed files into a small side index and merge it
+   at query time. Costs one incremental build per branch; the summary cache keyed by text hash keeps
+   it cheap.
+
+**Done when:** a re-run of the same survey, with sessions on branches, finds them calling the index
+rather than routing around it. The 2026-11-02 servers ran pre-ADR-049 code, but no reply blamed
+anything that changed since.
+
+**Related:** B-052, [B-020](#b-020) (diff-scoped tools), ADR-042, ADR-050 (`changed_symbols`,
+unmerged), B-067.
+
+### B-067 — Nothing records which tools are called, so usage can only be surveyed from agents' memory
+
+**Source:** cross-session survey, 2026-11-02 · **Status:** raw · **Size:** S
+
+The [B-066](#b-066) survey had to ask each session what it remembered. Two sessions (InventoryApp-V2,
+GanttWebApp) said parts of their history had been rebuilt without a summary, so they "can't vouch for"
+earlier calls. The server keeps no record of its own, so the question "is anyone using this?" has no
+answer that doesn't depend on recall.
+
+**Want:** an append-only call log per index (for example `.code-index/calls.jsonl`). One line per tool
+call: timestamp, tool name, latency, result count, whether the call came back empty or errored, and the
+index commit it answered from. Add a `tools/` script that summarizes it by tool and by day.
+
+**Open question for @edb:** whether to log query text. It's the most useful field for finding bad
+results, but a query can carry pasted code or a secret. Run it through ADR-049's redaction, log only
+its length and a hash, or leave it out.
+
+**Related:** B-066, ADR-049 (redaction).
