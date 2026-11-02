@@ -103,6 +103,15 @@ def test_chunk_summaries_finds_its_definition_and_its_producer(monkeypatch, tmp_
     assert "CodeDB.get_cached_summaries" in b["CONSUMERS"]
 
 
+def test_python_entries_carry_no_nextjs_layer_label(monkeypatch, tmp_path):
+    # ADR-053 open question 1: the layer path tests are web conventions; a Python entry
+    # says only its bucket, not a made-up "[UTILITY]" or "[CORE LOGIC / LIB]".
+    _wire(monkeypatch, tmp_path, PY_CHUNKS)
+    out = M.trace_data_flow("chunk_summaries")
+    assert "- src/db.py\n" in out
+    assert "[UTILITY]" not in out and "[CORE LOGIC / LIB]" not in out
+
+
 def test_attribute_subscript_and_mutating_calls_are_producers(monkeypatch, tmp_path):
     _wire(monkeypatch, tmp_path, PY_CHUNKS)
     b = _buckets(M.trace_data_flow("chunk_summaries"))

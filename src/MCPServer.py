@@ -864,6 +864,20 @@ def _trace_layer(file_path: str, doc_text: str) -> str:
     return layer
 
 
+def _layer_tag(file_path: str, layer: str) -> str:
+    """``"[LAYER] "`` for a TS/JS file, else ``""``.
+
+    The layer path tests are Next.js/Firestore conventions, so on a Python or C# file
+    they say nothing true (ADR-053 open question 1). The bucket carries the role.
+    """
+    from adapters import get_adapter
+    from adapters.ts_adapter import _WebAdapter
+    adapter = get_adapter(os.path.splitext(file_path)[1].lower())
+    if adapter is not None and not isinstance(adapter, _WebAdapter):
+        return ""
+    return f"[{layer}] "
+
+
 def _data_flow_rules(names: list[str], file_texts: dict[str, str]) -> dict[str, tuple[list, list]]:
     """``{file: (definition_patterns, producer_patterns)}`` for every file whose adapter
     has ``data_flow_rules()`` and whose text passes the rules' ``file_marker`` gate.
@@ -906,7 +920,7 @@ def _rule_entry(layer: str, file_path: str, doc: dict, match, tag: str = "") -> 
     text = doc['text']
     start = max(0, match.start() - 40)
     snippet = text[start:start + 140].replace('\n', ' ').strip() + "..."
-    return f"- [{layer}] {file_path}\n  [Scope]: {get_clean_scope(doc)}\n{tag}  [Snippet]: {snippet}\n\n"
+    return f"- {_layer_tag(file_path, layer)}{file_path}\n  [Scope]: {get_clean_scope(doc)}\n{tag}  [Snippet]: {snippet}\n\n"
 
 
 @_tool()
@@ -1026,7 +1040,7 @@ def trace_data_flow(target_symbol: str) -> str:
         # FIX 1 applied here (Scope Cleanup)
         clean_scope = get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})
         snippet = doc_text[:140].replace('\n', ' ').strip() + "..."
-        entry = f"- [{layer}] {file_path}\n  [Scope]: {clean_scope}\n{violation_tag}  [Snippet]: {snippet}\n\n"
+        entry = f"- {_layer_tag(file_path, layer)}{file_path}\n  [Scope]: {clean_scope}\n{violation_tag}  [Snippet]: {snippet}\n\n"
         if rule_hit is not None:
             entry = _rule_entry(layer, file_path, {'scope': c.scope, 'text': c.text, 'file': c.file},
                                 rule_hit, violation_tag)

@@ -1,6 +1,6 @@
 # ADR-053: Communities Hold Only Repo Nodes, and Data Flow Has Per-Language Rules
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20
 **Branch:** `feature/adr-053-graph-tool-accuracy`
 **Reviewer:** @edb
@@ -248,3 +248,12 @@ and `l5x_fixture_teeth --check` exit 0.
 4. **Heritage binding in the resolver.** If another reader needs bound EXTENDS/IMPLEMENTS edges,
    move the binding from `get_graph_edges()` into `call_resolver` and store it as
    `resolved_target`.
+
+**Answers, 2026-11-02** (@edb: "all recommended", after a walk-through with an example for each):
+1. **No layer rules.** The bucket is the answer. The Next.js path labels are now printed only for
+   TS/JS files (`_layer_tag`), so a Python or C# entry no longer says `[UTILITY]` or
+   `[CORE LOGIC / LIB]`. Bucket order is unchanged; test added.
+2. **Moot.** ADR-052 merged `.gs` scanning, and the Apps Script rules cover it.
+3. **Not in this ADR.** Filed as a backlog item, with GanttWebApp's `recordAudit(...)` writing
+   `audit_events` as the example the adapter rules can't see.
+4. **Deferred** until another reader needs bound heritage edges.
