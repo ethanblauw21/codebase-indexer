@@ -104,6 +104,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-068](#b-068) | A git-mode index on an alias ref goes stale without warning when the alias's branch is retired | cross-session survey, 2026-11-02 | S | raw |
 | [B-069](#b-069) | `trace_data_flow` can't see writes made through a project's own helper; no way to add rules in `indexer.toml` | ADR-053 open question 3, 2026-11-02 | S | raw |
 | [B-070](#b-070) | In git mode, `reindex()` warns the index is stale and advises a full rebuild, because it compares against the checkout's `HEAD` instead of the indexed ref | live passes on V2 and Gantt, 2026-11-02 | S | raw |
+| [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2335,3 +2336,53 @@ but an agent that trusts the advice would pay a full rebuild every time it reind
 on another branch and gets no staleness block, and a folder-mode test still gets one.
 
 **Related:** ADR-042 (git-mode source), ADR-049 (incremental default), [B-066](#b-066), [B-068](#b-068).
+
+### B-071 — Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire
+
+**Source:** @edb, via the conductor session, 2026-11-02. The reference is InventoryApp-V2's
+`.github/workflows/ci.yml` (#294, #304, #405). · **Status:** raw · **Size:** S
+
+`ci.yml` runs all five jobs on every PR and push, docs included. `tripwire.yml` filters PRs by path,
+but runs on every push to master, so a docs-only merge also pays the tripwire. Measured from
+`gh run list` on 2026-11-02:
+
+| Run | Wall time |
+|---|---|
+| `CI` on a docs-only PR (#93, #96) | about 4 min |
+| `CI` on a push to master | 3–7 min |
+| `Retrieval tripwire` on a push to master | 11–20 min |
+
+Two of the last ten master pushes were docs only, #87 and #93, and each ran the tripwire for about
+18 minutes.
+
+**What changes the picture:** the repo is **public**, so GitHub-hosted runners cost nothing here.
+V2's per-minute billing reasons don't apply. The gain is time and runner noise, not money. There's
+also no branch protection on master, so no required check would wait on a skipped workflow.
+
+**V2's six techniques, and how each fits here:**
+1. **Skip docs-only changes: yes.** Without required checks, plain `paths-ignore`
+   (`docs/**`, `.claude/**`, `**.md`) on both workflows' `push` and `pull_request` triggers is
+   enough. V2 uses a first step instead because it has required checks. If master gets branch
+   protection later, switch to that.
+2. **Fail open: built in.** `paths-ignore` runs the workflow as soon as any changed file isn't docs,
+   and GitHub runs it anyway when the diff is too large to filter. V2's "previous run failed" guard
+   protects against cancelled master runs. Master runs are never cancelled here, so it isn't needed.
+3. **Expensive suite opt-in by label: not needed.** The tripwire is already path-filtered on PRs and
+   can be run by hand with `workflow_dispatch`.
+4. **Concurrency: keep as is.** PRs already cancel superseded runs. Master gets a full run per
+   merge on purpose (the comment in `ci.yml`), so a burst of merges still tests each commit.
+5. **One job instead of five: no.** Rounding each job up to a whole minute costs nothing on a public
+   repo, and five parallel jobs finish sooner than one serial job.
+6. **Reuse the PR's run on master's same tree: no.** Merges here usually land one after another, so
+   master's tree rarely matches the PR's tested tree, and the reuse would almost never apply.
+
+**Want:** item 1 only. Add `paths-ignore` to both workflows, and keep the tripwire's existing PR
+`paths` list. `paths` and `paths-ignore` can't both be set on the same trigger, so `push` gets
+`paths-ignore` and `pull_request` keeps `paths`.
+
+**Done when:** a docs-only PR and its merge start no `CI` and no `Retrieval tripwire` run, and a
+one-line change under `src/` still starts both.
+
+**Watch for:** a `.md` file that a CI check reads would be skipped too. As of 2026-11-02, nothing
+CI runs reads one. `tools/conformance_eval.py` touches `README.md` only under `--write-readme`,
+which CI doesn't run, and `tools/gen_pr_body.py` isn't in CI. Check again when adding a check.
