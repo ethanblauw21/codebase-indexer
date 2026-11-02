@@ -1,0 +1,21 @@
+{
+  "feature": "apps_script/menu",
+  "language": "apps_script",
+  "tier": "A",
+  "symbols": [
+    {"fqn": "onOpen", "kind": "function"},
+    {"fqn": "recalculate", "kind": "function"},
+    {"fqn": "currencySymbol", "kind": "function"}
+  ],
+  "edges": [
+    {"source": "onOpen", "target": "getUi", "kind": "call"},
+    {"source": "onOpen", "target": "createMenu", "kind": "call"},
+    {"source": "onOpen", "target": "addItem", "kind": "call"},
+    {"source": "onOpen", "target": "addToUi", "kind": "call"},
+    {"source": "recalculate", "target": "getEstimateSheet", "kind": "call"},
+    {"source": "recalculate", "target": "sumColumn", "kind": "call"},
+    {"source": "recalculate", "target": "getRange", "kind": "call"},
+    {"source": "recalculate", "target": "setValue", "kind": "call"},
+    {"source": "recalculate", "target": "formatCurrency", "kind": "call"}
+  ]
+}

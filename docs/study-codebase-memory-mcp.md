@@ -338,9 +338,8 @@ tool calls across 31 languages; plus an MCP supply-chain verification pipeline; 
 - **Convergence on the honesty principle.** Their per-edge confidence ≈ ADR-004's candidate contract ≈
   ADR-006's EXTRACTED-only provenance. Three independent expressions of the same "don't assert structure you
   can't prove" rule.
-- **⚠️ Fact-check flag:** the paper claims **66 languages**, but ADR-004 attributes **"150+"** to
-  `codebase-memory-mcp`. Either the ADR cited marketing/an older number, or conflated it with another tool.
-  Worth correcting the ADR to "66 (claimed)" so the comparison is defensible.
+- **Fact-check (discharged):** the paper claims **66 languages**; an early draft cited "150+", the figure in
+  their README. The tier ADR (renumbered ADR-004 → ADR-017) says 66, and ADR-008 states the correction.
 
 ### 9.2 ADR-005 (Chunk Versioning + Self-Healing) — two re-index axes; ours is the one they lack
 

@@ -56,6 +56,7 @@ _LANG_BY_EXT = {
     ".tsx": "typescript",
     ".js": "javascript",
     ".jsx": "javascript",
+    ".gs": "apps_script",       # ADR-052: the JS adapter under Apps Script's extension
     ".cs": "csharp",
     ".cpp": "cpp",
     ".cc": "cpp",

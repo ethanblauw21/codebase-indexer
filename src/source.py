@@ -7,7 +7,8 @@ Every file the build reads goes through a ``Source``:
   exists(rel)  whether the path is a file in this source
 
 ``WorkingTreeSource`` is the folder, as the indexer has always read it: an
-``os.walk`` pruned by ``scan_policy`` and a raw-byte MD5 per file.
+``os.walk`` pruned by ``scan_policy`` and an MD5 per file, of its bytes with line
+endings normalized (ADR-051).
 
 ``GitCommitSource`` is a commit's tree, read from git objects with no checkout.
 The ref is resolved to a commit once, when the source is made, so a whole run
@@ -46,14 +47,36 @@ def _decode(data: bytes) -> str:
 # The folder
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _lf(data: bytes) -> bytes:
+    return data.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
 def md5_file(path: str) -> str:
     """
-    MD5 digest of a file's raw bytes, read in 64 KiB blocks.
+    MD5 digest of a file's bytes with line endings normalized, read in 64 KiB blocks.
+
+    ADR-051 (B-054): ``\\r\\n`` and a lone ``\\r`` hash as ``\\n``, as ``read()`` turns
+    them, so a checkout whose line endings differ is not a change. A ``\\r`` that ends
+    a block waits for the next one, which may start with its ``\\n``.
 
     Block-reading keeps memory usage constant for large generated files
     (e.g. bundled JS).  MD5 is fast and sufficient for change detection
     — we are not using it for authentication or integrity guarantees.
     """
+    h = hashlib.md5()
+    carry = b""
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(65536), b""):
+            block = carry + block
+            carry = b"\r" if block.endswith(b"\r") else b""
+            h.update(_lf(block[:-1] if carry else block))
+    h.update(_lf(carry))
+    return h.hexdigest()
+
+
+def md5_file_raw(path: str) -> str:
+    """MD5 of a file's raw bytes: the file key before ADR-051, used once to re-key an
+    older index in place."""
     h = hashlib.md5()
     with open(path, "rb") as fh:
         for block in iter(lambda: fh.read(65536), b""):
