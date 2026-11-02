@@ -225,14 +225,58 @@ def test_folder_source_reads_what_it_always_read(tmp_path):
 
 # ── the server in git mode ───────────────────────────────────────────────────
 
-def test_instructions_name_the_ref_and_the_commit(repo, build):
+def test_instructions_name_the_ref_but_no_commit(repo, build):
+    # ADR-056: the diff hint names the ref, so it stays right as the ref moves.
     import MCPServer
     build()
     text = MCPServer._server_instructions(str(repo))
     commit = git(repo, "rev-parse", "main")
-    assert "main" in text and commit[:10] in text
-    assert f"git diff --name-only {commit[:10]}...HEAD" in text
+    assert "main" in text and commit[:10] not in text
+    assert "git diff --name-only main...HEAD" in text and "index_status" in text
     assert "working tree" in text and len(text) < 1000
+
+
+# ── reindex reports freshness against the ref (ADR-056, B-070) ───────────────
+
+@pytest.fixture
+def reindex(build, monkeypatch):
+    """MCPServer._reindex over the fixture's index, with the run itself stubbed out."""
+    import MCPServer
+    build()
+    monkeypatch.setattr(ii, "run_incremental",
+                        lambda *a, **k: print("Nothing changed — index is up to date."))
+    monkeypatch.setattr(MCPServer, "_reload_indexes", lambda: None)
+    return lambda: MCPServer._reindex(changed_files_only=True)
+
+
+def test_a_reindex_from_a_folder_on_another_branch_reports_no_staleness(repo, reindex):
+    """The 2026-11-02 incident: the folder sat on a feature branch, the index on main."""
+    main = git(repo, "rev-parse", "main")
+    git(repo, "checkout", "-q", "-b", "feature")
+    (repo / "src" / "a.ts").write_text("export const edited = 1;\n", encoding="utf-8")
+    git(repo, "commit", "-q", "-am", "feature work")
+    out = reindex()
+    assert "STALENESS" not in out and "changed_files_only=False" not in out
+    assert "src/a.ts" not in out
+    assert f"index: {main[:8]} (== main; current)" in out
+
+
+def test_a_reindex_that_did_not_catch_up_says_stale_without_rebuild_advice(repo, reindex):
+    old = git(repo, "rev-parse", "main")
+    (repo / "src" / "a.ts").write_text("export const moved = 1;\n", encoding="utf-8")
+    git(repo, "commit", "-q", "-am", "main moves")
+    out = reindex()                     # the stubbed run doesn't move the index
+    new = git(repo, "rev-parse", "main")
+    assert f"index: {old[:8]}  main: {new[:8]}  ⚠️ STALE (the watching server follows it)" in out
+    assert "changed_files_only=False" not in out
+
+
+def test_index_status_and_reindex_share_one_target(repo):
+    import MCPServer
+    assert MCPServer._freshness_target(str(repo)) == ("main", "main")
+    (repo / "indexer.toml").write_text("[indexer]\n", encoding="utf-8")
+    config.reset_config_cache()
+    assert MCPServer._freshness_target(str(repo)) == (None, "HEAD")
 
 
 @pytest.mark.skipif(not __import__("MCPServer")._WATCHDOG_AVAILABLE, reason="watchdog not installed")

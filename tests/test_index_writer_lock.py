@@ -226,16 +226,20 @@ def test_linked_worktrees_are_refused_unless_they_opt_in(tmp_path):
 
 # ── server instructions ──────────────────────────────────────────────────────
 
-def test_instructions_name_the_checkout_and_its_commit(index_dir):
+def test_instructions_name_the_checkout_but_no_commit(index_dir):
+    # ADR-056: a client reads these once, at connect; a quoted commit goes stale mid-session.
     _built_index(index_dir)
     text = MCPServer._server_instructions(os.getcwd())
-    assert os.getcwd() in text and "abcdef0123" in text
-    assert "reindex" in text and "Read" in text
+    assert os.getcwd() in text and "abcdef0123" not in text
+    assert "reindex" in text and "Read" in text and "index_status" in text
     assert len(text) < 1000             # every connected session pays for this
 
 
-def test_instructions_without_a_build(index_dir):
-    assert "no finished build yet" in MCPServer._server_instructions(os.getcwd())
+def test_instructions_do_not_change_when_a_build_lands(index_dir):
+    before = MCPServer._server_instructions(os.getcwd())
+    _built_index(index_dir)
+    assert MCPServer._server_instructions(os.getcwd()) == before
+    assert "no finished build yet" not in before
 
 
 # ── a server that did not write reloads what another process saved ───────────
