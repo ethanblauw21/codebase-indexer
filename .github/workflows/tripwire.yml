@@ -5,8 +5,9 @@ name: Retrieval tripwire
 # 3 min for everything else.
 #
 # PRs run it only when they touch the retrieval path listed below. Every push to
-# master runs it, so a regression a PR skipped is still caught at merge. Run it by
-# hand from the Actions tab (workflow_dispatch) for anything in between.
+# master that changes anything besides docs runs it, so a regression a PR skipped is
+# still caught at merge; docs-only merges skip it (B-071). Run it by hand from the
+# Actions tab (workflow_dispatch) for anything in between.
 #
 # Keep the list generous: a path missing here is a regression that shows up only
 # after merge. Left out on purpose: model_host.py / model_client.py (on a CPU runner
@@ -16,6 +17,10 @@ name: Retrieval tripwire
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - "docs/**"
+      - ".claude/**"
+      - "**.md"
   pull_request:
     branches: [main, master]
     paths:
