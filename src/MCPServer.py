@@ -34,36 +34,17 @@ from iterative_retriever import IterativeRetriever, RetrievalSession
 def _server_instructions(repo_path: str | None = None) -> str:
     """What every connected agent is told about this index (ADR-038, B-053).
 
-    Names the folder and the commit the index was built from, read from index_meta,
-    so an agent working on another branch or worktree knows which hits to distrust.
+    Names the folder or the ref the index is built from, so an agent working on another
+    branch or worktree knows which hits to distrust. Quotes no commit: a client reads
+    this once, at connect, so a commit here goes stale while the session runs (ADR-056).
     Kept short: every session pays for it.
     """
-    from index_location import git_ref, index_dir
+    from index_location import git_ref
     repo_path = repo_path or os.getcwd()
-    commit = verified = None
     try:
         ref = git_ref(repo_path)
-        db_path = os.path.join(repo_path, index_dir(), "graph.db")
     except ValueError:
-        ref, db_path = None, os.path.join(repo_path, ".code-index", "graph.db")
-    if os.path.exists(db_path):
-        try:
-            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-            try:
-                meta = dict(con.execute(
-                    "SELECT key, value FROM index_meta "
-                    "WHERE key IN ('last_indexed_commit', 'last_verified_at')").fetchall())
-            finally:
-                con.close()
-            commit = meta.get("last_indexed_commit")
-            verified = meta.get("last_verified_at")
-        except sqlite3.Error as exc:
-            # The instructions then say "no finished build yet"; say why (#54).
-            import sys
-            print(f"[MCP] could not read index_meta from {db_path}: {exc}",
-                  file=sys.stderr, flush=True)
-    built = (f"commit {commit[:10]}, last verified {verified}" if commit
-             else "no finished build yet")
+        ref = None
     # ADR-049 (B-021 point 3): when to reach for the index instead of Grep.
     routing = ("For how the rest of the codebase works, where a symbol is used, what writes a "
                "field, or blast radius, call `semantic_code_search`, `trace_data_flow`, "
@@ -76,23 +57,24 @@ def _server_instructions(repo_path: str | None = None) -> str:
         # ADR-042 §5: the index is a commit, read from git, not any folder.
         from index_location import ref_display
         return (
-            f"This code index reflects {ref_display(repo_path, ref)} ({built}), read straight from git: not this "
+            f"This code index reflects {ref_display(repo_path, ref)}, read straight from git: not this "
             "folder's working tree, and not your branch. For any file your branch changed "
-            f"(git diff --name-only {commit[:10] if commit else '<that commit>'}...HEAD, plus "
+            f"(git diff --name-only {ref}...HEAD, plus "
             "uncommitted edits), Read the file itself: index hits for it show the indexed "
             f"version, and line numbers may be off. {routing}"
             f"It follows {ref} on its own when that ref moves; do not call "
-            "`reindex` to pick up branch work. `index_status` reports freshness."
+            "`reindex` to pick up branch work. `index_status` reports the indexed commit "
+            "and freshness."
         )
     return (
-        f"This code index reflects ONE checkout: {repo_path} ({built}). "
+        f"This code index reflects ONE checkout: {repo_path}. "
         "It does not see edits in other branches or worktrees. For any file your branch "
-        "changed (git diff --name-only <that commit>...HEAD, plus uncommitted edits), Read "
+        "changed (git diff --name-only <indexed commit>...HEAD, plus uncommitted edits), Read "
         "the file itself: index hits for it show the indexed version, and line numbers may "
         f"be off. {routing}"
         "Never call `reindex` from a git worktree made for separate or parallel work; it "
         "refuses there, and one server per index keeps it current on its own. "
-        "`index_status` reports freshness."
+        "`index_status` reports the indexed commit and freshness."
     )
 
 
@@ -1739,57 +1721,57 @@ def reindex(changed_files_only: bool = True) -> str:
             ) from exc
 
 
+def _freshness_target(cwd: str) -> tuple[str | None, str]:
+    """``(ref, target)``: the ref a git-mode index follows (None in folder mode), and the
+    revision the index is current against (``ref or "HEAD"``, ADR-042 §5). One definition
+    for ``index_status`` and ``reindex``, which used to disagree (ADR-056)."""
+    from index_location import git_ref
+    try:
+        ref = git_ref(cwd)
+    except ValueError:
+        ref = None
+    return ref, ref or "HEAD"
+
+
+def _freshness_line(db_path: str) -> str:
+    """One line saying whether the index matches its target, or "" when git can't say."""
+    import subprocess
+    from db import CodeDB
+    ref, target = _freshness_target(os.getcwd())
+    try:
+        with CodeDB(db_path) as db:
+            last = db.meta_get("last_indexed_commit")
+        curr = subprocess.check_output(
+            ["git", "rev-parse", target], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
+        ).strip()
+    except (sqlite3.Error, FileNotFoundError, subprocess.CalledProcessError):
+        return ""   # no index, git not installed, not a repo, or the ref is gone
+    if not last:
+        return ""
+    if ref is not None:
+        from index_location import ref_display
+        target = ref_display(os.getcwd(), ref)
+    if last == curr:
+        return f"index: {last[:8]} (== {target}; current)\n"
+    return (f"index: {last[:8]}  {target}: {curr[:8]}  ⚠️ STALE"
+            + (" (the watching server follows it)" if ref else "") + "\n")
+
+
 def _reindex(changed_files_only: bool) -> str:
     """The body of `reindex`. Call it holding `_reindex_lock`."""
     import sys
     import io
     import os
     import sqlite3
-    import subprocess
     from incremental_indexer import run_incremental, INDEX_DIR, TIER_CONFIGS
     from db import CodeDB
 
     print(f"\n[MCP] reindex: changed_files_only={changed_files_only}")
 
-    # Git-aware staleness report for incremental mode (ADR-025 §5).
-    # The last-indexed commit is now read from the index_meta table in graph.db —
-    # not the retired last_indexed_commit.txt, which segmem's DB-only connector could
-    # never see. Exceptions are handled narrowly: "git absent" (FileNotFoundError) is
-    # distinguished from "git ran and failed" (CalledProcessError), instead of a blanket
-    # swallow that hid non-git-repo, no-commits, and git-missing alike.
-    _stale_warning = ""
+    # ADR-056: freshness is reported after the run, against the index's own target. The
+    # pre-run "INDEX STALENESS DETECTED" block compared the folder's HEAD in git mode too,
+    # and advised a full rebuild that the incremental run makes pointless.
     db_path = os.path.join(INDEX_DIR, "graph.db")
-    if changed_files_only:
-        _last_hash = None
-        if os.path.exists(db_path):
-            try:
-                with CodeDB(db_path) as _meta_db:
-                    _last_hash = _meta_db.meta_get("last_indexed_commit")
-            except sqlite3.Error:
-                _last_hash = None
-        if _last_hash:
-            try:
-                _curr_hash = subprocess.check_output(
-                    ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
-                ).strip()
-                if _last_hash != _curr_hash:
-                    _changed = subprocess.check_output(
-                        ["git", "diff", "--name-only", _last_hash, "HEAD"],
-                        text=True, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL
-                    ).strip()
-                    if _changed:
-                        _stale_warning = (
-                            f"⚠️  INDEX STALENESS DETECTED\n"
-                            f"   Last indexed at commit: {_last_hash[:8]}\n"
-                            f"   Current HEAD:           {_curr_hash[:8]}\n"
-                            f"   Files changed since the index was built:\n"
-                            + "\n".join(f"     - {f}" for f in _changed.splitlines() if f)
-                            + "\n   Consider reindex(changed_files_only=False) for a clean rebuild.\n\n"
-                        )
-            except FileNotFoundError:
-                pass   # git binary not installed — no staleness signal available
-            except subprocess.CalledProcessError:
-                pass   # not a git repo, or HEAD/ref invalid — nothing to compare
 
     _preserved: dict[str, tuple] = {}
     _backup_dir = None
@@ -1874,8 +1856,8 @@ def _reindex(changed_files_only: bool) -> str:
     output = _captured.getvalue().strip()
     return (
         f"--- REINDEX ({mode}) COMPLETE ---\n\n"
-        f"{_stale_warning}"
         f"{output}\n\n"
+        f"{_freshness_line(db_path)}"
         "In-memory indexes reloaded. All MCP tools now reflect the updated index."
     )
 
@@ -1964,12 +1946,7 @@ def index_status(since: str = "1d", limit: int = 20) -> str:
     ]
 
     # ADR-042 §5: a git-mode index is current when it matches its ref, not HEAD.
-    from index_location import git_ref
-    try:
-        ref = git_ref(os.getcwd())
-    except ValueError:
-        ref = None
-    target = ref or "HEAD"
+    ref, target = _freshness_target(os.getcwd())
     if last_commit:
         try:
             curr = subprocess.check_output(

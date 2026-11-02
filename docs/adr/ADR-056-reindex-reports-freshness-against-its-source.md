@@ -1,6 +1,6 @@
 # ADR-056: `reindex()` Reports Freshness Against the Index's Source
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-11-02
 **Branch:** `feature/adr-056-reindex-freshness`
 **Reviewer:** @edb
@@ -92,10 +92,13 @@ e8fd91e. In git mode, the "files your branch changed" hint also used that frozen
 
 ## Implementation Log
 
-- [ ] `_freshness_target()`; `index_status` switched to it with no change in output
-- [ ] `_reindex()`: pre-run block removed; post-run freshness line
-- [ ] `_server_instructions()`: no commit, no database read, `<ref>...HEAD` hint, still under 1,000 characters
-- [ ] Tests: a git-mode reindex from a folder on another branch prints no staleness and no rebuild advice; a moved ref shows STALE; folder mode reports `HEAD`; the instructions quote no commit
-- [ ] Full suite and flake8 (CI's flags); MCP Inspector `tools/list --strict` on a scratch folder
+- [x] `_freshness_target()`; `index_status` switched to it with no change in output
+- [x] `_reindex()`: pre-run block removed; post-run freshness line
+- [x] `_server_instructions()`: no commit, no database read, `<ref>...HEAD` hint, still under 1,000 characters
+- [x] Tests: a git-mode reindex from a folder on another branch prints no staleness and no rebuild advice; a moved ref shows STALE; folder mode reports `HEAD`; the instructions quote no commit
+- [x] Full suite and flake8 (CI's flags); MCP Inspector `tools/list --strict` on a scratch folder
 
 **Notes:**
+<!-- 2026-11-02: Gate on CPU, offline: flake8 clean, 995 passed / 2 skipped, conformance, resolution and L5X checks hold. Inspector (scratch folder, never a live index): tools/list --strict exit 0, 17 tools, 16 readOnlyHint (all but reindex); index_status isError false. -->
+<!-- 2026-11-02: Checked against both live setups with this branch's code, read-only: Gantt resolves to refs/code-index/target (→ origin/integration/staging-2026-10-01), V2 to origin/main. -->
+<!-- 2026-11-02: Out of scope, noticed on the empty scratch index: index_status reports "chunker older than v2" and advises a full re-index when no build exists. Separate code path; a backlog item, not this ADR. -->
