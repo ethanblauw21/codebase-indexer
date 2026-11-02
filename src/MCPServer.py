@@ -68,7 +68,10 @@ def _server_instructions(repo_path: str | None = None) -> str:
     routing = ("For how the rest of the codebase works, where a symbol is used, what writes a "
                "field, or blast radius, call `semantic_code_search`, `trace_data_flow`, "
                "`what_writes` or `analyze_blast_radius` before Grep; use Grep for exact "
-               "strings and for the files your branch changed. ")
+               "strings. "
+               # ADR-050 open question 2: answer from the symbol table before a full Read.
+               "Call `get_file_outline` before Reading a whole file, and `get_symbol_source` "
+               "for one function (indexed version). ")
     if ref is not None:
         # ADR-042 §5: the index is a commit, read from git, not any folder.
         from index_location import ref_display
@@ -2849,8 +2852,8 @@ def changed_symbols(ref: str, blast_radius: bool = False, limit: int = 100) -> s
     at its merge base with the indexed code, so 'main' means "since this branch left
     main". blast_radius=True also lists each changed symbol's resolved callers (and a
     count of unverified ones) and each changed file's importers. Symbols deleted since
-    `ref` are not in the index; deleted files are listed by name. `limit` caps the
-    symbols listed (0 = all).
+    `ref` are not in the index; deleted files are listed by name. Files git ignores are
+    not diffed, even if the index holds them. `limit` caps the symbols listed (0 = all).
     """
     print(f"\n[MCP] changed_symbols: ref='{ref}' blast_radius={blast_radius}")
     _check_ref_shape(ref)

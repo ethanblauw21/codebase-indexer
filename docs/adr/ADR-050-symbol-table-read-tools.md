@@ -1,6 +1,6 @@
 # ADR-050: Answer from the Symbol Table: File Outline, One Symbol's Source, Changed Symbols
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-10-20
 **Branch:** `feature/adr-050-symbol-tools`
 **Reviewer:** @edb
@@ -177,7 +177,8 @@ over new read-only `CodeDB` methods. They do no retrieval and load no model.
 - [ ] Once ADR-049 merges: confirm the three tools list `readOnlyHint` and their output goes through its
   redaction. They are registered with the plain `@_tool()`, so both should arrive with no change here.
 
-**Open questions for @edb:**
+**Open questions for @edb** (answered 2026-11-02: "all recommended", after a walk-through with an
+example for each):
 
 1. **A class whose method body changed is refused.** Its span grew or shrank, so no same-length span
    holds its skeleton. The answer is honest, but for a class it is coarse. Accept it, or verify a class
@@ -189,6 +190,19 @@ over new read-only `CodeDB` methods. They do no retrieval and load no model.
    follows `scan_policy`, not `.gitignore`, and `git diff` follows git. Rare in practice; worth a note?
 4. **No raw-diff mode.** `changed_symbols` always diffs from the merge base. A `--no-merge-base` switch
    is easy if review against a moving tip is ever wanted.
+
+**Answers, 2026-11-02:**
+1. **Accepted as built.** A class with a changed method is refused; ask for the method or Read the file.
+   Serving the class would include the changed method, which is the stale-code trap.
+2. **Accepted, with a clause.** The routing line in `_server_instructions` now also says "Call
+   `get_file_outline` before Reading a whole file, and `get_symbol_source` for one function (indexed
+   version)." Shortened from the proposed line, and the routing line's "and for the files your branch
+   changed" dropped (both branches already say to Read those), to keep the instructions under their
+   1,000-character test budget. Both live repos index a git ref, so the
+   version clause matters (B-066's survey). This also closes ADR-049's open item 4.
+3. **A note, nothing more.** `changed_symbols`' description says files git ignores are not diffed.
+   Folder mode only; a git-mode index holds only tracked files.
+4. **No.** The merge base is what a reviewer means; add the switch only when someone asks.
 
 **Notes:**
 

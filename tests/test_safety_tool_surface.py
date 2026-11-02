@@ -104,5 +104,6 @@ def test_both_instruction_branches_route_to_the_index_before_grep(tmp_path, monk
     assert ("read straight from git" in text) is git_mode
     assert "before Grep" in text and "exact strings" in text
     registered = {t.name for t in _registered()}
-    for name in ("semantic_code_search", "trace_data_flow", "what_writes", "analyze_blast_radius"):
+    for name in ("semantic_code_search", "trace_data_flow", "what_writes", "analyze_blast_radius",
+                 "get_file_outline", "get_symbol_source"):
         assert f"`{name}`" in text and name in registered      # names only tools that exist
