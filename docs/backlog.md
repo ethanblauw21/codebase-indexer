@@ -103,8 +103,9 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-067](#b-067) | Nothing records which tools are called, so usage can only be surveyed from agents' memory | cross-session survey, 2026-11-02 | S | raw |
 | [B-068](#b-068) | A git-mode index on an alias ref goes stale without warning when the alias's branch is retired | cross-session survey, 2026-11-02 | S | raw |
 | [B-069](#b-069) | `trace_data_flow` can't see writes made through a project's own helper; no way to add rules in `indexer.toml` | ADR-053 open question 3, 2026-11-02 | S | raw |
-| [B-070](#b-070) | In git mode, `reindex()` warns the index is stale and advises a full rebuild, because it compares against the checkout's `HEAD` instead of the indexed ref | live passes on V2 and Gantt, 2026-11-02 | S | raw |
+| [B-070](#b-070) | In git mode, `reindex()` warns the index is stale and advises a full rebuild, because it compares against the checkout's `HEAD` instead of the indexed ref | live passes on V2 and Gantt, 2026-11-02 | S | **done** (#99, ADR-056) |
 | [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | **done** (#97) |
+| [B-072](#b-072) | `index_status` (and `semantic_code_search`) on a never-built index say the chunker is older than v2 and advise a full re-index | ADR-056's Inspector check, 2026-11-02 | S | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2302,7 +2303,7 @@ shape (`definition`, `producer`, `file_marker`, with `{name}` for the traced nam
 ### B-070 — In git mode, `reindex()` reports a false staleness warning and advises a full rebuild
 
 **Source:** the first live passes on the post-ADR-055 code, InventoryApp-V2 and GanttWebApp,
-2026-11-02 · **Status:** raw · **Size:** S
+2026-11-02 · **Status:** **done** — [#99](https://github.com/ethanblauw21/codebase-indexer/pull/99), ADR-056 · **Size:** S
 
 `_reindex()` in `src/MCPServer.py` builds its "INDEX STALENESS DETECTED" block by comparing
 `last_indexed_commit` with `git rev-parse HEAD` and listing `git diff --name-only <last> HEAD`. It
@@ -2386,3 +2387,40 @@ one-line change under `src/` still starts both.
 **Watch for:** a `.md` file that a CI check reads would be skipped too. As of 2026-11-02, nothing
 CI runs reads one. `tools/conformance_eval.py` touches `README.md` only under `--write-readme`,
 which CI doesn't run, and `tools/gen_pr_body.py` isn't in CI. Check again when adding a check.
+
+### B-072 — `index_status` on a never-built index says the chunker is too old and advises a full re-index
+
+**Source:** ADR-056's MCP Inspector check on an empty scratch folder, 2026-11-02 · **Status:** raw · **Size:** S
+
+`chunker_version_warning()` in `src/incremental_indexer.py` reads `chunker_version` from
+`index_meta` and, when the key is absent, reports "built by a chunker older than v2" and advises
+`reindex(changed_files_only=False)`. An absent key means two different things: an index built before
+B-029 recorded the version (the case the wording was written for), or no index at all. On a folder
+where nothing has been built, `index_status` returned:
+
+```
+last_verified_at:    (never recorded)
+files_total:         ?
+⚠️ This index was built by a chunker older than v2; the current chunker is v3. … Run a full re-index …
+last_indexed_commit: (none recorded)
+```
+
+The advice is wrong (nothing exists to re-index "fully"; any build is a fresh build) and the claim is
+false. It is the same failure as B-070: a warning that sends an agent to a full rebuild for no reason.
+Low cost today: both live indexes are built and record v3. It bites on a new repo's first session.
+
+Callers: `run_incremental()` is safe, because it skips the check on a fresh build.
+`semantic_code_search` is not: it has no built-index guard (only `trace_data_flow` and
+`map_module_communities` call `_require_built_index()`), so on an unbuilt index the same warning
+heads its empty results. Not run, read from the code.
+
+**Want:** fix it once, in `chunker_version_warning()`: when no build has finished
+(`last_verified_at` absent, the ADR-025 §4 test that `_index_built()` uses) return None, so neither
+tool warns. `index_status` says "no index built yet; run `reindex`" instead, and `files_total` reads
+`0` rather than `?`.
+
+**Done when:** tests call `index_status` and `semantic_code_search` on an empty `graph.db` and get no
+chunker warning and no "full re-index" advice, and a built index without a `chunker_version` key
+still gets the warning.
+
+**Related:** [B-029](#b-029) (the version marker), [B-070](#b-070) / ADR-056 (same class of misleading advice).
