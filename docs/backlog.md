@@ -112,7 +112,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-078](#b-078) | A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default | PR-agent install feedback, 2026-11-12 | S (doc + existing numbers) → M (if it needs a new measurement) | raw |
-| [B-079](#b-079) | `accelerate` is undeclared, so a fresh install's summarizer never loads, and the run blames a full GPU and a chunking disagreement | fresh install on a second PC, relayed by the conductor session, 2026-11-12 | S | **done** (#PR, ADR-058) |
+| [B-079](#b-079) | `accelerate` is undeclared, so a fresh install's summarizer never loads, and the run blames a full GPU and a chunking disagreement | fresh install on a second PC, relayed by the conductor session, 2026-11-12 | S | **done** (#104, ADR-058) |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2662,7 +2662,7 @@ ADR-030 (what summaries are worth), [B-012](#b-012).
 
 **Source:** a session doing a fresh install on another PC (Windows, Python 3.12, CUDA torch
 2.11+cu128, transformers 4.53.3), relayed by the conductor session, 2026-11-12; @edb: "Yes, please
-add it to be fixed" · **Status:** done (#PR, ADR-058) · **Size:** S
+add it to be fixed" · **Status:** done (#104, ADR-058) · **Size:** S
 
 `accelerate` was in neither `pyproject.toml` nor `requirements.txt`, though the README's install
 section says the summarizer can't load without it. A fresh `pip install -e .` built 659 files /
