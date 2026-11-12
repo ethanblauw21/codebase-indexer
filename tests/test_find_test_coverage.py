@@ -109,3 +109,26 @@ def test_dot_slash_and_backslash_paths_are_paths(stub_index):
         direct = _direct(M.find_test_coverage(given))
         assert "app/orders/page.test.tsx" in direct
         assert "app/users/page.test.tsx" not in direct
+
+
+# --- ADR-060 (B-073): format="json" --------------------------------------------------
+
+def test_coverage_as_json(stub_index):
+    import json
+    stub_index("app/orders/page.tsx", "app/users/page.tsx", "app/orders/page.test.tsx")
+    out = json.loads(M.find_test_coverage("app/users/page.tsx", format="json"))
+    assert out["direct"] == []
+    assert out["elsewhere"] == ["app/orders/page.test.tsx"]
+    hit = json.loads(M.find_test_coverage("app/orders/page.tsx", format="json"))
+    assert [d["file"] for d in hit["direct"]] == ["app/orders/page.test.tsx"]
+    none = json.loads(M.find_test_coverage("src/x.py", format="json"))
+    # No Python test is indexed (the patterns are per language), so every tier is empty.
+    assert none == {"source_file": "src/x.py", "symbol": None, "test_files_indexed": 0,
+                    "direct": [], "direct_expected": [], "elsewhere": [], "semantic": [],
+                    "patterns": ["_test.py", "test_*.py"]}
+
+
+def test_coverage_refuses_an_unknown_format(stub_index):
+    stub_index("src/a.py")
+    with pytest.raises(ValueError, match="format must be"):
+        M.find_test_coverage("src/a.py", format="md")

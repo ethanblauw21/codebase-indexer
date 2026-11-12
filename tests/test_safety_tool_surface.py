@@ -95,6 +95,31 @@ def test_the_plain_function_is_not_redacted(search_returning_secrets):
     assert FAKE_TOKEN in out and FAKE_PEM in out and "[REDACTED" not in out
 
 
+# Secrets whose patterns need a bare quote, which json.dumps escapes (B-073 review).
+_QUOTED = {"API_KEY = \"abcd1234efgh5678\"": "abcd1234efgh5678",
+           "DB_PASSWORD = \"hunter2hunter2\"": "hunter2hunter2",
+           '{"api_key": "abcd1234efgh5678"}': "abcd1234efgh5678",
+           "aws_secret_access_key = \"" + "A" * 20 + "b/c+" * 5 + "\"": "A" * 20 + "b/c+" * 5}
+
+
+@pytest.mark.parametrize("line", list(_QUOTED))
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_quoted_secrets_are_redacted_in_both_formats(monkeypatch, line, fmt):
+    chunk = _Chunk(file="src/settings.py", scope="settings", tier="tier1_surgical",
+                   text=line + "\n")
+    monkeypatch.setattr(M, "_ensure_indexes", lambda: SimpleNamespace(db=None))
+    monkeypatch.setattr(M, "_search", lambda query, top_n=10: [chunk])
+    monkeypatch.setattr(M, "embed_tokenizer", SimpleNamespace(count_tokens=len))
+    import incremental_indexer
+    monkeypatch.setattr(incremental_indexer, "chunker_version_warning", lambda db: "")
+    out = _text(anyio.run(M.mcp.call_tool, "semantic_code_search",
+                          {"query": "settings", "format": fmt}))
+    assert _QUOTED[line] not in out and "[REDACTED:" in out
+    if fmt == "json":
+        import json
+        assert json.loads(out)["hits"][0]["file"] == "src/settings.py"
+
+
 @pytest.mark.parametrize("git_mode", [False, True])
 def test_both_instruction_branches_route_to_the_index_before_grep(tmp_path, monkeypatch, git_mode):
     import index_location

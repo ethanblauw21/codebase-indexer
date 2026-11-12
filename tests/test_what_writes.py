@@ -147,3 +147,21 @@ def test_alias_is_reported_as_a_hardware_endpoint(wired):
     assert "ALIAS" in out
     assert "Local:1:I.Data.3" in out
     assert "driven by the I/O module" in out
+
+
+# ----------------------------------------------------------- format="json" (ADR-060)
+
+def test_writers_as_json(wired):
+    import json
+    out = json.loads(M.what_writes("Valve_Open", format="json"))
+    assert out["found"] is True and out["readers"] is None
+    assert [w["routine"] for w in out["writers"]] == ["Filler.Sequence"]
+    assert out["writers"][0]["rungs"] == sorted(out["writers"][0]["rungs"])
+    assert len(out["writers"][0]["rungs"]) == 2
+    miss = json.loads(M.what_writes("Weighscale_Total", format="json"))
+    assert miss["found"] is False
+
+
+def test_what_writes_refuses_an_unknown_format(wired):
+    with pytest.raises(ValueError, match="format must be"):
+        M.what_writes("Valve_Open", format="yaml")
