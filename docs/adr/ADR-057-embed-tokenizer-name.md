@@ -1,6 +1,6 @@
 # ADR-057: Name the Embedder's Tokenizer for What It Follows, and Say What the Output Cap Is For
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-11-12
 **Branch:** `feature/adr-057-embed-tokenizer-name`
 **Reviewer:** @edb
