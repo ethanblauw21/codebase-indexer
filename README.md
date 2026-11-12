@@ -113,8 +113,9 @@ pip install -e .              # installs the dependencies and two commands: code
 ```
 
 `pip install -r requirements.txt` installs the same dependencies without the commands. Two pins
-matter: `mcp[cli]<2` (2.x removed the FastMCP server this uses, B-036) and `accelerate` (without it
-the summarizer can't load, and summaries are skipped).
+matter: `mcp[cli]<2` (2.x removed the FastMCP server this uses, B-036) and `accelerate` (the summarizer
+can't load without it; with summarization on, the build stops before summarizing, names the
+missing package and exits 2, ADR-058).
 
 > Optional: `pip install leidenalg python-igraph` enables the higher-quality Leiden
 > community-detection backend for `map_module_communities`. Without it the engine uses

@@ -27,8 +27,8 @@ dimension = 1536
 [summarization]
 # LLM summaries of each chunk: a second model (2.9 GiB), and a summarize pass that is
 # most of a first build's time. false skips both, at a cost in intent and whole-file
-# retrieval (README, "What a first install and build cost"). The lite setting:
-# enabled = false
+# retrieval (README, "What a first install and build cost"). The lite setting is
+# false: change the value below.
 enabled = true
 
 [ignore]
