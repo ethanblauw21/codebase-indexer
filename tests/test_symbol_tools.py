@@ -557,13 +557,32 @@ def test_symbol_source_as_json(indexed):
     assert (out["file"], out["start_line"], out["end_line"]) == ("pkg/mod.py", 18, 19)
     assert out["source"] == "def top(a, b):\n    return a + b"
     many = json.loads(M.get_symbol_source("run", format="json"))
-    assert many["ambiguous"] is True
+    assert many["ambiguous"] is True and many["count"] == 2
     assert {m["file"] for m in many["matches"]} == {"pkg/mod.py", "web/svc.ts"}
 
 
+def test_ambiguous_json_caps_matches_like_the_text(indexed):
+    repo, db = indexed
+    body = "".join(f"class C{i}:\n    def run(self):\n        pass\n" for i in range(32))
+    _write(repo, "pkg/many.py", body)
+    _index(db, repo, ["pkg/many.py"])
+    many = json.loads(M.get_symbol_source("run", format="json"))
+    assert many["count"] == 34 and len(many["matches"]) == 30
+
+
 def test_text_is_still_the_default(indexed):
-    assert M.get_file_outline("pkg/mod.py") == M.get_file_outline("pkg/mod.py", format="text")
-    assert M.get_symbol_source("top") == M.get_symbol_source("top", format="text")
+    # Fixed strings, not text-vs-text: a JSON default would fail both.
+    assert M.get_file_outline("pkg/mod.py") == (
+        "--- OUTLINE: pkg/mod.py (5 symbol(s)) ---\n"
+        "L4-15  class  class Greeter\n"
+        "  L7-8  method  def __init__(self, name: str) -> None\n"
+        "  L11-15  method  def hello(x: int, y: int = 2) -> str\n"
+        "L18-19  function  def top(a, b)\n"
+        "L22-23  function  async def run()")
+    assert M.get_symbol_source("top") == (
+        "--- pkg/mod.py::top  [function]  pkg/mod.py:18-19 ---\n"
+        "   18  def top(a, b):\n"
+        "   19      return a + b")
 
 
 @pytest.mark.parametrize("call", [

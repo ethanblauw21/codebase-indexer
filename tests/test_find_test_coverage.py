@@ -122,7 +122,10 @@ def test_coverage_as_json(stub_index):
     hit = json.loads(M.find_test_coverage("app/orders/page.tsx", format="json"))
     assert [d["file"] for d in hit["direct"]] == ["app/orders/page.test.tsx"]
     none = json.loads(M.find_test_coverage("src/x.py", format="json"))
-    assert none["test_files_indexed"] == 0 or none["direct"] == []
+    # No Python test is indexed (the patterns are per language), so every tier is empty.
+    assert none == {"source_file": "src/x.py", "symbol": None, "test_files_indexed": 0,
+                    "direct": [], "direct_expected": [], "elsewhere": [], "semantic": [],
+                    "patterns": ["_test.py", "test_*.py"]}
 
 
 def test_coverage_refuses_an_unknown_format(stub_index):

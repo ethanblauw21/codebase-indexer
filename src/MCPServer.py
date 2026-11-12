@@ -246,7 +246,14 @@ def _tool(*, reads_index: bool = True, **hints):
                 if _read_limiter is None:
                     _read_limiter = anyio.CapacityLimiter(1)
                 out = await anyio.to_thread.run_sync(call, limiter=_read_limiter)
-            return redact(out) if isinstance(out, str) else out
+            if not isinstance(out, str):
+                return out
+            if kwargs.get("format") == "json":
+                # json.dumps escapes quotes as \", which the quoted-value patterns
+                # (secret-assignment, aws-secret-key) need bare: redact the strings
+                # inside, then re-encode.
+                out = _json(_redact_leaves(json.loads(out), redact))
+            return redact(out)
 
         mcp.tool(description=inspect.cleandoc(fn.__doc__ or ""), annotations=annotations,
                  structured_output=False)(run_in_thread)
@@ -267,6 +274,17 @@ def _check_format(format: str) -> None:
 
 def _json(obj) -> str:
     return json.dumps(obj, ensure_ascii=False)
+
+
+def _redact_leaves(obj, redact):
+    """``obj`` with ``redact`` applied to every string in it, keys excepted."""
+    if isinstance(obj, str):
+        return redact(obj)
+    if isinstance(obj, list):
+        return [_redact_leaves(v, redact) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _redact_leaves(v, redact) for k, v in obj.items()}
+    return obj
 
 
 def get_clean_scope(doc):
@@ -2948,9 +2966,9 @@ def get_symbol_source(symbol: str, file: str = "", format: OutputFormat = "text"
             msg += " Symbols starting with that name:\n" + "".join(f"  {f}\n" for f in near)
         raise LookupError(msg)
     if len(hits) > 1 and format == "json":
-        return _json({"symbol": symbol, "ambiguous": True, "matches": [
+        return _json({"symbol": symbol, "ambiguous": True, "count": len(hits), "matches": [
             {"fqn": h["fqn"], "kind": h["kind"], "file": h["path"],
-             "start_line": h["start_line"], "end_line": h["end_line"]} for h in hits]})
+             "start_line": h["start_line"], "end_line": h["end_line"]} for h in hits[:30]]})
     if len(hits) > 1:
         out = [f"'{symbol}' is ambiguous: {len(hits)} symbols match. Call again with `file` "
                "or a qualified name (e.g. 'Class.method'):"]
