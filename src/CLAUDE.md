@@ -80,7 +80,7 @@ Compares tier-1-only baseline vs. three-tier RRF fusion across a fixed 10-query 
 All models are downloaded automatically by HuggingFace on first use. To pre-download before going offline (recommended for CI or air-gapped environments), use `huggingface-cli` (ships with `huggingface_hub`, a transitive dep of `sentence-transformers`):
 
 ```bash
-huggingface-cli download BAAI/bge-code-v1                      # embedder (~3 GB)
+huggingface-cli download BAAI/bge-code-v1                      # embedder (~5.8 GiB download, fp32; 2.9 GB loaded in bf16)
 huggingface-cli download Qwen/Qwen3-Reranker-0.6B              # reranker (~1.2 GB, optional)
 huggingface-cli download Qwen/Qwen2.5-Coder-1.5B-Instruct      # summarizer (~3 GB, optional)
 ```

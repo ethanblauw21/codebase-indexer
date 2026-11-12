@@ -120,6 +120,46 @@ the summarizer can't load, and summaries are skipped).
 > community-detection backend for `map_module_communities`. Without it the engine uses
 > NetworkX's built-in Louvain — no functionality is lost.
 
+### What a first install and build cost
+
+Sizes as downloaded, from this machine's caches (2026-11-12):
+
+| What | Size | When |
+|---|---|---|
+| Embedder `BAAI/bge-code-v1` | 5.8 GiB (fp32 weights; it loads as 2.9 GB in bf16 on a GPU) | always |
+| Summarizer `Qwen/Qwen2.5-Coder-1.5B-Instruct` | 2.9 GiB | `[summarization].enabled = true`, the default |
+| Reranker `Qwen/Qwen3-Reranker-0.6B` | 1.2 GiB | only with `[reranker].enabled = true`; off by default |
+| PyTorch with CUDA (`torch 2.9.0+cu129`) | 4.6 GiB installed | for a GPU; the CPU-only build is much smaller |
+
+So a default first install is about 8.7 GiB of models plus the CUDA PyTorch.
+
+**The summarizer is most of the first build's time.** On this repository (about 1,500 distinct
+chunk texts; 8 GB RTX PRO 1000 laptop GPU on AC power, summarizer fp16, embedder bf16; 2026-09-24,
+[ADR-027](docs/adr/ADR-027-summarizer-adaptive-batching.md)), summarizing took 16.3 min and embedding
+96 s. On a CPU, the same repository was projected at 6.3 h to summarize and 32 min to embed (a
+projection from timed samples, not a full run). Later builds summarize only changed chunks.
+
+**To start lighter, set `[summarization].enabled = false`** (one line in
+[`examples/indexer.toml`](examples/indexer.toml)). That skips the summarizer download and its pass.
+What it costs, from [ADR-030](docs/adr/ADR-030-separate-summary-index.md) Verification 5 (2026-09-25:
+bge-code-v1 embedder, Qwen2.5-Coder-1.5B summaries, reranker off, MRR@10 over p-queue, zustand and
+click, paired bootstrap 95% intervals):
+
+| Question type | Queries | Summaries' gain (MRR@10) |
+|---|---|---|
+| Names a symbol | 83 | +0.012, not significant |
+| Describes what code does, with no names | 95 | +0.052 (+0.009 to +0.095) |
+| Answer is a file, any chunk of it | 40 | +0.076 (+0.001 to +0.151) |
+| Answer is a file, as a whole | 40 | **+0.242** (+0.149 to +0.339) |
+
+So without summaries, symbol lookups are unchanged and whole-file questions lose the most. Nobody has
+measured the "which files does this diff touch" question; the file-level rows are the closest.
+`[summarization].tiers = [1]` (functions only) is the other knob: it skips the long tier-2/3 prompts,
+which take most of the summarizer's time. In the one measurement (ADR-030 Verification 3, 15 file
+queries, on indexes later found to carry duplicate vectors), it left whole-file retrieval below no
+summaries at all, so it is not a recommended middle setting. [B-065](docs/backlog.md#b-065) plans
+the clean measurement.
+
 ## Indexing a project
 
 Run the first build from a terminal, in the project's root folder:
@@ -128,10 +168,10 @@ Run the first build from a terminal, in the project's root folder:
 code-indexer                  # or: python /path/to/indexer/src/incremental_indexer.py
 ```
 
-**Expect a long first run.** The first use downloads the models (about 3 GB for the embedder plus
-the summarizer). The build then summarizes every chunk and embeds it: about 17.6 min for a
-120-file repository on an 8 GB laptop GPU, and roughly an hour for a 500-file one. Much slower on a
-CPU. Later runs re-process only changed files, and summaries are cached by chunk text. The build
+**Expect a long first run.** The first use downloads the models (about 8.7 GiB with the
+summarizer; see [What a first install and build cost](#what-a-first-install-and-build-cost)). The
+build then summarizes every chunk and embeds it: about 17.6 min for a 120-file repository on an
+8 GB laptop GPU, and roughly an hour for a 500-file one. Much slower on a CPU. Later runs re-process only changed files, and summaries are cached by chunk text. The build
 ends "Done successfully", or "Done with warnings" when summaries were skipped.
 
 The index goes in `.code-index/` in the project folder. Configure it per project with an

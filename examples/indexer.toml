@@ -25,8 +25,10 @@ model_id = "BAAI/bge-code-v1"
 dimension = 1536
 
 [summarization]
-# LLM summaries of each chunk: a second ~3 GB model, and a summarize pass in every
-# build. false skips both, at a cost in intent and whole-file retrieval.
+# LLM summaries of each chunk: a second model (2.9 GiB), and a summarize pass that is
+# most of a first build's time. false skips both, at a cost in intent and whole-file
+# retrieval (README, "What a first install and build cost"). The lite setting:
+# enabled = false
 enabled = true
 
 [ignore]
