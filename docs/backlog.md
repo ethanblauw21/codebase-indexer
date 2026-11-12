@@ -106,7 +106,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-070](#b-070) | In git mode, `reindex()` warns the index is stale and advises a full rebuild, because it compares against the checkout's `HEAD` instead of the indexed ref | live passes on V2 and Gantt, 2026-11-02 | S | **done** (#99, ADR-056) |
 | [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | **done** (#97) |
 | [B-072](#b-072) | `index_status` (and `semantic_code_search`) on a never-built index say the chunker is older than v2 and advise a full re-index | ADR-056's Inspector check, 2026-11-02 | S | raw |
-| [B-073](#b-073) | `semantic_code_search` and `find_test_coverage` return only LLM-oriented text, so a programmatic caller regexes the `--- FILE: … ---` lines; no `format="json"` | PR-agent install feedback, 2026-11-12 | S–M | raw |
+| [B-073](#b-073) | `semantic_code_search` and `find_test_coverage` return only LLM-oriented text, so a programmatic caller regexes the `--- FILE: … ---` lines; no `format="json"` (@edb leans to adding it to the other tools too) | PR-agent install feedback, 2026-11-12 | M (S–M for the two named tools) | raw |
 | [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-075](#b-075) | `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules | PR-agent install feedback, 2026-11-12 | M | raw |
 | [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
@@ -2444,7 +2444,7 @@ Keep those intact (B-075 in particular must not break the last one).
 ### B-073 — `semantic_code_search` and `find_test_coverage` return only LLM-oriented text; there is no `format="json"`
 
 **Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
-**Status:** raw · **Size:** S–M
+**Status:** raw · **Size:** M (S–M for the two named tools)
 
 Every tool returns a string written for an agent to read. A program that calls the tools (the PR
 agent that sent this, which wants "which files should I read for this diff") has to parse that
@@ -2456,21 +2456,30 @@ the wording breaks the caller without a failing test on this side, because nothi
 text as an interface.
 
 **Want:** an optional `format` argument, `"text"` (default, unchanged) or `"json"`, on
-`semantic_code_search` and `find_test_coverage`. The JSON is a string a caller can `json.loads`:
+`semantic_code_search` and `find_test_coverage`, and on the other tools as well (see the leaning
+below). The JSON is a string a caller can `json.loads`:
 a list of hits, each with `file`, `scope`, `score` and `source` where the retriever supplies them,
 the line range where the chunk carries one, and `text`. It goes through the same token budget as the
 text form (`_pack_results()`), and says when it dropped hits. An unknown `format` value comes back
 as `isError`, not as text with an error message in it.
 
-**Open question for @edb:** whether the other tools get it too. The asker named only these two.
-`get_symbol_source`, `get_file_outline` and `what_writes` are the next most likely to be called by
-program. Decide before shaping, because an argument added to every tool also grows every tool's
-schema, and every connected session pays for that (B-019 measured the cost).
+**@edb's leaning (2026-11-12, via the conductor session):** "It should probably give json output for
+other tools too." So the asker's two tools are the start, not the whole of it. `get_symbol_source`,
+`get_file_outline` and `what_writes` are the next most likely to be called by program; whether every
+one of the 17 tools gets it, or only the lookup and search ones, is for whoever builds it to settle
+and say. It is a leaning, not a ruling ("probably"). Each tool needs its own JSON shape, because the
+analysis tools build their text from mixed sections, so that part is more than a flag.
+
+**Cost to weigh when building it:** an argument added to every tool also grows every tool's schema,
+and every connected session pays for that (B-019 measured the cost). Keep the addition small: one
+short description for `format`, defined once and shared by every tool, not a paragraph per tool.
+Measure `tools/list` before and after, and treat a description that grows by more than the one
+argument as a defect.
 
 **Done when:** an Inspector `tools/call` with `format=json` returns parseable JSON for a built
-index; a call without `format` returns byte-identical output to today; a bad `format` gives
-`isError: true`; and `tools/list --strict` still exits 0 with no tool description grown by more than
-the one argument.
+index, on every tool that took the argument; a call without `format` returns byte-identical output to
+today; a bad `format` gives `isError: true`; and `tools/list --strict` still exits 0 with no tool
+description grown by more than the one argument.
 
 **Related:** [B-019](#b-019) (schema cost), [B-030](#b-030) (the token budget), [B-045](#b-045)
 (`readOnlyHint`), [B-016](#b-016) and [B-017](#b-017) (the lookup tools, built in ADR-050).
