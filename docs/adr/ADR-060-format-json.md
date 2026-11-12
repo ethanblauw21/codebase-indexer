@@ -36,6 +36,11 @@ lines out of `find_test_coverage`, and nothing on this side treated that wording
   they built before; the JSON branch returns before the text is assembled.
 - Errors stay errors in both forms (unknown file, unknown symbol, a symbol changed since indexing):
   they raise, so they are `isError` either way.
+- **Redaction runs on the strings inside the JSON, not on the encoded text.** `json.dumps` writes
+  `"` as `\"`, and the quoted-value patterns in `redact.py` (secret-assignment, aws-secret-key)
+  need a bare quote, so redacting the encoded string let `API_KEY = "…"` through. The `_tool`
+  wrapper decodes a `format="json"` result, redacts every string leaf, re-encodes, then redacts the
+  whole string as for text. The plain functions stay unredacted (ADR-049 §5). Found in review.
 
 ## Consequences
 
@@ -68,7 +73,12 @@ interface, so renaming one is a breaking change.
       `format=xml` → `isError: true` (exit 5).
 - [x] Gates, 2026-11-12, CPU only (`CODE_INDEXER_DEVICE=cpu HF_HUB_OFFLINE=1`): flake8, collect,
       conformance, resolution and l5x teeth checks exit 0; 1018 passed, 2 skipped.
+- [x] Review fix (JSON redaction, ambiguous cap), 2026-11-12, after merging master (#102 rename
+      applied, #104, #107): gates exit 0, 1036 passed, 2 skipped. Inspector, fixture with fake
+      `API_KEY = "…"` and `DB_PASSWORD = "…"` inside a function: `get_symbol_source` text and
+      `format=json` and `semantic_code_search format=json` all return `[REDACTED:secret-assignment]`,
+      no secret value, JSON still parses; `tools/list --strict` exit 0; `format=xml` → `isError: true`.
 
 **Notes:**
-- `semantic_code_search`'s new JSON line calls `jina_tokenizer.count_tokens`, which #102 (B-076)
-  renames without an alias. Whichever of the two merges second renames that one call on rebase.
+- #102 (B-076) renamed `jina_tokenizer` to `embed_tokenizer`; the JSON line here was renamed when
+  master was merged in.
