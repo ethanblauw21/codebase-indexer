@@ -8,6 +8,7 @@ the test.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -537,3 +538,38 @@ def test_success_reaches_the_client_as_a_result(indexed):
     assert "class Greeter" in result.content[0].text
     result = _call("get_symbol_source", {"symbol": "run"})
     assert not result.isError and "ambiguous" in result.content[0].text
+
+
+# ── format="json" (ADR-060, B-073) ───────────────────────────────────────────
+
+def test_outline_as_json(indexed):
+    out = json.loads(M.get_file_outline("pkg/mod.py", format="json"))
+    assert out["file"] == "pkg/mod.py" and out["changed_since_indexed"] is False
+    by_name = {s["name"]: s for s in out["symbols"]}
+    assert by_name["Greeter"]["depth"] == 0 and by_name["hello"]["depth"] == 1
+    assert (by_name["top"]["start_line"], by_name["top"]["end_line"]) == (18, 19)
+    assert by_name["hello"]["signature"] == "def hello(x: int, y: int = 2) -> str"
+
+
+def test_symbol_source_as_json(indexed):
+    out = json.loads(M.get_symbol_source("top", format="json"))
+    assert out["fqn"] == "pkg/mod.py::top" and out["ambiguous"] is False
+    assert (out["file"], out["start_line"], out["end_line"]) == ("pkg/mod.py", 18, 19)
+    assert out["source"] == "def top(a, b):\n    return a + b"
+    many = json.loads(M.get_symbol_source("run", format="json"))
+    assert many["ambiguous"] is True
+    assert {m["file"] for m in many["matches"]} == {"pkg/mod.py", "web/svc.ts"}
+
+
+def test_text_is_still_the_default(indexed):
+    assert M.get_file_outline("pkg/mod.py") == M.get_file_outline("pkg/mod.py", format="text")
+    assert M.get_symbol_source("top") == M.get_symbol_source("top", format="text")
+
+
+@pytest.mark.parametrize("call", [
+    lambda: M.get_file_outline("pkg/mod.py", format="xml"),
+    lambda: M.get_symbol_source("top", format="JSON"),
+])
+def test_an_unknown_format_is_an_error(indexed, call):
+    with pytest.raises(ValueError, match='format must be "text" or "json"'):
+        call()
