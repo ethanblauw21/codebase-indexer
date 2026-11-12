@@ -1,8 +1,9 @@
-# indexer.toml — Per-repo configuration for the code indexer.
+# indexer.toml — this repository's own config, and the reference for every key.
 #
-# Copy or symlink this file to each repository root you want to index,
-# then edit the values below.  All paths are relative to the directory
-# where this file lives (the repo root).
+# To index another repository, start from examples/indexer.toml instead: it holds
+# only the keys a new repository decides. This file also carries this repo's own
+# settings and the [eval] block read by tools/coir_eval.py, which mean nothing
+# elsewhere. All paths are relative to the directory where this file lives.
 #
 # Install with:  pip install -e /path/to/indexer
 # Run indexer:   code-indexer

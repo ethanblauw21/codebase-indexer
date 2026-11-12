@@ -1,0 +1,39 @@
+# indexer.toml — a starting config for a repository you want to index.
+#
+# Copy this file to the root of that repository and edit the values below. Every
+# value set here is the code default, so the file as shipped changes nothing; it
+# lists the decisions a new repository makes. Keys you leave out keep their defaults.
+# Every other key, with the reason for its default, is in the indexer's own
+# indexer.toml (the reference). Paths are relative to this file's folder.
+
+[indexer]
+# What is indexed. "worktree" indexes this folder as checked out. "git:<ref>" indexes
+# that commit's tree from git objects, shared by every worktree of the repository and
+# followed when the ref moves (it never fetches). ADR-042.
+# To index a branch instead, change the value to "git:<ref>", e.g. "git:origin/main".
+source = "worktree"
+
+# Where the index is stored, in worktree mode. Git mode ignores it and uses
+# <git common dir>/code-index.
+index_dir = ".code-index"
+
+[embeddings]
+# The embedder. Change model_id and dimension together, then rebuild from empty
+# (delete the index folder and run code-indexer): an index refuses to load under
+# an embedder of a different dimension.
+model_id = "BAAI/bge-code-v1"
+dimension = 1536
+
+[summarization]
+# LLM summaries of each chunk: a second ~3 GB model, and a summarize pass in every
+# build. false skips both, at a cost in intent and whole-file retrieval.
+enabled = true
+
+[ignore]
+# Extra folders and file types to skip or add, on top of the built-in defaults.
+# Use the extra_* spellings: the bare dirs / root_dirs / extensions keys REPLACE
+# the defaults (and drop node_modules with them).
+#
+# extra_dirs = ["vendor", ".venv"]          # skipped at any depth
+# extra_root_dirs = ["fixtures"]            # skipped at the repository root only
+# extra_extensions = [".xaml"]              # index an opt-in extension
