@@ -1572,6 +1572,30 @@ def _get_test_patterns(source_file: str) -> tuple[list[str], list[str]]:
     return suffixes, globs
 
 
+# ADR-059 (B-074): folders that hold tests beside their source, or as a top-level tree.
+_TEST_DIR_NAMES = ("tests", "test", "__tests__", "spec")
+
+
+def _test_dir_relates(source_dir: str, test_dir: str) -> bool:
+    """Whether a test in ``test_dir`` can be the direct test of a source in ``source_dir``.
+
+    Both are lower-case, ``/``-separated, repo-relative folders ("" is the root). True for
+    a test next to the source, in a test folder beside it (``app/orders/__tests__``), or
+    under a top-level test tree, flat (``tests/``) or mirroring the source's trailing
+    folders (``tests/orders/`` or ``tests/app/orders/`` for ``app/orders``).
+    """
+    if test_dir == source_dir:
+        return True
+    head, _, last = test_dir.rpartition('/')
+    if last in _TEST_DIR_NAMES and head == source_dir:
+        return True
+    segs = test_dir.split('/')
+    if segs[0] not in _TEST_DIR_NAMES:
+        return False
+    rest = segs[1:]
+    return not rest or source_dir.split('/')[-len(rest):] == rest
+
+
 @_tool()
 def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     """
@@ -1582,16 +1606,31 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     known test file patterns when the language cannot be determined.
 
     Inputs:
-      source_file   — filename of the source being tested (e.g. 'auth.ts', 'AuthService.cs')
+      source_file   — repo-relative path of the source being tested (e.g.
+                      'app/orders/page.tsx'), or a bare filename ('auth.ts'). Prefer the
+                      path: with a bare name, every test named after it counts as direct,
+                      so 'page.tsx' matches every page.test.tsx in a Next.js app.
       target_symbol — optional function/method name to narrow the search
 
     Output tiers:
-      Direct   — test file named after the source (e.g. auth.test.ts, AuthServiceTests.cs)
+      Direct   — test file named after the source (e.g. auth.test.ts, AuthServiceTests.cs);
+                 given a path, only one beside it, in a tests folder beside it, or under
+                 a top-level tests tree. Same-named tests elsewhere are listed, not counted.
       Semantic — tests describing the same behavior via FAISS + RRF search
       None     — explicit signal that no coverage was found
     """
     print(f"\n[MCP] find_test_coverage: '{source_file}' symbol='{target_symbol}'")
-    norm_source = source_file.lower().replace('\\', '/').split('/')[-1]
+    norm_path = source_file.lower().replace('\\', '/')
+    while norm_path.startswith('./'):
+        norm_path = norm_path[2:]
+    if os.path.isabs(source_file):
+        try:
+            rel = os.path.relpath(source_file, os.getcwd()).lower().replace('\\', '/')
+        except ValueError:          # another drive on Windows: keep the name only
+            rel = '..'
+        norm_path = norm_path.split('/')[-1] if rel.startswith('..') else rel
+    # ADR-059 (B-074): the folder narrows the direct tier; "" (a bare name) doesn't.
+    source_dir, _, norm_source = norm_path.rpartition('/')
     source_base = re.sub(r'\.[^.]+$', '', norm_source)
 
     from fnmatch import fnmatchcase
@@ -1628,8 +1667,12 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     direct_candidates = set(direct_names)
     direct_data: list[str] = []
     direct_fps:  set[str]  = set()
+    elsewhere:   list[str] = []
     for fp, doc in test_doc_by_file.items():
         if fp.split('/')[-1] in direct_candidates:
+            if source_dir and not _test_dir_relates(source_dir, fp.rpartition('/')[0]):
+                elsewhere.append(doc['file'])
+                continue
             direct_fps.add(fp)
             snippet = doc['text'][:120].replace('\n', ' ').strip() + "..."
             direct_data.append(
@@ -1669,6 +1712,9 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     context = f"--- TEST COVERAGE ANALYSIS ---\n\n{header}\n\n"
     context += "1. DIRECT COVERAGE (test file named after source):\n"
     context += "".join(direct_data) if direct_data else f"  [No direct test file — expected: {direct_label}]\n\n"
+    if elsewhere:
+        context += (f"  [Same name in an unrelated folder, not counted: "
+                    f"{', '.join(sorted(elsewhere))}]\n\n")
     context += "2. SEMANTIC COVERAGE (tests describing the same behavior):\n"
     context += "".join(semantic_data) if semantic_data else "  [No semantically related tests found]\n\n"
 
