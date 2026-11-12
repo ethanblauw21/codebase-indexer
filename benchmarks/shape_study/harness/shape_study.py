@@ -104,7 +104,7 @@ def setup(arm):
     faiss.omp_set_num_threads(2)
     import core
     # Chunk boundaries come from bge's tokenizer whatever the embedder, so texts match.
-    core.jina_tokenizer._get()
+    core.embed_tokenizer._get()
     st = core.SentenceTransformer
 
     def loader(*args, **kwargs):
@@ -217,7 +217,7 @@ def _leading_comment(content: str, limit: int = 6) -> list[str]:
 
 
 def outline_chunks(rel_path, content, max_tokens=480, docs=False):
-    from ast_chunker import parse_file, fallback_token_chunker, jina_tokenizer
+    from ast_chunker import parse_file, fallback_token_chunker, embed_tokenizer
     from adapters.base import Chunk
     res = parse_file(rel_path, content)
     if not res.symbols:
@@ -241,9 +241,9 @@ def outline_chunks(rel_path, content, max_tokens=480, docs=False):
         doc = _doc_line(sym.text) if docs else ""
         body.append(f"{line} -- {doc}" if doc else line)
     pages, cur, cur_t = [], [], 0
-    head_t = jina_tokenizer.count_tokens(f"File: {rel_path}\nScope: File Outline (Part 1/1)\n")
+    head_t = embed_tokenizer.count_tokens(f"File: {rel_path}\nScope: File Outline (Part 1/1)\n")
     for line in body:
-        t = jina_tokenizer.count_tokens(line + "\n")
+        t = embed_tokenizer.count_tokens(line + "\n")
         if cur and cur_t + t > max_tokens - head_t:
             pages.append(cur); cur, cur_t = [], 0
         cur.append(line[:400]); cur_t += t

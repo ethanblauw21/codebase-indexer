@@ -95,7 +95,7 @@ def live(tmp_path, monkeypatch):
     index = tmp_path / "index"
     index.mkdir()
     monkeypatch.setattr(core, "embed_batch", _fake_embed)
-    monkeypatch.setattr(core.jina_tokenizer, "_tokenizer", _CharTokenizer())
+    monkeypatch.setattr(core.embed_tokenizer, "_tokenizer", _CharTokenizer())
     monkeypatch.setattr(ii, "summarization_enabled", lambda: False)
     monkeypatch.setattr(ii, "INDEX_DIR", str(index))
     monkeypatch.setattr(ii, "DB_PATH", str(index / "graph.db"))

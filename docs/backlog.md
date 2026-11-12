@@ -107,9 +107,9 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | **done** (#97) |
 | [B-072](#b-072) | `index_status` (and `semantic_code_search`) on a never-built index say the chunker is older than v2 and advise a full re-index | ADR-056's Inspector check, 2026-11-02 | S | raw |
 | [B-073](#b-073) | `semantic_code_search` and `find_test_coverage` return only LLM-oriented text, so a programmatic caller regexes the `--- FILE: … ---` lines; no `format="json"` (@edb leans to adding it to the other tools too) | PR-agent install feedback, 2026-11-12 | M (S–M for the two named tools) | raw |
-| [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | **done** (#107, ADR-059) |
 | [B-075](#b-075) | `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules | PR-agent install feedback, 2026-11-12 | M | raw |
-| [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | **done** (#102, ADR-057) |
 | [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | **done** (#103) |
 | [B-078](#b-078) | A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default | PR-agent install feedback, 2026-11-12 | S (doc + existing numbers) → M (if it needs a new measurement) | raw |
 
@@ -2487,7 +2487,7 @@ description grown by more than the one argument.
 ### B-074 — `find_test_coverage` reduces `source_file` to its basename, which is ambiguous in Next.js apps
 
 **Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
-**Status:** raw · **Size:** S
+**Status:** **done** (#107, ADR-059) · **Size:** S
 
 `find_test_coverage` takes the last path segment of `source_file` and throws the directory away
 (`src/MCPServer.py:1594`, `norm_source = source_file.lower().replace('\\', '/').split('/')[-1]`).
@@ -2552,7 +2552,7 @@ whichever lands first, then the other).
 ### B-076 — Stale comments, and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer
 
 **Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
-**Status:** raw · **Size:** S
+**Status:** **done** (#102, ADR-057) · **Size:** S
 
 Two kinds of drift, both found by reading:
 

@@ -61,3 +61,51 @@ def test_no_tests_message_names_the_patterns(stub_index):
     out = M.find_test_coverage("src/scan_policy.py")
     assert "No test files found" in out
     assert "test_*.py" in out
+
+
+# --- ADR-059 (B-074): a path narrows the direct tier by folder ---------------------
+
+def _direct(out):
+    return out.split("2. SEMANTIC COVERAGE")[0].split("[Same name in an unrelated folder")[0]
+
+
+def test_a_path_matches_only_the_test_beside_it(stub_index):
+    stub_index("app/orders/page.tsx", "app/users/page.tsx", "app/orders/page.test.tsx")
+    orders = M.find_test_coverage("app/orders/page.tsx")
+    users = M.find_test_coverage("app/users/page.tsx")
+    assert "app/orders/page.test.tsx" in _direct(orders)
+    assert "app/orders/page.test.tsx" not in _direct(users)
+    assert "No direct test file" in users
+    assert "unrelated folder, not counted: app/orders/page.test.tsx" in users
+
+
+def test_a_bare_name_still_matches_every_folder(stub_index):
+    stub_index("app/orders/page.tsx", "app/users/page.tsx",
+               "app/orders/page.test.tsx", "app/users/__tests__/page.test.tsx")
+    direct = _direct(M.find_test_coverage("page.tsx"))
+    assert "app/orders/page.test.tsx" in direct
+    assert "app/users/__tests__/page.test.tsx" in direct
+
+
+@pytest.mark.parametrize("test_dir,ok", [
+    ("app/orders", True),                 # next to it
+    ("app/orders/__tests__", True),       # a test folder beside it
+    ("app/orders/tests", True),
+    ("tests", True),                      # flat top-level tree
+    ("tests/orders", True),               # mirrored trailing folders
+    ("tests/app/orders", True),
+    ("tests/users", False),
+    ("app/users", False),
+    ("app/users/__tests__", False),
+    ("app", False),
+])
+def test_which_folders_relate(test_dir, ok):
+    assert M._test_dir_relates("app/orders", test_dir) is ok
+
+
+def test_dot_slash_and_backslash_paths_are_paths(stub_index):
+    stub_index("app/orders/page.tsx", "app/users/page.test.tsx", "app/orders/page.test.tsx")
+    for given in ("./app/orders/page.tsx", r"app\orders\page.tsx"):
+        direct = _direct(M.find_test_coverage(given))
+        assert "app/orders/page.test.tsx" in direct
+        assert "app/users/page.test.tsx" not in direct
