@@ -110,7 +110,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-075](#b-075) | `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules | PR-agent install feedback, 2026-11-12 | M | raw |
 | [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
-| [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | **done** (#103) |
 | [B-078](#b-078) | A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default | PR-agent install feedback, 2026-11-12 | S (doc + existing numbers) → M (if it needs a new measurement) | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
@@ -2583,7 +2583,7 @@ jina in ADRs and the benchmark write-ups stay: they record what was measured.
 ### B-077 — The shipped `indexer.toml` mixes per-repo settings with this project's own eval config; ship a minimal per-repo template
 
 **Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
-**Status:** raw · **Size:** S
+**Status:** **done** (#103) · **Size:** S
 
 The header of `indexer.toml` says "Copy or symlink this file to each repository root you want to
 index", and the README (line 138) says "see this repository's own `indexer.toml` for every key". The
