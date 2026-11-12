@@ -108,7 +108,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-072](#b-072) | `index_status` (and `semantic_code_search`) on a never-built index say the chunker is older than v2 and advise a full re-index | ADR-056's Inspector check, 2026-11-02 | S | raw |
 | [B-073](#b-073) | `semantic_code_search` and `find_test_coverage` return only LLM-oriented text, so a programmatic caller regexes the `--- FILE: … ---` lines; no `format="json"` (@edb leans to adding it to the other tools too) | PR-agent install feedback, 2026-11-12 | M (S–M for the two named tools) | raw |
 | [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | raw |
-| [B-075](#b-075) | `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules | PR-agent install feedback, 2026-11-12 | M | raw |
+| [B-075](#b-075) | `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules | PR-agent install feedback, 2026-11-12 | M | **shaped** → ADR-061 (plan only, #106) |
 | [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-078](#b-078) | A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default | PR-agent install feedback, 2026-11-12 | S (doc + existing numbers) → M (if it needs a new measurement) | raw |
@@ -2517,7 +2517,7 @@ the existing `tests/test_find_test_coverage.py` still passes.
 ### B-075 — `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules
 
 **Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
-**Status:** raw · **Size:** M
+**Status:** **shaped** → [ADR-061](adr/ADR-061-split-mcpserver-by-intent.md) (plan only, #106; build after #102, B-074 and B-073 merge) · **Size:** M
 
 Counted on 2026-11-12: 3,540 lines, 17 `@_tool()` functions (lines 352 to 2969), plus the `_tool`
 decorator, the shared `_search()` and `_pack_results()` helpers, the watchdog handler and the server
