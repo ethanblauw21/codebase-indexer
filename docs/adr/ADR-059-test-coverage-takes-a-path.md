@@ -55,3 +55,11 @@ bare name still finds them as before.
 - [x] MCP Inspector `tools/call` with a path and a bare name.
 
 **Notes:**
+- 2026-11-12, **MCP Inspector 2.8.0**, against a five-file fixture repo (`app/orders/page.tsx` with
+  `page.test.tsx` beside it, `app/users/page.tsx` with none, `src/auth.py` + `tests/test_auth.py`),
+  indexed on CPU with summaries off. `tools/list --strict` exits 0 (17 tools); the docstring adds
+  410 characters to `find_test_coverage`'s listing. `tools/call`: `source_file=page.tsx` returns
+  text byte-identical to master's; `app/orders/page.tsx` counts `app/orders/page.test.tsx` as direct;
+  `app/users/page.tsx` reports no direct test and lists it as "not counted"; no `source_file`
+  returns `isError: true` (exit 5).
+- Gates: flake8, collect, conformance, resolution and l5x teeth checks exit 0; full suite on CPU (`CODE_INDEXER_DEVICE=cpu HF_HUB_OFFLINE=1`): 1008 passed, 2 skipped.
