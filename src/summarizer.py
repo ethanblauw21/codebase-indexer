@@ -73,6 +73,35 @@ from device import resolve_device
 
 logger = logging.getLogger(__name__)
 
+
+class SummarizerUnavailable(RuntimeError):
+    """Summarization is enabled but the summarizer cannot load in this environment."""
+
+
+# Packages the summarizer needs before it can load a model. `accelerate` is the one a
+# fresh install missed: transformers only imports it when `device_map` is passed, so
+# nothing failed until the worker tried to load, and the run blamed the GPU instead.
+_SUMMARIZER_PACKAGES = (
+    ("torch", "pip install torch"),
+    ("transformers", "pip install transformers"),
+    ("accelerate", "pip install accelerate"),
+)
+
+
+def summarizer_unavailable_reason() -> str | None:
+    """Why the summarizer can't load here, or None. Checks imports only; loads nothing."""
+    import importlib.util
+    missing = [(name, fix) for name, fix in _SUMMARIZER_PACKAGES
+               if importlib.util.find_spec(name) is None]
+    if not missing:
+        return None
+    names = ", ".join(f"`{n}`" for n, _ in missing)
+    fixes = "; ".join(fix for _, fix in missing)
+    verb = "is" if len(missing) == 1 else "are"
+    return (f"[summarization].enabled is true but {names} {verb} not installed, so the "
+            f"summarizer can't load. Install it ({fixes}) or set "
+            f"[summarization].enabled = false in indexer.toml.")
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Adaptive batching (ADR-027) — pure Python, no torch, so it can be tested with
 # fakes. The worker supplies the model call and the memory probe.

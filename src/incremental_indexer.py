@@ -1067,15 +1067,23 @@ class _CacheOnlySummarizer:
     cannot become resident while the embedding model is loaded. A chunk the
     pre-pass failed to cache yields an empty summary, which ingest_file already
     handles by embedding the raw chunk text. Misses are counted rather than
-    ignored: a non-zero count means the two passes disagreed about chunking,
-    which is the one way this design can silently degrade.
+    ignored. A miss on a text pass 1 asked for and got nothing back is the
+    summarizer's failure, already reported (`pass1_failed`); any other miss
+    means the two passes disagreed about chunking, which is the one way this
+    design can silently degrade (`misses`).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, pass1_failed: frozenset[str] | set[str] = frozenset()) -> None:
         self.misses = 0
+        self.pass1_failed = 0
+        self._failed_texts = pass1_failed
 
     def summarize_batch(self, codes: list[str]) -> list[str]:
-        self.misses += len(codes)
+        for code in codes:
+            if code in self._failed_texts:
+                self.pass1_failed += 1
+            else:
+                self.misses += 1
         return [""] * len(codes)
 
 
@@ -1127,12 +1135,15 @@ def run_summarization_pass(
     db:         CodeDB,
     summarizer: object,
     source:     Optional[object] = None,
+    failed_out: Optional[set[str]] = None,
 ) -> int:
     """Summarize every chunk of every file before any embedding begins.
 
     Returns how many distinct texts came back without a summary, so the run's last
     line can say so (B-044): a summarizer that runs out of GPU memory returns empty
-    strings, and the run used to end "Done successfully" all the same.
+    strings, and the run used to end "Done successfully" all the same. When
+    `failed_out` is given, those texts are added to it, so pass 2 can tell a text
+    pass 1 failed on from a chunking disagreement (ADR-058).
 
     The summarizer (Qwen2.5-Coder-1.5B) and the embedder (bge-code-v1) do not
     fit on an 8 GB card together. The main loop interleaves them per file and
@@ -1188,6 +1199,8 @@ def run_summarization_pass(
         summaries = summarizer.summarize_batch([t for _h, t in part])
         pairs = [(h, sm) for (h, _t), sm in zip(part, summaries) if sm]
         db.cache_summaries(pairs)
+        if failed_out is not None:
+            failed_out.update(t for (_h, t), sm in zip(part, summaries) if not sm)
         total_new += len(pairs)
         _slice_elapsed = time.monotonic() - _slice_started
         print(_format_summary_progress(start + len(part), len(todo), len(part),
@@ -1201,6 +1214,9 @@ def run_summarization_pass(
     missing = len(todo) - total_new
     if missing:
         print(f"  WARNING: {missing} of {len(todo)} texts got no summary.", flush=True)
+        if total_new == 0:
+            print("  WARNING: pass 1 produced no summaries at all, so the summarizer never "
+                  "ran; see the [Summarizer] lines above for why.", flush=True)
     return missing
 
 
@@ -1262,6 +1278,13 @@ def _run_incremental(
 
     summarizer = None
     if summarization_enabled():
+        # ADR-058: refuse before pass 1 if the summarizer can't even import. It used to
+        # fail inside the worker, every chunk came back empty, and the run ended
+        # blaming a full GPU and a chunking disagreement.
+        from summarizer import SummarizerUnavailable, summarizer_unavailable_reason
+        reason = summarizer_unavailable_reason()
+        if reason:
+            raise SummarizerUnavailable(reason)
         # ADR-028: the model host's summarizer when [model_host].enabled, else the worker.
         from model_client import make_summarizer
         summarizer = make_summarizer()
@@ -1439,9 +1462,11 @@ def _run_incremental(
     # run_summarization_pass() for why interleaving the two models does not fit.
     unsummarized = 0
     if summarizer is not None:
-        unsummarized = run_summarization_pass(to_index, repo_path, db, summarizer, source)
+        pass1_failed: set[str] = set()
+        unsummarized = run_summarization_pass(to_index, repo_path, db, summarizer, source,
+                                              failed_out=pass1_failed)
         summarizer.shutdown()          # child process exits; its GPU memory returns
-        summarizer = _CacheOnlySummarizer()
+        summarizer = _CacheOnlySummarizer(pass1_failed)
         print(f"[{_hms()}] ━━ Pass 2 of 2: embedding (summarizer unloaded) ━━", flush=True)
 
     # B-050 (ADR-040): collect a window of prepared files and embed their pending
@@ -1608,6 +1633,9 @@ def _run_incremental(
         print(f"  WARNING: {summarizer.misses} chunks missed the summary cache in pass 2 "
               "— the two passes disagree about chunking, and those chunks were "
               "embedded without a summary.")
+    if isinstance(summarizer, _CacheOnlySummarizer) and summarizer.pass1_failed:
+        print(f"  {summarizer.pass1_failed} chunks were embedded without a summary because "
+              "pass 1 could not summarize them (see 'Pass 1 summarizer' above).")
 
     # ADR-044: Python imports resolve against the whole file list as it is now, so an
     # import un-resolves when its target is deleted. Before calls: the import-scoped
@@ -1649,8 +1677,8 @@ def _run_incremental(
     if unsummarized:
         # Pass 1 only visits changed files, so these stay unsummarized until their
         # file changes again or a full reindex runs.
-        print(f"  {unsummarized} chunk text(s) have no summary — see 'Pass 1 summarizer' above "
-              f"(oom = the GPU was full). Searchable, but without their summaries until the "
+        print(f"  {unsummarized} chunk text(s) have no summary — 'Pass 1 summarizer' above "
+              f"counts why (oom, error, blank). Searchable, but without their summaries until the "
               f"file changes again or reindex(changed_files_only=False) runs.")
 
 
@@ -1683,11 +1711,15 @@ def main() -> None:
     if refusal:
         print(f"Refused: {refusal}", file=sys.stderr)
         sys.exit(2)
+    from summarizer import SummarizerUnavailable
     try:
         run_incremental(prune=args.prune)
     except IndexBusy as exc:
         print(f"Refused: another process is writing this index ({exc}). "
               f"Wait for it to finish, then run again.", file=sys.stderr)
+        sys.exit(2)
+    except SummarizerUnavailable as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
         sys.exit(2)
 
 

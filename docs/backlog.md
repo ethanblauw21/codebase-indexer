@@ -112,6 +112,7 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | raw |
 | [B-078](#b-078) | A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default | PR-agent install feedback, 2026-11-12 | S (doc + existing numbers) → M (if it needs a new measurement) | raw |
+| [B-079](#b-079) | `accelerate` is undeclared, so a fresh install's summarizer never loads, and the run blames a full GPU and a chunking disagreement | fresh install on a second PC, relayed by the conductor session, 2026-11-12 | S | **done** (#PR, ADR-058) |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2656,3 +2657,28 @@ download and cost, and how to turn the expensive part off, with the retrieval-ac
 
 **Related:** [B-065](#b-065) (the speed-to-accuracy frontier), [B-077](#b-077), [B-025](#b-025) /
 ADR-030 (what summaries are worth), [B-012](#b-012).
+
+### B-079 — `accelerate` is undeclared, so a fresh install's summarizer never loads, and the run blames a full GPU and a chunking disagreement
+
+**Source:** a session doing a fresh install on another PC (Windows, Python 3.12, CUDA torch
+2.11+cu128, transformers 4.53.3), relayed by the conductor session, 2026-11-12; @edb: "Yes, please
+add it to be fixed" · **Status:** done (#PR, ADR-058) · **Size:** S
+
+`accelerate` was in neither `pyproject.toml` nor `requirements.txt`, though the README's install
+section says the summarizer can't load without it. A fresh `pip install -e .` built 659 files /
+4,670 chunks and ended "Done with warnings" with two wrong diagnoses: "4236 chunk text(s) have no
+summary … (oom = the GPU was full)" and "4670 chunks missed the summary cache in pass 2 — the two
+passes disagree about chunking". The GPU was empty and the passes agreed: transformers refuses
+`device_map` without `accelerate`, so the worker never loaded and every text came back empty.
+Installing `accelerate` 1.15.0 fixed it. The same root cause was found once before, on 2026-09-10,
+and the package stayed undeclared.
+
+**Want:** declare `accelerate`; fail loudly before pass 1 when summarization is enabled but the
+summarizer can't load; and have pass 2's cache-miss warning tell pass 1's failures apart from a real
+chunking disagreement.
+
+**Done when:** both dependency files list `accelerate`; a run with summarization enabled and
+`accelerate` missing stops before pass 1 with a message naming it; a run whose pass 1 summarized
+nothing prints no "disagree about chunking" warning. Regression tests for the last two.
+
+**Related:** [B-044](#b-044) (the "Done with warnings" line), [B-078](#b-078) (first-install weight).
