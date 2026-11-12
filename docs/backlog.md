@@ -106,6 +106,12 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-070](#b-070) | In git mode, `reindex()` warns the index is stale and advises a full rebuild, because it compares against the checkout's `HEAD` instead of the indexed ref | live passes on V2 and Gantt, 2026-11-02 | S | **done** (#99, ADR-056) |
 | [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | **done** (#97) |
 | [B-072](#b-072) | `index_status` (and `semantic_code_search`) on a never-built index say the chunker is older than v2 and advise a full re-index | ADR-056's Inspector check, 2026-11-02 | S | raw |
+| [B-073](#b-073) | `semantic_code_search` and `find_test_coverage` return only LLM-oriented text, so a programmatic caller regexes the `--- FILE: … ---` lines; no `format="json"` (@edb leans to adding it to the other tools too) | PR-agent install feedback, 2026-11-12 | M (S–M for the two named tools) | raw |
+| [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-075](#b-075) | `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules | PR-agent install feedback, 2026-11-12 | M | raw |
+| [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-078](#b-078) | A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default | PR-agent install feedback, 2026-11-12 | S (doc + existing numbers) → M (if it needs a new measurement) | raw |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2424,3 +2430,229 @@ chunker warning and no "full re-index" advice, and a built index without a `chun
 still gets the warning.
 
 **Related:** [B-029](#b-029) (the version marker), [B-070](#b-070) / ADR-056 (same class of misleading advice).
+
+---
+
+**B-073 to B-078 come from one source.** Another Claude session wired codebase-indexer into a local
+PR agent on a second PC (a first install; the indexer had not run there yet), and sent back six
+points. @edb read them in the conductor session on 2026-11-12 and asked for them to be passed to
+the projects they concern. I checked each claim against the code on 2026-11-12 by reading it, not by
+running anything. The asker also named what works: AST-level chunking with measured gains, the
+reranker write-up, git mode on a ref, VRAM-aware loading, and tools callable as plain functions.
+Keep those intact (B-075 in particular must not break the last one).
+
+### B-073 — `semantic_code_search` and `find_test_coverage` return only LLM-oriented text; there is no `format="json"`
+
+**Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
+**Status:** raw · **Size:** M (S–M for the two named tools)
+
+Every tool returns a string written for an agent to read. A program that calls the tools (the PR
+agent that sent this, which wants "which files should I read for this diff") has to parse that
+string. For `semantic_code_search` the only stable handle is the header line
+`_pack_results()` writes at `src/MCPServer.py:393`, `--- FILE: {c.file} | SCOPE: {c.scope} ---`,
+followed by the chunk text. `find_test_coverage` is looser: `- {file} ({scope})` lines under
+tier headings, with a snippet line. Both are fine for a model and brittle for a regex. Any change to
+the wording breaks the caller without a failing test on this side, because nothing here treats that
+text as an interface.
+
+**Want:** an optional `format` argument, `"text"` (default, unchanged) or `"json"`, on
+`semantic_code_search` and `find_test_coverage`, and on the other tools as well (see the leaning
+below). The JSON is a string a caller can `json.loads`:
+a list of hits, each with `file`, `scope`, `score` and `source` where the retriever supplies them,
+the line range where the chunk carries one, and `text`. It goes through the same token budget as the
+text form (`_pack_results()`), and says when it dropped hits. An unknown `format` value comes back
+as `isError`, not as text with an error message in it.
+
+**@edb's leaning (2026-11-12, via the conductor session):** "It should probably give json output for
+other tools too." So the asker's two tools are the start, not the whole of it. `get_symbol_source`,
+`get_file_outline` and `what_writes` are the next most likely to be called by program; whether every
+one of the 17 tools gets it, or only the lookup and search ones, is for whoever builds it to settle
+and say. It is a leaning, not a ruling ("probably"). Each tool needs its own JSON shape, because the
+analysis tools build their text from mixed sections, so that part is more than a flag.
+
+**Cost to weigh when building it:** an argument added to every tool also grows every tool's schema,
+and every connected session pays for that (B-019 measured the cost). Keep the addition small: one
+short description for `format`, defined once and shared by every tool, not a paragraph per tool.
+Measure `tools/list` before and after, and treat a description that grows by more than the one
+argument as a defect.
+
+**Done when:** an Inspector `tools/call` with `format=json` returns parseable JSON for a built
+index, on every tool that took the argument; a call without `format` returns byte-identical output to
+today; a bad `format` gives `isError: true`; and `tools/list --strict` still exits 0 with no tool
+description grown by more than the one argument.
+
+**Related:** [B-019](#b-019) (schema cost), [B-030](#b-030) (the token budget), [B-045](#b-045)
+(`readOnlyHint`), [B-016](#b-016) and [B-017](#b-017) (the lookup tools, built in ADR-050).
+
+### B-074 — `find_test_coverage` reduces `source_file` to its basename, which is ambiguous in Next.js apps
+
+**Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
+**Status:** raw · **Size:** S
+
+`find_test_coverage` takes the last path segment of `source_file` and throws the directory away
+(`src/MCPServer.py:1594`, `norm_source = source_file.lower().replace('\\', '/').split('/')[-1]`).
+Tier 1 ("direct") then accepts any indexed test file whose own basename equals
+`<source_base><test suffix>` (lines 1626–1637), wherever it sits. In a Next.js app every route
+folder has a `page.tsx` and a `layout.tsx`, and many have an `index.ts`, so asking for
+`app/orders/page.tsx` reports every `page.test.tsx` in the repo as direct coverage, and the same
+for `app/users/page.tsx`. The docstring asks for a "filename", so a path is not a documented input
+today; the code accepts one and silently drops everything but the name. The semantic tier still
+sees the full string (line 1640), which is why the output looks plausible.
+
+Read from the code; not run against a Next.js index.
+
+**Want:** accept a repo-relative path. When `source_file` has a directory part, a Tier 1 match also
+has to relate by directory: the test sits next to the source, in a `__tests__` or `tests` folder
+beside it, or at the mirrored path under a top-level tests tree. A bare filename keeps today's
+behaviour exactly. Update the docstring to say a path is accepted and why to prefer it. Which
+directory relations count is a shape decision for whoever builds it; each language's test patterns
+come from `_get_test_patterns()`, so the relation belongs next to them.
+
+**Done when:** a test with two `page.tsx` in different folders and a `page.test.tsx` beside only one
+of them gets the test listed for that one and not the other; a bare `page.tsx` still lists both; and
+the existing `tests/test_find_test_coverage.py` still passes.
+
+**Related:** [B-038](#b-038) (`find_test_coverage` never found a pytest file; fixed in #45).
+
+### B-075 — `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules
+
+**Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
+**Status:** raw · **Size:** M
+
+Counted on 2026-11-12: 3,540 lines, 17 `@_tool()` functions (lines 352 to 2969), plus the `_tool`
+decorator, the shared `_search()` and `_pack_results()` helpers, the watchdog handler and the server
+setup. A reader and an editor both pay for that: this file is the one every tool change touches.
+`src/CLAUDE.md` already groups the tools by intent (Search, Lookup, Impact, Tracing, Discovery,
+Maintenance), which is a ready-made module split.
+
+**Constraints that make this more than moving code:**
+- Tools must stay callable as plain functions. `_tool` keeps the plain function and registers an
+  async wrapper (#53), and the TUI and the tests call the functions directly. The asker named
+  that as a strength.
+- At least 20 test files mention `MCPServer`, and `pyproject.toml` points the
+  `code-indexer-serve` entry point at `MCPServer:main`. Keep `MCPServer` importable with the same
+  names, or move the tests with it.
+- Tool calls read index state through the ADR-047 `IndexState` snapshot. A split must not
+  introduce a second copy of the loose globals that ADR-047 removed.
+- Live servers import `src/` from the main checkout, so the change has to be on master before a
+  restart.
+
+**Want:** the tools grouped by intent into modules, with `MCPServer.py` keeping the server setup,
+instructions, `_tool`, the watchdog and the shared helpers. This is one reversible decision (the
+module boundaries), so it earns one ADR when it is built, with the usual conformance check:
+`tools/list --strict` before and after must show the same 17 tools with the same schemas.
+
+**Done when:** the Inspector tool list is identical before and after, the full test suite passes
+unchanged apart from import paths, and no module outside `MCPServer.py` exceeds a size that one
+reader can hold (pick it when shaping; about 600 lines is the order of magnitude).
+
+**Related:** [B-060](#b-060) (ADR-047 snapshot), [B-073](#b-073) (touches the same tools; do
+whichever lands first, then the other).
+
+### B-076 — Stale comments, and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer
+
+**Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
+**Status:** raw · **Size:** S
+
+Two kinds of drift, both found by reading:
+
+1. **A rationale that no longer applies.** `src/MCPServer.py:369-371` says "Protecting your 8GB
+   Local Model's VRAM. 8B models easily crash if you feed them more than 8k tokens. We cap the
+   returned context strictly at 4000 tokens to be safe." The same idea is in the `max_tokens`
+   docstring at `src/core.py:361-362` ("a conservative limit for 8k-window 8B models"). The server
+   hands results to whatever agent called it, and no 8B model is involved. The 4000-token cap is a
+   budget for the output, not a VRAM guard.
+2. **A misleading name.** `jina_tokenizer = TokenizerManager()` (`src/core.py:170`) loads the
+   tokenizer of the configured embedder (`AutoTokenizer.from_pretrained(embed_model_id())`), which
+   has been bge-code-v1 since ADR-009. The name is imported in 22 places across 10 files:
+   `src/ast_chunker.py`, `src/core.py`, `src/MCPServer.py`, six test files and
+   `benchmarks/shape_study/harness/shape_study.py`.
+
+**Want:** rewrite the two comments to say what the cap is for, and rename `jina_tokenizer` to a name
+that doesn't claim a model (`embed_tokenizer` fits, since it follows `embed_model_id()`). No
+behaviour change. A name that says jina has already misled once: the embedder defaulted to jina
+for twenty days after the config moved (the ADR-026 §8 story), so this is the same class of bug at
+a smaller scale.
+
+**Done when:** `grep -rn jina_tokenizer` finds nothing outside git history and the dated notes in
+`docs/`, the two comments state the real reason, and the test suite passes. Historical mentions of
+jina in ADRs and the benchmark write-ups stay: they record what was measured.
+
+**Related:** [ADR-026](adr/ADR-026-configuration-authority.md) §8 (code default must equal shipped config).
+
+### B-077 — The shipped `indexer.toml` mixes per-repo settings with this project's own eval config; ship a minimal per-repo template
+
+**Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
+**Status:** raw · **Size:** S
+
+The header of `indexer.toml` says "Copy or symlink this file to each repository root you want to
+index", and the README (line 138) says "see this repository's own `indexer.toml` for every key". The
+file is 300 lines. Lines 195 to 258 are the `[eval]` block: CoIR subtask names, reranker and
+sparse sample sizes, `sample_seed = 13`, and `baseline_path = "benchmarks/baseline.jsonl"`. None of
+that means anything in another repo, and it is read only by this repo's own harness
+(`tools/coir_eval.py` does `cfg.get("eval", {})` on the file directly; `src/config.py` never reads
+it). A person who follows the header copies all of it, and then has to work out
+which parts were meant for them. The same file also carries this repo's own live `source`,
+`ref_poll_s` and model-host tuning.
+
+**Want:** a minimal per-repo template, probably `examples/indexer.toml` (next to the `rules.yaml`
+examples). It holds what a new repo decides: `[indexer]` (`repo_root`, `index_dir`, `source`), the
+embedder, `[summarization].enabled` (see [B-078](#b-078)), and the common `[ignore]` extras as
+commented lines. The header comment and the README point at it. The full file stays as the
+reference for every key and as this repo's own config.
+
+**Constraints:**
+- `tests/test_config_drift.py` compares the shipped `indexer.toml`'s documented keys against the
+  code's accessors and defaults. Decide whether the template is in its scope. The simplest rule:
+  every key in the template must be a key the drift test already knows, and a new test checks that
+  the template parses.
+- A repo with no `indexer.toml` gets the code defaults (the drift test's last case), so the
+  template can be short and only needs the lines a person is expected to change.
+- Don't move `[eval]` out of `indexer.toml` as part of this. `tools/coir_eval.py` reads it from
+  there, and `tests/test_config_drift.py` lists those keys as owned by the tools
+  (`_EVAL_KEYS_OWNED_BY_TOOLS`), so moving it touches both. That is a separate decision.
+
+**Done when:** a test loads the template through `config.py` and gets the same values as a repo
+with no file, apart from the keys the template sets; the README and the `indexer.toml` header
+name it; and the template has no `[eval]` section.
+
+**Related:** [ADR-026](adr/ADR-026-configuration-authority.md) (configuration authority), [B-078](#b-078).
+
+### B-078 — A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default
+
+**Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
+**Status:** raw · **Size:** S (documentation and existing numbers), M if it needs a new measurement
+
+The asker's words: for the job of "pick the right files for a diff", two ~1.5B models, ~6 GB of
+downloads plus CUDA torch is heavy, and the summarizer roughly doubles the first build. The sizes
+match what this repo documents: the embedder `BAAI/bge-code-v1` is about 3 GB and the summarizer
+`Qwen/Qwen2.5-Coder-1.5B-Instruct` about 3 GB (`src/CLAUDE.md`, "Models"). The reranker
+(`Qwen/Qwen3-Reranker-0.6B`, about 1.2 GB) is optional and off by default, so it isn't in the 6 GB.
+`[summarization].enabled` is `true` in the shipped file. The "doubles the first build" figure is the
+asker's estimate; they had not run a build. This repo's own timings are the ones to use.
+
+**This is a question, not yet a defect.** The summaries earn their cost for some uses: the
+separate summary index lifted intent retrieval by about 0.05 and whole-file retrieval by about
+0.24 (ADR-030, after ADR-031 removed ghost vectors). But the benefit was measured on this repo's
+query sets, not on "which files does this diff touch", which is a file-level question and may
+lean differently. And nowhere does the README tell a new user that `enabled = false` is a
+supported, cheaper way to start, or what it costs.
+
+**Want:**
+1. State, in the README's install section, the real first-install cost: model downloads, CUDA
+   torch, first-build time, and that `[summarization].enabled = false` and `tiers = [1]` are the
+   two knobs that shrink it.
+2. Put the measured accuracy cost of each next to it, from numbers that exist
+   (ADR-030, the chunk-shape study, [B-065](#b-065)'s planned arms). Name the stack each number
+   was measured on (the repo's measurement-provenance rule). If a number the README needs doesn't
+   exist yet, that is the M part, and it is B-065's measurement, not a new one.
+3. Make the lite settings one line in the [B-077](#b-077) template.
+
+This does not ask for a smaller model or a different default. Changing the default is a decision
+for after the numbers.
+
+**Done when:** a person reading only the README install section can tell what a first build will
+download and cost, and how to turn the expensive part off, with the retrieval-accuracy price beside it.
+
+**Related:** [B-065](#b-065) (the speed-to-accuracy frontier), [B-077](#b-077), [B-025](#b-025) /
+ADR-030 (what summaries are worth), [B-012](#b-012).
