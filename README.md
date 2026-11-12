@@ -135,7 +135,9 @@ CPU. Later runs re-process only changed files, and summaries are cached by chunk
 ends "Done successfully", or "Done with warnings" when summaries were skipped.
 
 The index goes in `.code-index/` in the project folder. Configure it per project with an
-`indexer.toml` in the project root (see this repository's own `indexer.toml` for every key).
+`indexer.toml` in the project root. Start from [`examples/indexer.toml`](examples/indexer.toml), which
+holds only the keys a new repository decides; this repository's own `indexer.toml` is the reference
+for every key, and also carries this repo's own settings and eval config.
 
 ### Indexing a branch instead of the folder (git mode)
 
@@ -276,7 +278,7 @@ codebase-indexer/
 │   ├── ARCHITECTURE.md        # Full architecture walkthrough
 │   ├── adr/                   # Architecture Decision Records — the living source of truth
 │   └── adr-backlog.md         # Proposed/queued decisions
-├── examples/                  # Sample per-language rule configs
+├── examples/                  # Starter indexer.toml + sample per-language rule configs
 ├── scripts/                   # Benchmark launchers (run from the repo root)
 ├── tests/
 ├── tools/                     # Eval + CI harnesses (coir_eval, conformance_eval, …)
