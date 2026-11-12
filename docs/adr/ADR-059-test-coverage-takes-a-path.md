@@ -6,7 +6,7 @@
 **Reviewer:** @edb
 **Backlog:** [B-074](../backlog.md#b-074)
 **Depends on:** none
-**Depended on by:** none yet
+**Depended on by:** ADR-060 (B-073, branched from this one)
 
 ## Context
 
