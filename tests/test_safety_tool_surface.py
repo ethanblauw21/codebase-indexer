@@ -72,7 +72,7 @@ def search_returning_secrets(monkeypatch):
                    text=f'GITHUB_TOKEN = "{FAKE_TOKEN}"\nKEY = """{FAKE_PEM}"""\n')
     monkeypatch.setattr(M, "_ensure_indexes", lambda: SimpleNamespace(db=None))
     monkeypatch.setattr(M, "_search", lambda query, top_n=10: [chunk])
-    monkeypatch.setattr(M, "jina_tokenizer", SimpleNamespace(count_tokens=len))
+    monkeypatch.setattr(M, "embed_tokenizer", SimpleNamespace(count_tokens=len))
     import incremental_indexer
     monkeypatch.setattr(incremental_indexer, "chunker_version_warning", lambda db: "")
 

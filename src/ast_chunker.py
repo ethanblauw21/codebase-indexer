@@ -35,7 +35,7 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from core import jina_tokenizer
+from core import embed_tokenizer
 
 # ---------------------------------------------------------------------------
 # Re-exports for backward compatibility
@@ -172,7 +172,7 @@ def chunk_file_ast(
         rich_text = _symbol_rich_text(sym, file_path, sym_tags, sym_type)
         sym_edges = edges_by_fqn.get(sym.fqn, [])
 
-        if jina_tokenizer.count_tokens(rich_text) > max_tokens:
+        if embed_tokenizer.count_tokens(rich_text) > max_tokens:
             sub = fallback_token_chunker(
                 sym.text, file_path, max_tokens, overlap, parent_scope=sym.fqn,
                 line_map=sym.line_map,
@@ -219,7 +219,7 @@ def fallback_token_chunker(
     """
     lines = text.split("\n")
     header_template = f"File: {file_path}\nScope: {parent_scope} (Part X)\nCode:\n"
-    header_tokens = jina_tokenizer.count_tokens(header_template)
+    header_tokens = embed_tokenizer.count_tokens(header_template)
     safe_max = max(1, max_tokens - header_tokens)
 
     raw_chunks: list[str] = []
@@ -229,7 +229,7 @@ def fallback_token_chunker(
     current_tokens = 0
 
     for idx, line in enumerate(lines):
-        line_tokens = jina_tokenizer.count_tokens(line + "\n")
+        line_tokens = embed_tokenizer.count_tokens(line + "\n")
 
         # Monster-line shredder: single line exceeds the whole budget
         if line_tokens > safe_max:
@@ -237,9 +237,9 @@ def fallback_token_chunker(
                 raw_chunks.append("\n".join(current_lines))
                 spans.append((current_first, idx - 1))
                 current_lines, current_tokens = [], 0
-            raw = jina_tokenizer.tokenizer.encode(line, add_special_tokens=False)
+            raw = embed_tokenizer.tokenizer.encode(line, add_special_tokens=False)
             for i in range(0, len(raw), safe_max - overlap):
-                raw_chunks.append(jina_tokenizer.decode_tokens(raw[i : i + safe_max]))
+                raw_chunks.append(embed_tokenizer.decode_tokens(raw[i : i + safe_max]))
                 spans.append((idx, idx))
             continue
 
@@ -249,7 +249,7 @@ def fallback_token_chunker(
             overlap_lines: list[str] = []
             overlap_tokens = 0
             for prev in reversed(current_lines):
-                t = jina_tokenizer.count_tokens(prev + "\n")
+                t = embed_tokenizer.count_tokens(prev + "\n")
                 if overlap_tokens + t > overlap:
                     break
                 overlap_lines.insert(0, prev)
