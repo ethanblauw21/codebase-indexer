@@ -30,7 +30,7 @@ try:
     _WATCHDOG_AVAILABLE = True
 except ImportError:
     _WATCHDOG_AVAILABLE = False
-from core import jina_tokenizer, DocumentStore
+from core import embed_tokenizer, DocumentStore
 from hybrid_retriever import HybridRetriever, RetrievedChunk
 from iterative_retriever import IterativeRetriever, RetrievalSession
 
@@ -386,9 +386,9 @@ def semantic_code_search(query: str, format: OutputFormat = "text") -> str:
     # plus resolved call-graph neighbours + import-corroboration, not FAISS-only.
     chunks = _search(query, top_n=15)
 
-    # Context Packing (Protecting your 8GB Local Model's VRAM)
-    # 8B models easily crash if you feed them more than 8k tokens.
-    # We cap the returned context strictly at 4000 tokens to be safe.
+    # Context packing: the 4000-token cap is a budget for the tool's output, so one
+    # search doesn't fill the calling agent's context. It is not a VRAM guard; no
+    # local model reads this text.
     header = f"--- VECTOR DATABASE RESULTS FOR: '{query}' ---\n\n"
     # B-029: say so when the index predates the current chunker. A warning, not an
     # error: the results are still the best this index has.
@@ -396,10 +396,10 @@ def semantic_code_search(query: str, format: OutputFormat = "text") -> str:
     version_warning = chunker_version_warning(_db())
     if format == "json":
         return _json({"query": query, "warning": version_warning,
-                      **_pack_json(chunks, jina_tokenizer.count_tokens, max_tokens=4000)})
+                      **_pack_json(chunks, embed_tokenizer.count_tokens, max_tokens=4000)})
     if version_warning:
         header = f"{version_warning}\n\n" + header
-    return _pack_results(header, chunks, jina_tokenizer.count_tokens, max_tokens=4000)
+    return _pack_results(header, chunks, embed_tokenizer.count_tokens, max_tokens=4000)
 
 
 def _fit_budget(chunks, count_tokens, max_tokens: int):

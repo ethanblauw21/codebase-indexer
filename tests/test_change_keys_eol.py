@@ -30,7 +30,7 @@ SAMPLE = (
 @pytest.fixture(autouse=True)
 def _offline_tokens(monkeypatch):
     """Token counts by characters, so chunking needs no tokenizer download."""
-    monkeypatch.setattr(core.jina_tokenizer, "count_tokens", lambda s: max(1, len(s) // 4))
+    monkeypatch.setattr(core.embed_tokenizer, "count_tokens", lambda s: max(1, len(s) // 4))
 
 
 def _crlf(text: str) -> str:

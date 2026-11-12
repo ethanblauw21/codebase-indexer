@@ -324,7 +324,7 @@ def test_razor_files_go_through_the_fallback_path_end_to_end(tmp_path, monkeypat
     from db import CodeDB
     from stable_id import TIER_CONFIGS
 
-    monkeypatch.setattr(core.jina_tokenizer, "_tokenizer", _FakeTokenizer())
+    monkeypatch.setattr(core.embed_tokenizer, "_tokenizer", _FakeTokenizer())
     dim = embed_dimension()
     monkeypatch.setattr(core, "embed_batch", lambda texts, batch_size=32: np.array(
         [[float((hash(t) >> (8 * i)) & 0xFF) + 1.0 for i in range(dim)] for t in texts],
