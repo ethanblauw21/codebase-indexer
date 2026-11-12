@@ -166,8 +166,9 @@ class TokenizerManager:
     def decode_tokens(self, tokens: list) -> str:
         return self._get().decode(tokens)
 
-# Export the singleton under a generic name so ast_chunker doesn't break
-jina_tokenizer = TokenizerManager()
+# The tokenizer of whatever embedder embed_model_id() names (B-076: it was called
+# after jina, a model the index stopped using at ADR-009).
+embed_tokenizer = TokenizerManager()
 
 def embed_batch(texts: list[str], batch_size: int = 32, device: str | None = None) -> np.ndarray:
     """
@@ -339,7 +340,7 @@ def pack_context_safely(
     ranked_chunks: list[dict],
     max_tokens: int = 4000,
 ) -> str:
-    """Pack reranked chunks into a strict token budget for 8B-parameter local models.
+    """Pack reranked chunks into a strict token budget for the caller's context.
 
     Structural Expansion chunks (callers/callees) are promoted ahead of lower-ranked
     semantic chunks when their cross-encoder score is within 10 % of the top semantic
@@ -358,8 +359,8 @@ def pack_context_safely(
         Compatible with both raw dicts and ``RetrievedChunk`` instances converted via
         ``dataclasses.asdict()``.
     max_tokens:
-        Hard token ceiling.  Defaults to 4 000 — a conservative limit for 8k-window
-        8B models that leaves headroom for the system prompt and generation.
+        Hard token ceiling.  Defaults to 4 000: a budget for the text handed to the
+        calling agent, so one result set doesn't crowd out the rest of its context.
 
     Returns
     -------
@@ -400,7 +401,7 @@ def pack_context_safely(
         if not text:
             continue
         chunk_text = text + "\n\n"
-        chunk_tokens = jina_tokenizer.count_tokens(chunk_text)
+        chunk_tokens = embed_tokenizer.count_tokens(chunk_text)
         if used_tokens + chunk_tokens > max_tokens:
             truncated = True
             break

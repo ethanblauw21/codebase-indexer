@@ -107,11 +107,12 @@ Sequencing and dependency order live in [`roadmap.md`](./roadmap.md), not here.
 | [B-071](#b-071) | Docs-only merges to master still run the full CI and the 19-minute retrieval tripwire | @edb via conductor, from InventoryApp-V2's CI, 2026-11-02 | S | **done** (#97) |
 | [B-072](#b-072) | `index_status` (and `semantic_code_search`) on a never-built index say the chunker is older than v2 and advise a full re-index | ADR-056's Inspector check, 2026-11-02 | S | raw |
 | [B-073](#b-073) | `semantic_code_search` and `find_test_coverage` return only LLM-oriented text, so a programmatic caller regexes the `--- FILE: … ---` lines; no `format="json"` (@edb leans to adding it to the other tools too) | PR-agent install feedback, 2026-11-12 | M (S–M for the two named tools) | raw |
-| [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-074](#b-074) | `find_test_coverage` reduces `source_file` to its basename, so `page.tsx`, `layout.tsx` and `index.ts` match every test of that name in the repo | PR-agent install feedback, 2026-11-12 | S | **done** (#107, ADR-059) |
 | [B-075](#b-075) | `src/MCPServer.py` is 3,540 lines and holds all 17 tools; split the tools into modules | PR-agent install feedback, 2026-11-12 | M | raw |
-| [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | raw |
+| [B-076](#b-076) | Stale comments ("8B models easily crash if you feed them more than 8k tokens") and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer | PR-agent install feedback, 2026-11-12 | S | **done** (#102, ADR-057) |
 | [B-077](#b-077) | The shipped `indexer.toml` mixes per-repo settings with this project's own CoIR eval config; ship a minimal per-repo template | PR-agent install feedback, 2026-11-12 | S | **done** (#103) |
 | [B-078](#b-078) | A first install is heavy for "pick the right files": about 6 GB of models plus CUDA torch, and the summarizer is on by default | PR-agent install feedback, 2026-11-12 | S (doc + existing numbers) → M (if it needs a new measurement) | **done** (#105) |
+| [B-079](#b-079) | `accelerate` is undeclared, so a fresh install's summarizer never loads, and the run blames a full GPU and a chunking disagreement | fresh install on a second PC, relayed by the conductor session, 2026-11-12 | S | **done** (#104, ADR-058) |
 
 > **Not tracked here:** open work that a built ADR already owns. ADR-025's GPU-blocked end-to-end
 > reindex, ADR-011's Stage 2b member chains, ADR-006's Leiden backend and ADR-008's confidence-curve
@@ -2487,7 +2488,7 @@ description grown by more than the one argument.
 ### B-074 — `find_test_coverage` reduces `source_file` to its basename, which is ambiguous in Next.js apps
 
 **Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
-**Status:** raw · **Size:** S
+**Status:** **done** (#107, ADR-059) · **Size:** S
 
 `find_test_coverage` takes the last path segment of `source_file` and throws the directory away
 (`src/MCPServer.py:1594`, `norm_source = source_file.lower().replace('\\', '/').split('/')[-1]`).
@@ -2552,7 +2553,7 @@ whichever lands first, then the other).
 ### B-076 — Stale comments, and a `jina_tokenizer` name for what is now the bge-code-v1 tokenizer
 
 **Source:** PR-agent install feedback, relayed by the conductor session, 2026-11-12 ·
-**Status:** raw · **Size:** S
+**Status:** **done** (#102, ADR-057) · **Size:** S
 
 Two kinds of drift, both found by reading:
 
@@ -2661,3 +2662,28 @@ build. The default is unchanged.
 
 **Related:** [B-065](#b-065) (the speed-to-accuracy frontier), [B-077](#b-077), [B-025](#b-025) /
 ADR-030 (what summaries are worth), [B-012](#b-012).
+
+### B-079 — `accelerate` is undeclared, so a fresh install's summarizer never loads, and the run blames a full GPU and a chunking disagreement
+
+**Source:** a session doing a fresh install on another PC (Windows, Python 3.12, CUDA torch
+2.11+cu128, transformers 4.53.3), relayed by the conductor session, 2026-11-12; @edb: "Yes, please
+add it to be fixed" · **Status:** done (#104, ADR-058) · **Size:** S
+
+`accelerate` was in neither `pyproject.toml` nor `requirements.txt`, though the README's install
+section says the summarizer can't load without it. A fresh `pip install -e .` built 659 files /
+4,670 chunks and ended "Done with warnings" with two wrong diagnoses: "4236 chunk text(s) have no
+summary … (oom = the GPU was full)" and "4670 chunks missed the summary cache in pass 2 — the two
+passes disagree about chunking". The GPU was empty and the passes agreed: transformers refuses
+`device_map` without `accelerate`, so the worker never loaded and every text came back empty.
+Installing `accelerate` 1.15.0 fixed it. The same root cause was found once before, on 2026-09-10,
+and the package stayed undeclared.
+
+**Want:** declare `accelerate`; fail loudly before pass 1 when summarization is enabled but the
+summarizer can't load; and have pass 2's cache-miss warning tell pass 1's failures apart from a real
+chunking disagreement.
+
+**Done when:** both dependency files list `accelerate`; a run with summarization enabled and
+`accelerate` missing stops before pass 1 with a message naming it; a run whose pass 1 summarized
+nothing prints no "disagree about chunking" warning. Regression tests for the last two.
+
+**Related:** [B-044](#b-044) (the "Done with warnings" line), [B-078](#b-078) (first-install weight).

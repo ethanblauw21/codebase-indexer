@@ -10,8 +10,8 @@
 # What is indexed. "worktree" indexes this folder as checked out. "git:<ref>" indexes
 # that commit's tree from git objects, shared by every worktree of the repository and
 # followed when the ref moves (it never fetches). ADR-042.
+# To index a branch instead, change the value to "git:<ref>", e.g. "git:origin/main".
 source = "worktree"
-# source = "git:origin/main"
 
 # Where the index is stored, in worktree mode. Git mode ignores it and uses
 # <git common dir>/code-index.

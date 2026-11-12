@@ -25,7 +25,7 @@ _T1 = ("File: a.py\nEntity: a.py::f (function)\nLines: {lines}\n"
 @pytest.fixture(autouse=True)
 def _offline_tokens(monkeypatch):
     """Token counts by characters, so chunking needs no tokenizer download."""
-    monkeypatch.setattr(core.jina_tokenizer, "count_tokens", lambda s: max(1, len(s) // 4))
+    monkeypatch.setattr(core.embed_tokenizer, "count_tokens", lambda s: max(1, len(s) // 4))
 
 
 def _md5(text):
@@ -61,7 +61,7 @@ def test_tier1_text_keys_as_under_adr045():
 @pytest.fixture
 def small_tokens(monkeypatch):
     """One token per character keeps the windows small and their boundaries obvious."""
-    monkeypatch.setattr(core.jina_tokenizer, "count_tokens", lambda s: len(s))
+    monkeypatch.setattr(core.embed_tokenizer, "count_tokens", lambda s: len(s))
 
 
 def test_adding_a_window_keeps_the_unchanged_slices_keys(small_tokens):

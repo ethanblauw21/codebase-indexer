@@ -95,3 +95,23 @@ def test_template_loads_through_config_to_the_no_file_values(tmp_path, monkeypat
     got = _read_in(with_file, monkeypatch, lambda *_a, **_k: copied)
     baseline = _read_in(without, monkeypatch, lambda *_a, **_k: None)
     assert got == baseline
+
+
+def test_uncommenting_any_example_line_still_parses():
+    # A commented copy of a live key ("source = …" above "# source = …") is a trap:
+    # uncomment it without deleting the other and tomllib raises on the duplicate,
+    # which stops the MCP server at start. Every commented assignment must be safe
+    # to uncomment on its own.
+    with open(_TEMPLATE, encoding="utf-8") as fh:
+        lines = fh.read().split("\n")
+    broken = []
+    for i, line in enumerate(lines):
+        body = line.lstrip("# ")
+        if not line.startswith("#") or "=" not in body or " " in body.split("=")[0].strip():
+            continue
+        trial = lines[:i] + [body] + lines[i + 1:]
+        try:
+            tomllib.loads("\n".join(trial))
+        except tomllib.TOMLDecodeError as exc:
+            broken.append(f"line {i + 1}: {line.strip()} ({exc})")
+    assert broken == []
