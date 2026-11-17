@@ -33,3 +33,16 @@ def test_everything_fits_so_there_is_no_note():
 def test_rank_order_is_kept():
     out = _pack_results("", [_chunk("a", 10), _chunk("b", 10), _chunk("c", 10)], _count, 1000)
     assert out.index("SCOPE: a") < out.index("SCOPE: b") < out.index("SCOPE: c")
+
+
+# --- ADR-060 (B-073): the JSON form keeps the same hits under the same budget ---
+
+def test_json_keeps_the_same_hits_and_lists_the_skipped():
+    from MCPServer import _pack_json
+    chunks = [_chunk("first", 50), _chunk("huge", 5000), _chunk("third", 50)]
+    chunks[0].text = "File: src/first.ts\nLines: 3-9\nCode:\n" + chunks[0].text
+    out = _pack_json(chunks, _count, max_tokens=1000)
+    assert [h["scope"] for h in out["hits"]] == ["first", "third"]
+    assert out["skipped"] == [{"file": "src/huge.ts", "scope": "huge"}]
+    assert (out["hits"][0]["start_line"], out["hits"][0]["end_line"]) == (3, 9)
+    assert out["hits"][1]["start_line"] is None

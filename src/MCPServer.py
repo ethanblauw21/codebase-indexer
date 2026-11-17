@@ -5,11 +5,14 @@ import os
 import re
 import shutil
 import sqlite3
+import json
 import threading
 from dataclasses import dataclass, field
+from typing import Annotated, Literal
 
 import anyio
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 # ---------------------------------------------------------------------------
 # Index state (ADR-047)
@@ -243,12 +246,46 @@ def _tool(*, reads_index: bool = True, **hints):
                 if _read_limiter is None:
                     _read_limiter = anyio.CapacityLimiter(1)
                 out = await anyio.to_thread.run_sync(call, limiter=_read_limiter)
-            return redact(out) if isinstance(out, str) else out
+            if not isinstance(out, str):
+                return out
+            if kwargs.get("format") == "json":
+                # json.dumps escapes quotes as \", which the quoted-value patterns
+                # (secret-assignment, aws-secret-key) need bare: redact the strings
+                # inside, then re-encode.
+                out = _json(_redact_leaves(json.loads(out), redact))
+            return redact(out)
 
         mcp.tool(description=inspect.cleandoc(fn.__doc__ or ""), annotations=annotations,
                  structured_output=False)(run_in_thread)
         return bound
     return register
+
+# ADR-060 (B-073): one `format` argument, described once, shared by every tool that takes
+# it. Every connected session pays for each tool's schema (B-019), so keep this short.
+OutputFormat = Annotated[Literal["text", "json"], Field(
+    description='"text" (default) or "json": a JSON string for programs to parse.')]
+
+
+def _check_format(format: str) -> None:
+    """Refuse an unknown format on a direct call too (MCP clients are refused by the schema)."""
+    if format not in ("text", "json"):
+        raise ValueError(f'format must be "text" or "json", not {format!r}')
+
+
+def _json(obj) -> str:
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def _redact_leaves(obj, redact):
+    """``obj`` with ``redact`` applied to every string in it, keys excepted."""
+    if isinstance(obj, str):
+        return redact(obj)
+    if isinstance(obj, list):
+        return [_redact_leaves(v, redact) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _redact_leaves(v, redact) for k, v in obj.items()}
+    return obj
+
 
 def get_clean_scope(doc):
     """
@@ -350,7 +387,7 @@ def _focused_snippet(text: str, query: str) -> tuple[str, tuple[int, int] | None
 
 
 @_tool()
-def semantic_code_search(query: str) -> str:
+def semantic_code_search(query: str, format: OutputFormat = "text") -> str:
     """
     Find code by what it does: "where is X handled", "how does Y work", when you do not
     know the names to grep for. Returns whole ranked chunks with file and scope.
@@ -361,6 +398,7 @@ def semantic_code_search(query: str) -> str:
     runs this same retrieval and groups the results by role.
     """
     print(f"\n[MCP] Tool invoked by LLM for query: '{query}'")
+    _check_format(format)
 
     # Candidate generation via the shared RTR surface (ADR-023 §1): multi-tier RRF
     # plus resolved call-graph neighbours + import-corroboration, not FAISS-only.
@@ -374,29 +412,62 @@ def semantic_code_search(query: str) -> str:
     # error: the results are still the best this index has.
     from incremental_indexer import chunker_version_warning
     version_warning = chunker_version_warning(_db())
+    if format == "json":
+        return _json({"query": query, "warning": version_warning,
+                      **_pack_json(chunks, embed_tokenizer.count_tokens, max_tokens=4000)})
     if version_warning:
         header = f"{version_warning}\n\n" + header
     return _pack_results(header, chunks, embed_tokenizer.count_tokens, max_tokens=4000)
 
 
-def _pack_results(header: str, chunks, count_tokens, max_tokens: int) -> str:
-    """Fill the token budget in rank order, skipping any chunk that does not fit.
+def _fit_budget(chunks, count_tokens, max_tokens: int):
+    """``(kept, skipped)``: kept is ``(chunk, its text block)`` in rank order.
 
-    B-030: this used to stop at the first chunk that did not fit, so one large
-    chunk hid every result ranked below it. Skipped chunks are listed by location
-    so the caller can still open them.
+    B-030: a chunk that does not fit is skipped, not the end of the list, so one
+    large chunk can't hide every result ranked below it. The text and JSON forms
+    both count the text block, so they keep the same hits (ADR-060).
     """
-    context = header
+    kept, skipped = [], []
     used = 0
-    skipped: list[str] = []
     for c in chunks:
         chunk_text = f"--- FILE: {c.file} | SCOPE: {c.scope} ---\n{c.text}\n\n"
         tokens = count_tokens(chunk_text)
         if used + tokens < max_tokens:
-            context += chunk_text
+            kept.append((c, chunk_text))
             used += tokens
         else:
-            skipped.append(f"{c.file} | {c.scope}")
+            skipped.append(c)
+    return kept, skipped
+
+
+def _chunk_lines(text: str) -> tuple[int, int] | None:
+    """The source line range a tier-1 chunk records (``Lines: a-b``), or None."""
+    m = _CHUNK_LINES_RE.search(text.partition("\nCode:\n")[0])
+    return (int(m.group(1)), int(m.group(2))) if m and int(m.group(1)) > 0 else None
+
+
+def _pack_json(chunks, count_tokens, max_tokens: int) -> dict:
+    """The JSON form of _pack_results: hits within the same budget, and what was left out."""
+    kept, skipped = _fit_budget(chunks, count_tokens, max_tokens)
+    hits = []
+    for c, _block in kept:
+        lines = _chunk_lines(c.text)
+        hits.append({"file": c.file, "scope": c.scope, "score": getattr(c, "score", None),
+                     "source": getattr(c, "source", None), "tier": getattr(c, "tier", None),
+                     "start_line": lines[0] if lines else None,
+                     "end_line": lines[1] if lines else None, "text": c.text})
+    return {"hits": hits, "max_tokens": max_tokens,
+            "skipped": [{"file": c.file, "scope": c.scope} for c in skipped]}
+
+
+def _pack_results(header: str, chunks, count_tokens, max_tokens: int) -> str:
+    """Fill the token budget in rank order, skipping any chunk that does not fit.
+
+    Skipped chunks are listed by location so the caller can still open them.
+    """
+    kept, dropped = _fit_budget(chunks, count_tokens, max_tokens)
+    context = header + "".join(block for _c, block in kept)
+    skipped = [f"{c.file} | {c.scope}" for c in dropped]
     if skipped:
         context += (f"[Note: {len(skipped)} result(s) did not fit the {max_tokens}-token "
                     "budget and were left out:]\n")
@@ -1597,7 +1668,8 @@ def _test_dir_relates(source_dir: str, test_dir: str) -> bool:
 
 
 @_tool()
-def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
+def find_test_coverage(source_file: str, target_symbol: str = "",
+                       format: OutputFormat = "text") -> str:
     """
     Finds unit tests that semantically cover a source file or symbol.
 
@@ -1620,6 +1692,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
       None     — explicit signal that no coverage was found
     """
     print(f"\n[MCP] find_test_coverage: '{source_file}' symbol='{target_symbol}'")
+    _check_format(format)
     norm_path = source_file.lower().replace('\\', '/')
     while norm_path.startswith('./'):
         norm_path = norm_path[2:]
@@ -1651,7 +1724,15 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
         if is_test_file(fp) and fp not in test_doc_by_file:
             test_doc_by_file[fp] = doc
 
+    def as_json(direct, expected, elsewhere, semantic) -> str:
+        return _json({"source_file": source_file, "symbol": target_symbol or None,
+                      "test_files_indexed": len(test_doc_by_file), "direct": direct,
+                      "direct_expected": expected, "elsewhere": elsewhere,
+                      "semantic": semantic, "patterns": test_patterns})
+
     if not test_doc_by_file:
+        if format == "json":
+            return as_json([], [], [], [])
         patterns_str = ", ".join(test_patterns) if test_patterns else "(none)"
         return (
             "--- TEST COVERAGE ANALYSIS ---\n\n"
@@ -1668,6 +1749,7 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
     direct_data: list[str] = []
     direct_fps:  set[str]  = set()
     elsewhere:   list[str] = []
+    direct_json: list[dict] = []
     for fp, doc in test_doc_by_file.items():
         if fp.split('/')[-1] in direct_candidates:
             if source_dir and not _test_dir_relates(source_dir, fp.rpartition('/')[0]):
@@ -1678,12 +1760,15 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
             direct_data.append(
                 f"- {doc['file']} ({get_clean_scope(doc)})\n  [Snippet]: {snippet}\n\n"
             )
+            direct_json.append({"file": doc['file'], "scope": get_clean_scope(doc),
+                                "snippet": snippet})
 
     # --- Tier 2: Semantic match via the shared RTR surface (ADR-023 §1) ---
     query = f"tests for {source_file} {target_symbol}".strip()
 
     semantic_data: list[str] = []
     seen_semantic: set[str] = set()
+    semantic_json: list[dict] = []
 
     for c in _search(query, top_n=30):
         fp = c.file.replace('\\', '/').lower()
@@ -1694,13 +1779,19 @@ def find_test_coverage(source_file: str, target_symbol: str = "") -> str:
         symbol_hit = bool(target_symbol and target_symbol in c.text)
         evidence = "Semantic match" + (f" + mentions `{target_symbol}`" if symbol_hit else "")
         snippet = c.text[:120].replace('\n', ' ').strip() + "..."
+        scope = get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})
         semantic_data.append(
-            f"- {c.file} ({get_clean_scope({'scope': c.scope, 'text': c.text, 'file': c.file})})\n"
+            f"- {c.file} ({scope})\n"
             f"  [Evidence]: {evidence}\n"
             f"  [Snippet]: {snippet}\n\n"
         )
+        semantic_json.append({"file": c.file, "scope": scope,
+                              "mentions_symbol": symbol_hit, "snippet": snippet})
         if len(semantic_data) >= 5:
             break
+
+    if format == "json":
+        return as_json(direct_json, direct_names, sorted(elsewhere), semantic_json)
 
     # --- Build output ---
     header = f"SOURCE: {source_file}"
@@ -2234,7 +2325,7 @@ def verify_candidate_edges(symbol: str, anchor_file: str = "") -> str:
 
 
 @_tool()
-def what_writes(tag: str, include_readers: bool = False) -> str:
+def what_writes(tag: str, include_readers: bool = False, format: OutputFormat = "text") -> str:
     """
     Given a PLC tag, reports EXACTLY which routines write it and at which rungs:
     "an alarm will not clear, so what sets that bit?". Go one hop at a time: the
@@ -2255,6 +2346,7 @@ def what_writes(tag: str, include_readers: bool = False) -> str:
     true; that needs a live connection to the controller.
     """
     print(f"\n[MCP] what_writes: tag='{tag}' readers={include_readers}")
+    _check_format(format)
     db = _db()
 
     writers = db.get_edges_to(tag, "writes")
@@ -2266,6 +2358,8 @@ def what_writes(tag: str, include_readers: bool = False) -> str:
 
     if not writers and not readers and not aliases:
         known = [s.fqn for s in db.search_symbols(tag)][:8]
+        if format == "json":
+            return _json({"tag": tag, "found": False, "near": known})
         out = f"No read or write edge targets '{tag}'.\n\n"
         if known:
             out += "Symbols matching that name:\n"
@@ -2287,6 +2381,14 @@ def what_writes(tag: str, include_readers: bool = False) -> str:
             if ctx in by_routine:
                 by_routine[ctx].append(r["line"])
         return {f: sorted(v) for f, v in by_routine.items()}
+
+    if format == "json":
+        def sites(fqns, kind):
+            got = _sites(fqns, kind)
+            return [{"routine": f, "rungs": got.get(f) or []} for f in fqns]
+        return _json({"tag": tag, "found": True, "aliases": list(aliases),
+                      "writers": sites(writers, "WRITE"), "reader_count": len(readers),
+                      "readers": sites(readers, "READ") if include_readers else None})
 
     out = f"WRITES TO '{tag}'\n{'=' * (len(tag) + 12)}\n\n"
 
@@ -2767,7 +2869,7 @@ def _locate(stored: str, lines: list[str], start: int, end: int) -> tuple[int, i
 
 
 @_tool()
-def get_file_outline(file: str) -> str:
+def get_file_outline(file: str, format: OutputFormat = "text") -> str:
     """
     List what one file defines: each symbol's kind, signature and line range, nested,
     with no bodies. Call this instead of Read when you need to know what a file
@@ -2778,16 +2880,28 @@ def get_file_outline(file: str) -> str:
     indexed version's, and the outline says when the file has changed since.
     """
     print(f"\n[MCP] get_file_outline: '{file}'")
+    _check_format(format)
     db = _db()
     _require_index(db)
     path = _indexed_path(db, file)
     locs = db.get_file_symbol_locations(path)
     where = _source_label(db)
+    stale = not where and not _file_unchanged(db, path)
+
+    if format == "json":
+        symbols = []
+        for loc, depth in zip(locs, _nesting(locs)):
+            symbols.append({"name": loc["name"], "kind": loc["kind"],
+                            "signature": _signature(loc["text"], path),
+                            "start_line": loc["start_line"], "end_line": loc["end_line"],
+                            "depth": depth})
+        return _json({"file": path, "as_of": where or None,
+                      "changed_since_indexed": stale, "symbols": symbols})
 
     out = [f"--- OUTLINE: {path} ({len(locs)} symbol(s)) ---"]
     if where:
         out.append(f"(as of {where})")
-    elif not _file_unchanged(db, path):
+    elif stale:
         out.append("⚠️ This file has changed on disk since it was indexed; line numbers "
                    "may be off until the watchdog re-indexes it.")
     if not locs:
@@ -2825,7 +2939,7 @@ def _match_symbols(db, symbol: str) -> list[dict]:
 
 
 @_tool()
-def get_symbol_source(symbol: str, file: str = "") -> str:
+def get_symbol_source(symbol: str, file: str = "", format: OutputFormat = "text") -> str:
     """
     Return one function's, method's or class's source instead of Reading its whole
     file. `symbol` is a name ('login'), a qualified tail ('AuthService.login') or an
@@ -2836,6 +2950,7 @@ def get_symbol_source(symbol: str, file: str = "") -> str:
     since indexing fails rather than show stale code, so Read the file then.
     """
     print(f"\n[MCP] get_symbol_source: symbol='{symbol}' file='{file}'")
+    _check_format(format)
     if not symbol or not symbol.strip():
         raise ValueError("symbol is required: a name, 'Class.method' or an FQN")
     db = _db()
@@ -2850,6 +2965,10 @@ def get_symbol_source(symbol: str, file: str = "") -> str:
         if near:
             msg += " Symbols starting with that name:\n" + "".join(f"  {f}\n" for f in near)
         raise LookupError(msg)
+    if len(hits) > 1 and format == "json":
+        return _json({"symbol": symbol, "ambiguous": True, "count": len(hits), "matches": [
+            {"fqn": h["fqn"], "kind": h["kind"], "file": h["path"],
+             "start_line": h["start_line"], "end_line": h["end_line"]} for h in hits[:30]]})
     if len(hits) > 1:
         out = [f"'{symbol}' is ambiguous: {len(hits)} symbols match. Call again with `file` "
                "or a qualified name (e.g. 'Class.method'):"]
@@ -2890,6 +3009,12 @@ def get_symbol_source(symbol: str, file: str = "") -> str:
                          "have not.")
 
     shown_end = min(end, start + _SOURCE_MAX_LINES - 1)
+    if format == "json":
+        return _json({"symbol": symbol, "ambiguous": False, "fqn": hit["fqn"],
+                      "kind": hit["kind"], "file": path, "start_line": start, "end_line": end,
+                      "from": where or None, "notes": notes,
+                      "source": "\n".join(lines[start - 1:min(shown_end, len(lines))]),
+                      "lines_cut": end - shown_end})
     out = [f"--- {hit['fqn']}  [{hit['kind']}]  {path}:{start}-{end} ---"]
     if where:
         out.append(f"(from {where})")
