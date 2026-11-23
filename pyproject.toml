@@ -9,12 +9,15 @@ description = "Local code intelligence engine: FAISS + SQLite hybrid indexer wit
 requires-python = ">=3.11"
 dependencies = [
     "faiss-cpu",
-    # Pinned to the validated pair: the jina embedder's trust_remote_code modeling
-    # code imports transformers internals that were removed after 4.53.x (CI on the
-    # latest transformers fails with "cannot import name find_pruneable_heads_and_
-    # indices"). These are the versions the eval baseline was measured on.
-    "sentence-transformers==5.5.0",
-    "transformers==4.53.3",
+    # Pinned to a validated pair. Originally 5.5.0 / 4.53.3, because the jina embedder's
+    # trust_remote_code modeling code imports transformers internals removed after 4.53.x
+    # ("cannot import name find_pruneable_heads_and_indices"); jina is now only the
+    # hardcoded model in the legacy tools/eval_retrieval.py. 2026-11-23: 5.7.0 / 4.57.6
+    # give bit-identical bge-code-v1 embeddings and Qwen3 reranker scores on CPU.
+    # transformers 5.x + sentence-transformers 6.x fail to load bge-code-v1
+    # ("Unrecognized processing class"), so the majors are held.
+    "sentence-transformers==5.7.0",
+    "transformers==4.57.6",
     # The summarizer loads with device_map, which transformers refuses without
     # accelerate; it is only imported then, so its absence surfaced as empty summaries.
     "accelerate",
