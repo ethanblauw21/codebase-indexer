@@ -1,0 +1,14 @@
+# Scan gate: what the defaults decide (ADR-052) and scan anchoring
+
+Moved from src/CLAUDE.md, verbatim (source lines 100-109). Read when working on this area.
+
+Configuration is the `[ignore]` block. `extra_dirs` / `extra_root_dirs` / `extra_extensions` / `extra_files` **add** to the defaults; the bare `dirs` / `root_dirs` / `extensions` / `files` keys **replace** them; setting both spellings of one knob raises. A `!name` entry in `extra_dirs` / `extra_root_dirs` / `extra_extensions` drops that one default and keeps the rest (`!` in `extra_files` re-includes matching names instead). Defaults live in `scan_policy.py` and are deliberately **not** duplicated into the shipped `indexer.toml` — a bare key there would freeze this repo's gate and silently drop every future default.
+
+What the defaults decide, and why (ADR-052):
+
+- **`.gs` is JavaScript** (Apps Script), through `AppsScriptAdapter` in `adapters/__init__.py` — a subclass only because the JS adapter picks its grammar by extension. Its cross-file calls resolve by the ADR-021 unique-name rule, which matches Apps Script's one global scope; a function defined in two `.gs` files is a known wrong binding.
+- **`.cshtml` / `.razor` are text**: no adapter, so `fallback_token_chunker` for every tier, no symbols or edges. `.xaml` is opt-in (`extra_extensions = [".xaml"]`): taking a default extension back out costs a full `extensions` replacement.
+- **`obj` is ignored at any depth; bare `bin` is not.** A `dirs` entry may be a multi-segment path, matched as consecutive directory names at any depth, and `bin/Debug`, `bin/Release`, `bin/x64`, `bin/x86` catch MSBuild output while `bin/*.py` and npm `bin/*.js` stay. A custom build configuration is `extra_dirs = ["bin/Staging"]`. These entries cannot be pruned during the walk (prune sees one name), so the path check rejects the files instead — don't use one for a `node_modules`-sized tree. Generated `*.Designer.cs` / `*.g.cs` outside `obj/` stay: checked-in generated code is often the only definition the rest of the code calls. EF Core `Migrations/` is real source and stays; `extra_dirs = ["Migrations"]` if it is noise.
+- **`files` is file-name patterns** (`fnmatch`, case-folded), never scanned whatever `extensions` says: credential files — `.env*`, `*credentials*.json`, service-account and Firebase key downloads, `secrets.json`, `*.pem`/`*.key`/`*.p12`/`*.pfx`, `id_rsa`-style keys. A `!` pattern re-includes (`.env.example` ships that way), so one exception never needs the defaults replaced. A pattern with a `/` raises. The gate sees only paths; key *content* is the MCP output-redaction pass's job, not this module's.
+
+The scan is anchored to the directory holding `indexer.toml`, and a scan launched from a subdirectory is refused rather than resolving root-only exclusions against the wrong tree. A run that would delete more than `max(50, 20%)` of the index asks first (`--prune` to skip); unattended callers log and skip instead.
